@@ -24,6 +24,8 @@ with **actual RTP streams** the user can hear and see.
 - Flow **true ST 2110-30** (uncompressed L24 PCM audio) end to end — the solid first win.
 - Then flow **true ST 2110-20** (uncompressed RFC 4175 video) at low resolution.
 - Run a **PTP** timing relationship between the nodes (learning-grade, see constraints).
+- Use **multicast RTP on an isolated media network** (separate from the WiFi management/internet
+  network) — mirroring broadcast practice and keeping media traffic off the home LAN.
 - Keep the **NMOS control plane** central: nodes register with a registry, and an
   **IS-05 "take" actually starts/stops the media**, mirroring real gear.
 - Success is **directly perceptible**: audio out the PC speakers, video in a desktop window.
@@ -33,7 +35,6 @@ with **actual RTP streams** the user can hear and see.
 - Guaranteed audio/video **lip-sync** across the separate flows (stretch only).
 - High-resolution or high-frame-rate video (physically impossible on a single GbE link).
 - Capturing real cameras/microphones (generated test signals first; real I/O is a later idea).
-- Multicast distribution (deferred — see constraints; unicast is used instead).
 - Redundancy (ST 2022-7), security (IS-10), or a controller GUI beyond the registry API.
 
 ## 3. Constraints (the physics and the environment)
@@ -43,11 +44,17 @@ These drove every major decision and are not negotiable on the current hardware:
 1. **Pi 5 has a single gigabit NIC (~0.94 Gbps real).** Uncompressed ST 2110-20 video is
    enormous (1080p59 ≈ 3 Gbps), so video must be **tiny**: target **~320×240–426×240,
    25 fps, 8-bit 4:2:2** (~30–60 Mbps). Audio (-30) is ~2 Mbps and trivially fits.
-2. **The PC is on WiFi; the Pi is wired.** WiFi mangles/floods multicast on consumer gear
-   and adds jitter. Therefore: **unicast RTP**, and **PTP will be loose** over the WiFi hop.
+2. **Both ends are wired into an isolated "media island."** A small PoE switch carries the
+   Pi (powered over PoE) and the PC on a dedicated segment with **no uplink to the home
+   router**, so media multicast/PTP never floods the house. Each device reaches the internet
+   separately over **WiFi** (management/installs). This mirrors real broadcast practice of
+   separating the **media** and **management** networks. Because the media path is wired and
+   isolated, we use **multicast RTP** (the real ST 2110 transport) and get a **low-jitter PTP**
+   relationship — both of which the earlier WiFi assumption had ruled out.
 3. **No hardware PTP timestamping** on the Pi 5 onboard NIC or in WSL → **software
-   timestamping only**. PTP is used to *learn the timing model and align RTP clocks*, not to
-   achieve genlock. Single-flow playback does not depend on tight PTP.
+   timestamping only**. PTP is used to *learn the timing model and align RTP clocks*; the wired
+   island makes it far tighter than WiFi would, but it is still not genlock-grade. Single-flow
+   playback does not depend on tight PTP.
 4. **Windows is a poor native ST 2110/PTP host.** We avoid native Windows tooling by running
    the Linux toolchain inside **WSL with `networkingMode=mirrored`**, which puts WSL on the
    home LAN (real multicast/LAN participation, unlike the default NAT that broke macvlan earlier).
@@ -55,23 +62,23 @@ These drove every major decision and are not negotiable on the current hardware:
 ## 4. Architecture
 
 ```
-   PI 5  (wired, the "real" node)                 WINDOWS PC
+   PI 5  (PoE, the "real" node)                    WINDOWS PC
  ┌──────────────────────────────┐            ┌─────────────────────────────┐
  │ ptp4l  ── PTP leader          │            │  WSL Ubuntu (mirrored net)   │
- │                               │            │ ┌─────────────────────────┐ │
- │ GStreamer SENDERS:            │   unicast  │ │ ptp4l ── PTP follower    │ │
- │  • audio: test tone           │    RTP     │ │         (software TS)    │ │
- │    → L24 PCM → ST 2110-30 ────┼───────────►│ │ GStreamer RECEIVERS:     │ │
- │  • video: test pattern        │  (LAN +    │ │  • audio → PC speakers   │ │
- │    → RFC4175 → ST 2110-20 ────┼───► WiFi)  │ │    (WSLg audio)          │ │
- │                               │            │ │  • video → window        │ │
- │ nmos-cpp NODE (2 senders)     │            │ │    (WSLg GUI)            │ │
- │ activation-watcher            │            │ │ nmos-cpp NODE (receivers)│ │
- │                               │            │ │ activation-watcher       │ │
- │ nmos-cpp REGISTRY ◄───────────┼── IS-04 ───┼──── both nodes register      │
- └──────────────────────────────┘            └─────────────────────────────┘
-                    ▲
-                    │ IS-05 "take" → activation-watcher starts pipeline → media flows
+ │ GStreamer SENDERS:            │            │ ┌─────────────────────────┐ │
+ │  • audio: test tone           │            │ │ ptp4l ── PTP follower    │ │
+ │    → L24 PCM → ST 2110-30 ──┐ │            │ │ GStreamer RECEIVERS:     │ │
+ │  • video: test pattern      │ │            │ │  • audio → PC speakers   │ │
+ │    → RFC4175 → ST 2110-20 ──┤ │            │ │    (WSLg audio)          │ │
+ │ nmos-cpp NODE (2 senders)   │ │            │ │  • video → window (WSLg) │ │
+ │ nmos-cpp REGISTRY           │ │            │ │ nmos-cpp NODE (receivers)│ │
+ │ activation-watcher          │ │            │ │ activation-watcher       │ │
+ │ eth0 10.10.10.1 ────────────┘ │            │ │ eth 10.10.10.2           │ │
+ └──────────┬───────────────────┘            └──────────┬──────────────────┘
+            │   MEDIA ISLAND (isolated PoE switch, 10.10.10.0/24)            
+            └──────── multicast RTP + PTP ──────[switch]───────┘            
+   wlan0 ─► home WiFi (internet/apt)            WiFi ─► home WiFi (internet)  
+            IS-05 "take" → activation-watcher starts pipeline → media flows   
 ```
 
 **Role split**
@@ -120,13 +127,13 @@ Each phase proves the hardest physical layer first and ends in an observable res
 
 | Phase | Build | Done when |
 |---|---|---|
-| **0 · Connectivity** | WSL `mirrored` networking; restart; open Windows Firewall inbound UDP | WSL has a `192.168.x` LAN IP; Pi ↔ WSL exchange UDP both ways (ncat) |
-| **1 · Real audio** ⭐ | Pi tone → unicast RTP; WSL receiver → speakers (no NMOS/PTP yet) | Tone audible on PC speakers; `tcpdump` shows L24/48 kHz RTP |
-| **2 · PTP** | `ptp4l` leader (Pi) + follower (WSL); discipline clock | ptp4l shows lock; offset readable (tens of µs wired, looser on WiFi); audio still plays |
+| **0 · Connectivity** | Wire media island; static IPs (Pi `eth0` 10.10.10.1 / PC `eth` 10.10.10.2); WSL `mirrored` networking; open Windows Firewall inbound UDP | Pi ↔ PC reach each other on 10.10.10.x and exchange UDP both ways |
+| **1 · Real audio** ⭐ | Pi tone → multicast RTP; WSL receiver → speakers (no NMOS/PTP yet) | Tone audible on PC speakers; `tcpdump` shows L24/48 kHz RTP |
+| **2 · PTP** | `ptp4l` leader (Pi) + follower (WSL); discipline clock | ptp4l shows lock; offset readable (tens of µs over the wired island); audio still plays |
 | **3 · NMOS discovery** | registry on Pi; a node each side advertising the real sender/receiver with matching SDP | registry query lists both nodes; SDP matches the stream |
 | **4 · IS-05 drives media** ⭐ | activation-watcher scripts | IS-05 take **starts** audio; disable **stops** it |
 | **5 · Low-res video** ⭐ | add -20 sender pipeline + SDP + node sender; receiver opens a window | test pattern appears in a Windows desktop window, started by an IS-05 take |
-| **6 · Lip-sync (stretch)** | align A/V via PTP-derived RTP timestamps | best-effort only; not promised over WiFi |
+| **6 · Lip-sync (stretch)** | align A/V via PTP-derived RTP timestamps | best-effort only; tighter now on the wired island, still not promised |
 
 ⭐ = the "felt" milestones: hear it → control it → see it.
 
@@ -136,7 +143,10 @@ Each phase proves the hardest physical layer first and ends in an observable res
 |---|---|
 | Mirrored networking unavailable (pre-Win11 22H2) | Check Windows build in Phase 0; fallback = registry+receiver on Pi side, or a bridged Hyper-V Linux VM |
 | Windows Firewall blocks inbound UDP to WSL | Add explicit inbound allow rule for the RTP/PTP ports (likely cause of a silent Phase 1) |
-| WiFi drops stream / jitter | Unicast avoids multicast issues; GStreamer `rtpjitterbuffer` absorbs jitter; escape hatch = wire the PC (also unlocks multicast / Approach C) |
+| Media island has no DHCP (no router uplink) | Assign **static IPs** on the media interfaces (Pi `eth0` 10.10.10.1, PC `eth` 10.10.10.2 / 24); internet/`apt` come over each device's WiFi |
+| Unmanaged switch floods multicast | Island has only 2 ports + no uplink, so flooding is contained; if a managed switch is used later, enable IGMP snooping |
+| PC dual-homed (WiFi + wired) routing ambiguity | Media interfaces are a separate subnet (10.10.10.0/24) from the WiFi LAN; bind GStreamer/PTP explicitly to the media interface |
+| Residual jitter | GStreamer `rtpjitterbuffer` absorbs it; wired island keeps it low to begin with |
 | SDP ↔ pipeline mismatch | Pin PT, clock rate, sampling, depth, ptime in both SDP and GStreamer caps; verify with packet capture |
 | No arm64 `nmos-cpp` image | Verify in Phase 3 prep; else run registry on WSL and build the Pi node from source |
 | PTP won't lock over WiFi | Accept loose sync (documented non-goal); keep PTP for learning; media plays without it |

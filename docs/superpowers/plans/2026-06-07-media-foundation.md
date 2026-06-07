@@ -28,12 +28,49 @@ pi-nmos-st2110/
 ```
 
 **Conventions used in this plan:**
-- `PI_IP` = the Pi's LAN address (get on the Pi with `hostname -I`).
-- `PC_IP` = the PC/WSL LAN address (get in WSL after Phase 0 with `hostname -I`).
+- `PI_IP` = `10.10.10.1`, `PC_IP` = `10.10.10.2` — the static media-island addresses (see the Topology amendment below). The Pi/PC also have separate WiFi addresses for internet, which we do not use for media.
 - Commands prefixed `# on Pi` run in an SSH/terminal session on the Raspberry Pi.
 - Commands prefixed `# in WSL` run inside the Ubuntu WSL distro on the PC.
 - Commands prefixed `# in PowerShell` run in a Windows PowerShell window.
 - The Pi runs Raspberry Pi OS (64-bit) or Ubuntu; both use `apt`. Pi commands use `sudo`. The WSL distro currently logs in as root, so `sudo` is omitted there.
+
+---
+
+## Topology amendment (wired media island)
+
+Adopted after planning: both ends are wired into an **isolated PoE switch** (no router uplink);
+each device reaches the internet over its own **WiFi**. This replaces the earlier WiFi-media
+assumption — so we use **multicast** on a **static-IP** media subnet, and PTP is tighter.
+
+**Addressing (media island, subnet `10.10.10.0/24`, no gateway on this segment):**
+| Role | Interface | Static IP | Notes |
+|---|---|---|---|
+| Pi media | `eth0` | `10.10.10.1` | internet stays on Pi `wlan0` (default route) |
+| PC media | Windows Ethernet adapter (WSL mirrors it) | `10.10.10.2` | internet stays on PC WiFi |
+| Audio multicast group | — | `239.10.10.10:5004` | |
+| Video multicast group (Plan 2) | — | `239.10.10.20:5006` | |
+
+For the rest of this plan, **`PI_IP` = `10.10.10.1`** and **`PC_IP` = `10.10.10.2`**.
+Exact interface/adapter *names* (`eth0` on the Pi, the Windows adapter alias) are confirmed at
+execution and may differ — substitute the real names.
+
+**Static IP setup (run during Phase 0, after the OS is up):**
+```bash
+# on Pi (Raspberry Pi OS Bookworm uses NetworkManager); no gateway -> WiFi stays default route
+sudo nmcli con add type ethernet ifname eth0 con-name media \
+  ipv4.method manual ipv4.addresses 10.10.10.1/24 ipv4.never-default yes
+sudo nmcli con up media
+```
+```powershell
+# in PowerShell as admin; set the wired adapter (find its alias with Get-NetAdapter)
+New-NetIPAddress -InterfaceAlias "Ethernet" -IPAddress 10.10.10.2 -PrefixLength 24
+```
+After this, verify from WSL that the `10.10.10.2` address is visible (`ip -4 addr`) — mirrored
+networking exposes the host's wired adapter to WSL.
+
+**Pipeline impact:** the audio sender/receiver in Tasks 6–7 use the **multicast** forms shown in
+those tasks (`udpsink host=239.10.10.10 ... multicast-iface=...` / `udpsrc address=239.10.10.10
+... multicast-iface=...`), not unicast.
 
 ---
 
@@ -208,7 +245,9 @@ Expected: one rule, `Enabled True`, `Direction Inbound`, `Action Allow`.
 
 ## Task 4: Prove bidirectional UDP between Pi and PC
 
-Before any media, prove plain UDP flows both directions over the LAN. This isolates networking from GStreamer.
+Before any media, prove plain UDP flows both directions across the media island. This isolates networking from GStreamer.
+
+> **Prerequisite:** complete the static-IP setup from the *Topology amendment* first (SSH to the Pi over WiFi at `pi5-nmos.local`, run the `nmcli` command to give `eth0` `10.10.10.1`; set the Windows Ethernet adapter to `10.10.10.2`). Confirm `ping 10.10.10.1` works from the PC before the UDP tests below. `PI_IP`/`PC_IP` below are these island addresses.
 
 **Files:**
 - Create: `tools/udp-listen.py`
@@ -346,11 +385,14 @@ Write the receiver first so it is listening when the sender starts.
 `pc/recv-audio.sh`:
 ```bash
 #!/usr/bin/env bash
-# Receive ST 2110-30 (L24 PCM, 48kHz, stereo) RTP and play to PC speakers via WSLg.
+# Receive ST 2110-30 (L24 PCM, 48kHz, stereo) MULTICAST RTP and play via WSLg.
+# Usage: recv-audio.sh [group] [port] [iface]
 set -euo pipefail
-PORT="${1:-5004}"
+GROUP="${1:-239.10.10.10}"
+PORT="${2:-5004}"
+IFACE="${3:-eth0}"   # WSL's mirror of the wired adapter; confirm with: ip -o link
 exec gst-launch-1.0 -v \
-  udpsrc port="${PORT}" \
+  udpsrc address="${GROUP}" port="${PORT}" multicast-iface="${IFACE}" auto-multicast=true \
     caps="application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)L24,channels=(int)2,payload=(int)96" \
   ! rtpjitterbuffer latency=50 \
   ! rtpL24depay \
@@ -379,20 +421,21 @@ git commit -m "feat: add ST 2110-30 audio receiver pipeline"
 `pi/send-audio.sh`:
 ```bash
 #!/usr/bin/env bash
-# Send a 440Hz test tone as ST 2110-30 (L24 PCM, 48kHz, stereo, 1ms ptime) RTP.
-# Usage: send-audio.sh <dest-ip> [port]
+# Send a 440Hz test tone as ST 2110-30 (L24 PCM, 48kHz, stereo, 1ms ptime) MULTICAST RTP.
+# Usage: send-audio.sh [group] [port] [iface]
 set -euo pipefail
-DEST="${1:?usage: send-audio.sh <dest-ip> [port]}"
+GROUP="${1:-239.10.10.10}"
 PORT="${2:-5004}"
+IFACE="${3:-eth0}"   # Pi wired interface; confirm with: ip -o link
 exec gst-launch-1.0 -v \
   audiotestsrc is-live=true wave=sine freq=440 \
   ! audioconvert ! audioresample \
   ! audio/x-raw,format=S24BE,rate=48000,channels=2 \
   ! rtpL24pay pt=96 min-ptime=1000000 max-ptime=1000000 \
-  ! udpsink host="${DEST}" port="${PORT}"
+  ! udpsink host="${GROUP}" port="${PORT}" auto-multicast=true multicast-iface="${IFACE}" ttl-mc=16
 ```
 
-(`min/max-ptime` are nanoseconds; `1000000` ns = 1 ms packet time, the ST 2110-30 default. `S24BE` = 24-bit big-endian, the L24 wire format.)
+(`min/max-ptime` are nanoseconds; `1000000` ns = 1 ms packet time, the ST 2110-30 default. `S24BE` = 24-bit big-endian, the L24 wire format. `host=` a `239.x` address makes `udpsink` transmit multicast.)
 
 - [ ] **Step 2: Copy it to the Pi**
 
@@ -404,16 +447,16 @@ scp pi/send-audio.sh <pi-user>@$PI_IP:~/
 - [ ] **Step 3: Start the receiver, then the sender**
 
 ```bash
-# in WSL (leave running)
-./pc/recv-audio.sh 5004
+# in WSL (leave running) — args: group port iface  (confirm iface with: ip -o link)
+./pc/recv-audio.sh 239.10.10.10 5004 eth0
 ```
 ```bash
-# on Pi
+# on Pi — args: group port iface  (confirm iface with: ip -o link)
 chmod +x ~/send-audio.sh
-~/send-audio.sh $PC_IP 5004
+~/send-audio.sh 239.10.10.10 5004 eth0
 ```
 
-Expected: **a steady 440 Hz tone from the PC speakers.** The receiver terminal shows pipeline state `PLAYING` and rising buffer stats.
+Expected: **a steady 440 Hz tone from the PC speakers.** The receiver terminal shows pipeline state `PLAYING` and rising buffer stats. (The receiver joins multicast group `239.10.10.10`; the sender transmits to it — no per-host IP needed.)
 
 - [ ] **Step 4: Confirm it is real ST 2110-30 traffic on the wire**
 
@@ -422,7 +465,7 @@ Expected: **a steady 440 Hz tone from the PC speakers.** The receiver terminal s
 sudo tcpdump -i any -n udp port 5004 -c 5
 ```
 
-Expected: 5 UDP packets from `PI_IP` to `PC_IP:5004`. (Optional deeper check: `tcpdump ... -X` and confirm the RTP payload-type byte is 96 / `0x60` in the second header byte.)
+Expected: 5 UDP packets from `10.10.10.1` (Pi) to the multicast group `239.10.10.10:5004`. (Optional deeper check: `tcpdump ... -X` and confirm the RTP payload-type byte is 96 / `0x60` in the second header byte.)
 
 - [ ] **Step 5: Commit**
 
@@ -514,7 +557,7 @@ ip -o link | grep -v lo    # note the interface name (e.g. eth0)
 ptp4l -f pc/ptp4l-follower.conf -i eth0 -m
 ```
 
-Expected: the follower selects the Pi as best master (`new foreign master`, then `port 1: UNCALIBRATED` → `SLAVE`) and prints periodic `master offset <N> s2 freq ...` lines. Over a wired path `<N>` settles to tens of microseconds; **over WiFi expect it noisier and larger — that is the documented, accepted limitation.**
+Expected: the follower selects the Pi as best master (`new foreign master`, then `port 1: UNCALIBRATED` → `SLAVE`) and prints periodic `master offset <N> s2 freq ...` lines. Over the **wired media island** `<N>` should settle to roughly tens of microseconds (software timestamping is the limit, not the link now). Bind ptp4l to the **media interface** (the `10.10.10.x` one), not the WiFi interface.
 
 - [ ] **Step 3: Record an honest result**
 

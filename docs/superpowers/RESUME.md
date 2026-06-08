@@ -1,30 +1,29 @@
 # Resume here (next session)
 
-**Paused:** 2026-06-07, end of planning. **Resume:** 2026-06-08.
+**Last worked:** 2026-06-08.
 
 ## Status
-- ✅ Design spec approved & committed — `docs/superpowers/specs/2026-06-07-pi-st2110-nmos-design.md`
-- ✅ Plan 1 (media foundation, spec phases 0–2) written & committed — `docs/superpowers/plans/2026-06-07-media-foundation.md`
-- ✅ Spec + plan revised for the wired media-island topology (multicast, static IPs)
-- ✅ SD card imaged (Raspberry Pi OS Lite 64-bit). Settings used:
-  - hostname `pi5-nmos`, user `dgperkins`, SSH on (password auth), home WiFi configured, Pi Connect off
-- ⏸️ **Not yet started:** booting the Pi and executing Plan 1
+- ✅ Design spec + Plan 1 written, committed, revised for wired media-island topology
+- ✅ SD card imaged; **Pi booted** — Debian 13 "Trixie", hostname `pi5-nmos`, user `dgperkins`, on WiFi at `192.168.6.232` (subnet 192.168.4.0/22, gw 192.168.4.1)
+- ✅ **Pi software installed:** GStreamer (incl. `rtpL24pay`) + linuxptp 4.2
+- ✅ **WSL set up:** mirrored networking on (WSL shares host LAN as `192.168.4.85`/eth4); GStreamer (`rtpL24depay`, `autoaudiosink`) + linuxptp 4.4 installed; WSLg audio verified
+- ✅ **Windows firewall** rule "ST2110 media inbound (WSL)" — inbound UDP 5004,5005,319,320
+- ✅ 🎉 **MILESTONE: live ST 2110-30 audio Pi -> PC over WiFi (unicast).** Pi `audiotestsrc -> rtpL24pay -> udpsink host=192.168.4.85:5004`; WSL `udpsrc:5004 -> rtpjitterbuffer -> rtpL24depay -> autoaudiosink`. Heard on PC speakers; tcpdump confirmed 300-byte L24 RTP packets.
+
+This was Plan 1 Phase 1 proven **over WiFi unicast** as an early win, ahead of the wired build.
+
+## Gotchas learned
+- WSLg audio needs `export PULSE_SERVER=unix:/mnt/wslg/PulseServer` in the pipeline shell.
+- Don't run two receivers on port 5004 at once (the live receiver silently lost to a lingering one). Run a single clean instance.
+- Firewall rule needs an **elevated** PowerShell (the agent's shell + the `!` prefix are not elevated).
 
 ## Exact next steps
-1. Insert the imaged card into the Pi 5; connect it to the **PoE switch** (power + `eth0`).
-2. Power on, wait ~1–2 min for first boot.
-3. From the PC: `ping pi5-nmos.local` (answers over WiFi via mDNS).
-4. `ssh dgperkins@pi5-nmos.local` — first contact is over **WiFi**.
-5. Begin **Plan 1**, inline execution:
-   - Task 0–3: repo scaffold, WSL `mirrored` networking, Windows firewall.
-   - **Topology amendment** (static IPs): SSH to Pi, `nmcli` give `eth0` `10.10.10.1`; set Windows Ethernet adapter `10.10.10.2`; cable the PC into the switch.
-   - Task 4: bidirectional UDP over `10.10.10.x`.
-   - Task 5–7: GStreamer install → multicast L24 audio → **hear the tone** on PC speakers.
-   - Task 8–9: PTP leader/follower; observe offset.
+1. **Wire the media island:** Pi `eth0` -> PoE switch (drops the USB-C adapter), PC Ethernet -> switch.
+2. **Static IPs** (Topology amendment): Pi `eth0` = 10.10.10.1 (`nmcli`, no gateway), Windows Ethernet adapter = 10.10.10.2. Verify from WSL.
+3. **Re-run audio as true multicast** on the island: sender `udpsink host=239.10.10.10 ... multicast-iface=eth0`; receiver `udpsrc address=239.10.10.10 ... multicast-iface=<wsl-iface>`.
+4. **PTP (Phase 2):** ptp4l leader on Pi / follower on WSL; observe offset on the wired link.
+5. Then **Plan 2:** NMOS nodes (IS-04/05) + activation-watcher + low-res ST 2110-20 video. First Plan-2 task: confirm arm64 `nmos-cpp` and node-config schema.
 
-## Key facts to remember
-- Media island: `10.10.10.0/24`, no router uplink; internet via WiFi on each device.
-- Audio multicast group `239.10.10.10:5004`; video (Plan 2) `239.10.10.20:5006`.
-- Execution style: **inline** (hardware-in-the-loop). Claude drives WSL/PowerShell; user runs Pi commands.
-- After Plan 1 works, write **Plan 2** (NMOS nodes + IS-05-driven media + low-res video); its first task confirms arm64 `nmos-cpp` availability and the node-config schema.
-- The older `easy-nmos` Docker stack (in WSL at `/root/easy-nmos`) is shut down; this project reuses that nmos-cpp knowledge.
+## Key facts
+- Pi: `dgperkins@pi5-nmos.local` (WiFi 192.168.6.232). WSL: `192.168.4.85`. Audio port 5004, multicast group 239.10.10.10.
+- Repo on Windows: `C:\Users\dgper\pi-nmos-st2110`. Execution style: inline (Claude drives WSL/PowerShell; user runs Pi commands).

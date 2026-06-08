@@ -82,7 +82,7 @@ def main():
             out.append(f"  {DIM}offset      :{R} {ptp.get('offset', '—')} ns")
             if not ptp:
                 out.append(f"\n  {DIM}(run with sudo, ptp4l active, for live PTP status){R}")
-            sys.stdout.write("\033[K\n".join(out) + "\033[K")
+            sys.stdout.write("\n".join(out) + "\033[J")   # [J clears any leftover lines below
             sys.stdout.flush()
             time.sleep(0.05)
     except KeyboardInterrupt:

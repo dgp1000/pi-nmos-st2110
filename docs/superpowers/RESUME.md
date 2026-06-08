@@ -2,34 +2,32 @@
 
 **Last worked:** 2026-06-08.
 
-## Status
-- ✅ Design spec + Plan 1 written/committed, revised for wired media-island topology
-- ✅ Pi booted — Debian 13 "Trixie", `pi5-nmos`, user `dgperkins`. WiFi mgmt: `192.168.6.232`.
-- ✅ Pi software: GStreamer (`rtpL24pay`) + linuxptp 4.2
-- ✅ WSL: mirrored networking; GStreamer + linuxptp 4.4; WSLg audio verified
-- ✅ Windows firewall rule "ST2110 media inbound (WSL)" — inbound UDP 5004,5005,319,320
-- ✅ Early win: live ST 2110-30 audio Pi->PC **over WiFi unicast**
-- ✅ 🔌 **Wired media island up:** PoE switch, Pi `eth0`=10.10.10.1, PC Ethernet=10.10.10.2 (WSL mirrors it as `eth1`). Sub-ms latency, 0% loss, isolated from home LAN. PoE power good (`throttled=0x0`).
-- ✅ 🎉 **MILESTONE: true ST 2110-30 MULTICAST audio** over the wired island. Pi `udpsink host=239.10.10.10 ... multicast-iface=eth0`; WSL `udpsrc address=239.10.10.10 ... multicast-iface=eth1 -> rtpL24depay -> autoaudiosink`. Heard on PC speakers. **Plan 1 Phase 1 DONE (real multicast).**
+## Status — core project DONE; video is the remaining stretch
+- ✅ Pi: Debian 13 "Trixie", `pi5-nmos`, user `dgperkins`. WiFi mgmt 192.168.6.232; island eth0 10.10.10.1.
+- ✅ WSL (mirrored networking): GStreamer + linuxptp; WSLg audio. Island iface `eth1` 10.10.10.2; WiFi `eth4`.
+  **WSL default user is `dgper` (uid 1000)** — privileged cmds need `wsl -d Ubuntu -u root -- ...`.
+- ✅ Windows firewall rule "ST2110 media inbound (WSL)" — inbound UDP 5004,5005,319,320.
+- ✅ Wired PoE media island, 10.10.10.0/24, sub-ms, isolated. PoE power good.
+- ✅ **ST 2110-30 multicast audio** Pi→PC (group 239.10.10.10:5004, L24/48k/2ch, pt96, 1ms).
+- ◐ **PTP:** Pi grandmaster works + WSL follower discovers/selects it; full lock blocked by WSL (event-msg handling). Learning-grade, as the spec predicted. `ptp4l -i eth0 -m -S` (Pi) / `-i eth1 -m -S -s` (WSL, as root).
+- ✅ 🏆 **NMOS milestone:** registry + node (Docker in WSL, `rhastie/nmos-cpp`, reusing `/root/easy-nmos` bridge compose). An **IS-05 take starts/stops real audio** via `pc/activation-watcher.py` (re-resolves receiver `a0` by label each poll → starts/stops the GStreamer multicast receiver on master_enable). Trigger with `pc/take.py on|off`.
+
+## How to re-run the NMOS demo
+1. Registry+node: `wsl -d Ubuntu -u root -- bash -lc 'cd /root/easy-nmos && docker compose -f docker-compose.wsl.yml up -d nmos-registry nmos-virtnode'`
+2. Pi (SSH): run the multicast audio sender (`udpsink host=239.10.10.10 ... multicast-iface=eth0`).
+3. **Local WSL terminal** (for WSLg audio — NOT background/SSH): `python3 /mnt/c/Users/dgper/pi-nmos-st2110/pc/activation-watcher.py`
+4. Take: `wsl -d Ubuntu -- bash -lc 'python3 /mnt/c/Users/dgper/pi-nmos-st2110/pc/take.py on'` (audio on) / `off` (audio off).
 
 ## Gotchas learned
-- WSLg audio needs `export PULSE_SERVER=unix:/mnt/wslg/PulseServer` in the pipeline shell.
-- Run a **single** receiver instance (a detached/background gst receiver reached PLAYING but was silent; a clean foreground one works). Always `pkill gst-launch-1.0` before a new run.
-- Static IP / firewall changes need an **elevated** PowerShell (agent shell + `!` prefix are not elevated).
-- WSL island interface is **`eth1`** (10.10.10.2); WiFi is `eth4`. Pi island interface is `eth0`.
-
-## PTP (Phase 2) — partial, by design
-- ✅ Pi = working **PTP grandmaster** (`ptp4l -i eth0 -m -S`, assumed grand master role, clock d83add.fffe.ea7b5e).
-- ✅ WSL follower (`ptp4l -i eth1 -m -S -s`, run as **root** via `wsl -u root`) discovers + selects the Pi as best master over the island.
-- ⚠️ Follower **stalls in UNCALIBRATED**, never completes lock (no `master offset`). `ethtool -T eth1` reports software TX/RX timestamping present, so it's WSL mirrored-mode handling of PTP **event messages** (Sync), not a missing cap. Consistent with the spec's learning-grade-PTP non-goal. Real lock needs a bare-metal/HW-timestamped follower (e.g., a 2nd Pi); WSL is the wrong follower. Pi grandmaster side works.
-- NOTE: WSL default user is now **`dgper` (uid 1000)**, not root — privileged cmds (ptp4l, tcpdump) need `wsl -d Ubuntu -u root -- ...`.
+- WSLg audio needs `PULSE_SERVER=unix:/mnt/wslg/PulseServer`; a **detached/background** gst is silent — run the watcher in a **real local WSL terminal**.
+- nmos-cpp virtnode **regenerates resource UUIDs** occasionally (stable in ~16s+ windows) → always resolve receivers **by label**, never a fixed UUID.
+- IS-05 receiver has **2 transport-param legs** (2022-7) → don't send a 1-element `transport_params` ("inconsistent array size"); just PATCH `master_enable` + activation (the watcher pins the flow).
 
 ## Exact next steps
-1. **Plan 2 — NMOS (the marquee pillar = JD's "2110 routing orchestration"):** NMOS nodes (IS-04/05) advertising the real audio sender/receiver + an activation-watcher so an IS-05 "take" starts/stops the GStreamer flow. First Plan-2 task: confirm arm64 `nmos-cpp` (Debian 13/arm64) and the node-config schema.
-2. Then **low-res ST 2110-20 video** (`videotestsrc -> rtpvrawpay` / `rtpvrawdepay -> autovideosink` in a WSLg window).
-3. (Optional) Real PTP lock later with a **2nd Pi** as follower.
+1. **Low-res ST 2110-20 video** — Pi `videotestsrc -> rtpvrawpay` (e.g. UYVY 320x240@25) multicast on 239.10.10.20:5006; WSL `udpsrc -> rtpvrawdepay -> autovideosink` in a WSLg window. Then add an NMOS video receiver + extend the activation-watcher so an IS-05 take starts the **video** too.
+2. (Optional) Real PTP lock with a 2nd Pi as follower.
 
 ## Key facts
-- Pi: `dgperkins@pi5-nmos.local` (WiFi 192.168.6.232; island eth0 10.10.10.1). WSL island: eth1 10.10.10.2.
-- Audio: multicast group 239.10.10.10:5004, L24/48k/2ch, pt=96, 1ms ptime. Video (Plan 2): 239.10.10.20:5006.
-- Repo: `C:\Users\dgper\pi-nmos-st2110`. Inline execution (Claude drives WSL/PowerShell; user runs Pi cmds).
+- Repo: `C:\Users\dgper\pi-nmos-st2110` (Windows git). Scripts in `pc/`: `activation-watcher.py`, `take.py`.
+- Audio multicast 239.10.10.10:5004; video (next) 239.10.10.20:5006.
+- Inline execution: Claude drives WSL/PowerShell; user runs Pi cmds + the local-WSL watcher.

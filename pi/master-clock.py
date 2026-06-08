@@ -10,7 +10,7 @@ it also shows the grandmaster identity, this port's PTP state, and the offset.
 
 Ctrl+C to quit.
 """
-import subprocess, sys, time
+import subprocess, sys, threading, time
 from datetime import datetime
 
 G = "\033[92m"; C = "\033[96m"; Y = "\033[93m"; DIM = "\033[2m"; B = "\033[1m"; R = "\033[0m"
@@ -61,14 +61,18 @@ def ptp_status():
 
 def main():
     sys.stdout.write(HIDE + CLEAR)
-    ptp, ptp_t = {}, 0.0
+    latest = [{}]
+    def poller():                      # query pmc off the draw loop so it never hitches
+        while True:
+            latest[0] = ptp_status()
+            time.sleep(1)
+    threading.Thread(target=poller, daemon=True).start()
     try:
         while True:
             now = time.time()
             dt = datetime.fromtimestamp(now)
             ms = int((now % 1) * 1000)
-            if now - ptp_t > 1:
-                ptp, ptp_t = ptp_status(), now
+            ptp = latest[0]
             sys.stdout.write(HOME)
             out = []
             out.append(f"{B}{C}        P T P   M A S T E R   C L O C K{R}\n")

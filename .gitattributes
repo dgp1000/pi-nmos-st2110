@@ -1,0 +1,3 @@
+# Shell scripts must stay LF: they run under WSL/bash and are scp'd to the Pi,
+# where CRLF line endings break execution. (Repo has core.autocrlf=true.)
+*.sh text eol=lf

@@ -18,10 +18,16 @@
 - Static IP / firewall changes need an **elevated** PowerShell (agent shell + `!` prefix are not elevated).
 - WSL island interface is **`eth1`** (10.10.10.2); WiFi is `eth4`. Pi island interface is `eth0`.
 
+## PTP (Phase 2) — partial, by design
+- ✅ Pi = working **PTP grandmaster** (`ptp4l -i eth0 -m -S`, assumed grand master role, clock d83add.fffe.ea7b5e).
+- ✅ WSL follower (`ptp4l -i eth1 -m -S -s`, run as **root** via `wsl -u root`) discovers + selects the Pi as best master over the island.
+- ⚠️ Follower **stalls in UNCALIBRATED**, never completes lock (no `master offset`). `ethtool -T eth1` reports software TX/RX timestamping present, so it's WSL mirrored-mode handling of PTP **event messages** (Sync), not a missing cap. Consistent with the spec's learning-grade-PTP non-goal. Real lock needs a bare-metal/HW-timestamped follower (e.g., a 2nd Pi); WSL is the wrong follower. Pi grandmaster side works.
+- NOTE: WSL default user is now **`dgper` (uid 1000)**, not root — privileged cmds (ptp4l, tcpdump) need `wsl -d Ubuntu -u root -- ...`.
+
 ## Exact next steps
-1. **PTP (Phase 2):** ptp4l leader on Pi (`-i eth0`), follower on WSL (`-i eth1`), software timestamping, domain 0. Watch `master offset` converge on the wired link (expect tens of µs). Configs are in Plan 1 Tasks 8-9 (`pi/ptp4l-leader.conf`, `pc/ptp4l-follower.conf`).
-2. **Plan 2:** NMOS nodes (IS-04/05) advertising the real audio sender/receiver + an activation-watcher so an IS-05 "take" starts/stops the GStreamer flow. First Plan-2 task: confirm arm64 `nmos-cpp` (Debian 13/arm64) and the node-config schema.
-3. Then **low-res ST 2110-20 video** (`videotestsrc -> rtpvrawpay` / `rtpvrawdepay -> autovideosink` in a WSLg window).
+1. **Plan 2 — NMOS (the marquee pillar = JD's "2110 routing orchestration"):** NMOS nodes (IS-04/05) advertising the real audio sender/receiver + an activation-watcher so an IS-05 "take" starts/stops the GStreamer flow. First Plan-2 task: confirm arm64 `nmos-cpp` (Debian 13/arm64) and the node-config schema.
+2. Then **low-res ST 2110-20 video** (`videotestsrc -> rtpvrawpay` / `rtpvrawdepay -> autovideosink` in a WSLg window).
+3. (Optional) Real PTP lock later with a **2nd Pi** as follower.
 
 ## Key facts
 - Pi: `dgperkins@pi5-nmos.local` (WiFi 192.168.6.232; island eth0 10.10.10.1). WSL island: eth1 10.10.10.2.

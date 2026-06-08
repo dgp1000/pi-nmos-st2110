@@ -44,11 +44,11 @@ PAGE = """<!doctype html><html><head>
  html,body{margin:0;height:100%;background:#000;color:#0f0;
    font-family:'Courier New',monospace;overflow:hidden;-webkit-user-select:none}
  #wrap{display:flex;flex-direction:column;justify-content:center;align-items:center;height:100%}
- #title{color:#0cf;letter-spacing:.5em;font-size:4vw;margin-bottom:2vh}
- #time{font-size:23vw;font-weight:bold;line-height:1;text-shadow:0 0 25px #0f0}
- #ms{font-size:6vw}
- #date{color:#888;font-size:4vw;margin-top:2vh}
- #ptp{color:#777;font-size:2.6vw;margin-top:5vh;text-align:center;line-height:1.7}
+ #title{color:#0cf;letter-spacing:.3em;font-size:min(3vw,4.5vh);margin-bottom:2vh}
+ #time{font-size:min(16vw,26vh);font-weight:bold;line-height:1;white-space:nowrap;text-shadow:0 0 25px #0f0}
+ #ms{font-size:min(5vw,7vh)}
+ #date{color:#888;font-size:min(3.2vw,4.5vh);margin-top:2vh}
+ #ptp{color:#777;font-size:min(2.3vw,3.2vh);margin-top:4vh;text-align:center;line-height:1.7}
  .gm{color:#fc0;font-weight:bold}
 </style></head>
 <body><div id="wrap">

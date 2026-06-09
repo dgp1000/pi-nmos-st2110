@@ -1,4 +1,6 @@
-# Resume / project state
+# Atoll — resume / project state
+
+**Atoll** is the product name (chosen 2026-06-09) for this Pi 5 + WSL2 **ST 2110 / NMOS island monitor**: an iPad-controlled broadcast-over-IP multiviewer + NMOS switch/inspect surface with a layout-switchable monitor-2 output. Wordmark + `<title>` live in `pc/monitor-web.py`.
 
 **Last worked:** 2026-06-09. Core project + stretch goals **complete.** Latest: turned the iPad monitor into a control-only **IS-05 switch panel + IS-04/05 inspector** (dropped in-browser video — it tore on iOS HLS; see the note below), added the **AMWA NMOS Testing Tool** (`:5000`), and pointed `restore.ps1` at the panel. Then built a **source-following native output on monitor 2** (`pc/output-render.sh`: single / side-by-side / 2×2 multiview, layout picked from the iPad), a generic **playlist media sender** (`pc/media-send.sh`) now feeding the `m0`/5008 slot with **home videos as HEVC** (relabelled "Home videos"; JPEG-XS can't be gst-decoded into the multiview), **audio that follows the selected source**, and a **tap-any-row IS-04/05 JSON drill-down** on the panel. Final polish: the Home-videos source cycles the whole **OneDrive folder** (6 clips, 720p HEVC); bbb dropped to **720p** so the multiview isn't overloaded; fixed iPad jank (no per-frame `innerHTML`) and timecode jumps (clamped offset).
 

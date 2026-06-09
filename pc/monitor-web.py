@@ -265,12 +265,16 @@ def pi_time():
 # --------------------------------- page ----------------------------------
 PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>ST 2110 IS-04/05 Switch</title>
+<title>Atoll</title>
 <style>
  html,body{margin:0;min-height:100%;background:#000;color:#0f0;
    font-family:'Courier New',monospace;-webkit-user-select:none}
  #top{position:sticky;top:0;background:#000;padding:1.2vh 0 1vh;text-align:center;
    border-bottom:1px solid #131;z-index:5}
+ #brand{font-weight:bold;letter-spacing:.42em;color:#0f0;font-size:min(3vw,3.4vh);
+   line-height:1;text-shadow:0 0 14px #0a0;margin-bottom:.4vh}
+ #brand span{display:block;letter-spacing:.16em;color:#5a5;font-weight:normal;
+   font-size:min(1.5vw,1.8vh);margin-top:.35vh}
  #tc{font-size:min(11vw,12vh);font-weight:bold;line-height:1;text-shadow:0 0 18px #0f0}
  #ctrl{margin-top:1vh;display:flex;flex-wrap:wrap;justify-content:center}
  button{font-family:inherit;font-size:min(3.2vw,3.6vh);margin:.5vh .5vw;padding:.5em 1em;
@@ -306,6 +310,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
 </style></head>
 <body>
  <div id="top">
+  <div id="brand">ATOLL<span>ST&nbsp;2110 &middot; NMOS island monitor</span></div>
   <div id="tc">--:--:--:--</div>
   <div id="ctrl">
    <button id="bjxs" onclick="take('jxs',this)">Home videos</button>

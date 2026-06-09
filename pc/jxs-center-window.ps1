@@ -50,7 +50,12 @@ $SWP_NOSIZE   = 0x0001
 $SWP_NOZORDER = 0x0004
 $primary = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 
+# Keep re-centering for the whole window: WSLg often repositions the player to its
+# default spot after the first real frame arrives, so a one-shot move drifts away.
+# We snap it back whenever it's off-center (but leave it alone once it's centered,
+# so a deliberate drag isn't fought every tick).
 $deadline = (Get-Date).AddSeconds($TimeoutSec)
+$everCentered = $false
 while ((Get-Date) -lt $deadline) {
   $hwnd = Find-Window
   if ($hwnd -ne [IntPtr]::Zero) {
@@ -60,11 +65,15 @@ while ((Get-Date) -lt $deadline) {
     $ch = $r.Bottom - $r.Top
     $x = $primary.X + [int](($primary.Width  - $cw) / 2)
     $y = $primary.Y + [int](($primary.Height - $ch) / 2)
-    [void][W32]::SetWindowPos($hwnd, [IntPtr]::Zero, $x, $y, 0, 0, ($SWP_NOSIZE -bor $SWP_NOZORDER))
-    Write-Output ("centered '{0}' ({1}x{2}) -> ({3},{4}) on {5}" -f $Title, $cw, $ch, $x, $y, $primary.ToString())
-    exit 0
+    if ($r.Left -ne $x -or $r.Top -ne $y) {
+      [void][W32]::SetWindowPos($hwnd, [IntPtr]::Zero, $x, $y, 0, 0, ($SWP_NOSIZE -bor $SWP_NOZORDER))
+      if (-not $everCentered) {
+        Write-Output ("centered '{0}' ({1}x{2}) -> ({3},{4}) on {5}" -f $Title, $cw, $ch, $x, $y, $primary.ToString())
+        $everCentered = $true
+      }
+    }
   }
-  Start-Sleep -Milliseconds 250
+  Start-Sleep -Milliseconds 400
 }
-Write-Output ("window '{0}' not found within {1}s" -f $Title, $TimeoutSec)
-exit 1
+if (-not $everCentered) { Write-Output ("window '{0}' not found within {1}s" -f $Title, $TimeoutSec); exit 1 }
+exit 0

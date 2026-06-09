@@ -418,7 +418,7 @@ async function sync(){
   // NTP-ish: estimate (server clock - local clock). Reject jittery round-trips and smooth
   // the rest, so a laggy /time response (PC under load) doesn't make the timecode jump.
   try{const t0=Date.now();const r=await fetch('/time',{cache:'no-store'});const t1=Date.now();
-      const d=await r.json();ptp=d;
+      const d=await r.json();ptp=d;renderInfo();
       const rtt=t1-t0; if(rtt>250) return;          // too jittery to trust this sample
       const est=d.epoch_ms-(t1-rtt/2);              // server time at the client receive-midpoint
       if(!synced){offset=est;synced=true;}          // fast initial lock
@@ -426,14 +426,15 @@ async function sync(){
   }catch(e){}
 }
 const p=(n,l=2)=>String(n).padStart(l,'0');
-function tick(){
+const tcEl=document.getElementById('tc'), infoEl=document.getElementById('info');
+function renderInfo(){   // only when ptp changes (called from sync, ~3s) -- NOT per frame
+  const role = ptp.state==='MASTER' ? '<span class="gm">GRANDMASTER</span>' : (ptp.state||'\\u2014');
+  infoEl.innerHTML='PTP domain 0 &middot; '+role+' &middot; '+(ptp.gm||'\\u2014')+' &middot; offset '+(ptp.offset||'\\u2014')+' ns';
+}
+function tick(){   // per-frame: ONLY the timecode text (cheap); no innerHTML, no DOM lookups
   const now=new Date(Date.now()+offset);
   const ff=Math.floor(now.getMilliseconds()/(1000/FPS));
-  document.getElementById('tc').textContent=
-    p(now.getHours())+':'+p(now.getMinutes())+':'+p(now.getSeconds())+':'+p(ff);
-  const role = ptp.state==='MASTER' ? '<span class="gm">GRANDMASTER</span>' : (ptp.state||'\\u2014');
-  document.getElementById('info').innerHTML=
-    'PTP domain 0 &middot; '+role+' &middot; '+(ptp.gm||'\\u2014')+' &middot; offset '+(ptp.offset||'\\u2014')+' ns';
+  tcEl.textContent=p(now.getHours())+':'+p(now.getMinutes())+':'+p(now.getSeconds())+':'+p(ff);
   requestAnimationFrame(tick);
 }
 refreshState(); setInterval(refreshState,5000);

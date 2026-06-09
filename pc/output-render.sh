@@ -31,6 +31,17 @@ hevc_tile() { echo "udpsrc address=$1 port=$2 multicast-iface=$IFACE auto-multic
 hevc_full() { echo "gst-launch-1.0 -q udpsrc address=$1 port=$2 multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=d d. ! h265parse ! queue ! nvh265dec ! cudadownload ! videoconvert ! videoscale ! video/x-raw,width=1920,height=1080 ! videoconvert ! waylandsink fullscreen=true sync=true d. ! mpegaudioparse ! queue ! mpg123audiodec ! audioconvert ! audioresample ! autoaudiosink sync=true"; }
 raw_video()  { echo "udpsrc address=239.10.10.20 port=5005 multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! video/x-raw,width=$1,height=$2"; }
 
+# Audio-only pipeline for the SELECTED source (used in side/multi, and single+raw); the
+# video pad is parsed-then-dropped so we don't waste a decode. hevc/home carry MP3 in the
+# TS; Pi raw's audio is the separate ST 2110-30 L24 flow on 239.10.10.10:5004.
+audio_cmd() {   # $1 = active source
+  case "$1" in
+    hevc) echo "gst-launch-1.0 -q udpsrc address=$HEVC_GRP port=$HEVC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! h265parse ! fakesink sync=false a. ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! autoaudiosink sync=true" ;;
+    jxs)  echo "gst-launch-1.0 -q udpsrc address=$HOME_GRP port=$HOME_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! h265parse ! fakesink sync=false a. ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! autoaudiosink sync=true" ;;
+    raw)  echo "gst-launch-1.0 -q udpsrc address=239.10.10.10 port=5004 multicast-iface=$IFACE auto-multicast=true caps='application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96' ! rtpjitterbuffer latency=100 ! rtpL24depay ! audioconvert ! audioresample ! autoaudiosink sync=true" ;;
+  esac
+}
+
 build_pipeline() {   # $1=layout  $2=active
   case "$1" in
     single)
@@ -57,8 +68,11 @@ build_pipeline() {   # $1=layout  $2=active
 
 cur_key=""
 pid=""
-kill_view() { [ -n "$pid" ] && kill -- -"$pid" 2>/dev/null; pid=""; }
-trap 'kill_view; exit 0' INT TERM EXIT
+apid=""
+aud_key="__init__"
+kill_view()  { [ -n "$pid" ]  && kill -- -"$pid"  2>/dev/null; pid=""; }
+kill_audio() { [ -n "$apid" ] && kill -- -"$apid" 2>/dev/null; apid=""; }
+trap 'kill_view; kill_audio; exit 0' INT TERM EXIT
 
 echo "output-render: following $PANEL/state -> monitor $SCREEN (Ctrl+C to stop)"
 while true; do
@@ -67,6 +81,8 @@ while true; do
   layout="$(printf '%s' "$resp" | sed -n 's/.*"layout"[: ]*"\([a-z]*\)".*/\1/p')"
   [ -z "$layout" ] && layout="single"
   [ -z "$active" ] && { sleep 1; continue; }
+
+  # --- video: relaunch the pipeline only on layout/source change ---
   if [ "$layout" = "single" ]; then key="single:$active"; else key="$layout"; fi
   if [ "$key" != "$cur_key" ]; then
     cmd="$(build_pipeline "$layout" "$active")"
@@ -78,6 +94,20 @@ while true; do
       cur_key="$key"
       [ "$SCREEN" != "0" ] && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$MOVER" -Screen "$SCREEN" -TimeoutSec 12 >/dev/null 2>&1 &
     fi
+  fi
+
+  # --- audio: follow the SELECTED source. single hevc/jxs already embed their own
+  # (lip-synced) audio; run the standalone follower only where the video has none:
+  # side/multi, and single+raw. Switches instantly without touching the video. ---
+  if [ "$layout" = "single" ] && [ "$active" != "raw" ]; then akey=""; else akey="$active"; fi
+  if [ "$akey" != "$aud_key" ]; then
+    kill_audio
+    if [ -n "$akey" ]; then
+      acmd="$(audio_cmd "$akey")"
+      [ -n "$acmd" ] && { setsid bash -c "$acmd" >/tmp/output-audio.log 2>&1 & apid=$!; }
+    fi
+    aud_key="$akey"
+    echo "$(date +%T) audio -> ${akey:-embedded}"
   fi
   sleep 1
 done

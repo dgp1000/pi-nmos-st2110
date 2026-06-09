@@ -1,1 +1,3 @@
 jxs-demo/
+__pycache__/
+*.pyc

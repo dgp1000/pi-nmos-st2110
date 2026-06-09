@@ -9,11 +9,12 @@ speakers (via WSLg); when master_enable goes FALSE it stops the flow.
 This is the control-plane -> real-media bridge: an NMOS "take" actually starts media.
 """
 import json, os, subprocess, time, urllib.request
+from island_iface import island_iface
 
 NODE = "http://localhost:8090/x-nmos/node/v1.3"
 CONN = "http://localhost:8090/x-nmos/connection/v1.1"
 RECEIVER_LABEL = "easy-nmos-node/receiver/a0"
-IFACE = "eth1"                 # WSL island interface
+IFACE = island_iface()         # auto-detect island NIC (WSL renames eth0/eth1 across reboots)
 FALLBACK_GROUP = "239.10.10.10"
 FALLBACK_PORT = 5004
 

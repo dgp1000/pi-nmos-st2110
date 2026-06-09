@@ -2,8 +2,10 @@
 # Post-restore sanity checks, called by restore.ps1 step [4/4].
 # Kept as a file (not an inline PowerShell one-liner) because Windows PowerShell 5.1
 # mangles quotes when passing a bash command to native wsl.exe.
-echo "WSL island iface:"
-ip -4 -br addr show eth1
+# Island NIC by IP (WSL renames eth0/eth1 across reboots).
+ISL="$(ip -o -4 addr show 2>/dev/null | awk '$4 ~ /^10\.10\.10\.2\// {print $2; exit}')"
+echo "WSL island iface: ${ISL:-NOT FOUND (no NIC has 10.10.10.2)}"
+[ -n "$ISL" ] && ip -4 -br addr show "$ISL"
 
 # The monitor takes a few seconds to bind 8095 after launch; retry before giving up.
 code=000

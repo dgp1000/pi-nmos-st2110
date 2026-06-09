@@ -11,9 +11,10 @@ Run in WSL:  python3 monitor-web.py    Open from iPad: http://<pc-wifi-ip>:8096
 """
 import http.server, socketserver, subprocess, urllib.request, json, time, os, signal, threading, glob, atexit
 from urllib.parse import urlparse, parse_qs
+from island_iface import island_iface
 
 PORT = 8096
-IFACE = "eth1"
+IFACE = island_iface()   # auto-detect island NIC (WSL renames eth0/eth1 across reboots)
 BOUNDARY = "st2110frame"
 FPS = 60000 / 1001
 PI_CLOCK = "http://10.10.10.1:8000/time"

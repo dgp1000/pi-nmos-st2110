@@ -12,9 +12,11 @@ Run in WSL:  python3 video-web.py    Open: http://localhost:8095 / http://<wifi-
 """
 import http.server, socketserver, subprocess, urllib.request, json, time
 from urllib.parse import urlparse, parse_qs
+from island_iface import island_iface
 
 PORT = 8095
-GROUP, VPORT, IFACE = "239.10.10.20", 5005, "eth1"
+GROUP, VPORT = "239.10.10.20", 5005
+IFACE = island_iface()   # auto-detect island NIC (WSL renames eth0/eth1 across reboots)
 BOUNDARY = "st2110frame"
 FPS = 60000 / 1001   # 59.94 fps (US / NTSC)
 PI_CLOCK = "http://10.10.10.1:8000/time"

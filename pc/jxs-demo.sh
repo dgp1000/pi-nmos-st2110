@@ -5,10 +5,12 @@
 JXS=/root/SVT-JPEG-XS/Bin/Release
 export LD_LIBRARY_PATH=$JXS
 CAPS="application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)RAW,sampling=(string)YCbCr-4:2:2,depth=(string)8,width=(string)320,height=(string)240,payload=(int)96"
+# Island NIC by IP (WSL renames eth0/eth1 across reboots).
+IFACE="$(ip -o -4 addr show 2>/dev/null | awk '$4 ~ /^10\.10\.10\.2\// {print $2; exit}')"; IFACE="${IFACE:-eth0}"
 
 echo "=== capture a raw frame (planar 4:2:2, 320x240) ==="
 rm -f /tmp/frame_*.yuv /tmp/orig.yuv
-timeout 4 gst-launch-1.0 -q udpsrc address=239.10.10.20 port=5005 multicast-iface=eth1 \
+timeout 4 gst-launch-1.0 -q udpsrc address=239.10.10.20 port=5005 multicast-iface="$IFACE" \
   auto-multicast=true caps="$CAPS" \
   ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert \
   ! video/x-raw,format=Y42B,width=320,height=240 ! multifilesink location=/tmp/frame_%03d.yuv

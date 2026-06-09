@@ -29,10 +29,11 @@
 - Run a **single** `ptp4l` (extras pile up; `sudo pkill ptp4l` then start one).
 
 ## Possible next steps (optional)
-1. Put **video under NMOS control** too (extend activation-watcher / a video receiver node so an IS-05 take gates the video).
-2. View video on the **iPad** (open firewall for 8095, use `http://192.168.4.85:8095`).
-3. Wired-vs-WiFi **jitter comparison**.
-4. Real PTP lock with a **2nd Pi** as follower.
+- ✅ **Video under NMOS IS-05 control** — done: `pc/monitor-web.py` switches the video receiver (v0 raw / m0 JPEG-XS) via IS-05 takes.
+- ✅ **Video on the iPad** — done: the switchable monitor at `http://192.168.4.85:8096` (run `pc/open-monitor-firewall.ps1` elevated once).
+1. Wired-vs-WiFi **jitter comparison**.
+2. Real PTP lock with a **2nd Pi** as follower.
+3. Fold `video-web.py` (codec A/B) + `monitor-web.py` into one page; add audio to the AV take.
 
 ## Key facts
 - Repo: `C:\Users\dgper\pi-nmos-st2110` (Windows git). Audio 239.10.10.10:5004, video 239.10.10.20:5005.

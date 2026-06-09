@@ -25,6 +25,8 @@ SOURCES = {
     "jxs": {"label": "easy-nmos-node/receiver/m0", "group": "239.10.10.22", "port": 5008},
 }
 DEFAULT_SRC = "jxs"
+_active = {"src": DEFAULT_SRC, "ts": 0.0}
+_ACTIVE_TTL = 2.0  # seconds; avoids hammering the NMOS node on every /stream open
 RAW_CAPS = ("application/x-rtp,media=(string)video,clock-rate=(int)90000,"
             "encoding-name=(string)RAW,sampling=(string)YCbCr-4:2:2,depth=(string)8,"
             "width=(string)320,height=(string)240,payload=(int)96")
@@ -55,15 +57,23 @@ def is_enabled(label):
 def take(src):
     for key, s in SOURCES.items():
         set_enable(s["label"], key == src)
+    _active["src"] = src
+    _active["ts"] = time.monotonic()
 
 def active_src():
+    if time.monotonic() - _active["ts"] < _ACTIVE_TTL:
+        return _active["src"]
+    src = DEFAULT_SRC
     for key, s in SOURCES.items():
         try:
             if is_enabled(s["label"]):
-                return key
+                src = key
+                break
         except Exception:
             pass
-    return DEFAULT_SRC
+    _active["src"] = src
+    _active["ts"] = time.monotonic()
+    return src
 
 def stream_cmd(src):
     s = SOURCES[src]
@@ -162,17 +172,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
             finally:
-                try: os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except Exception: pass
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                except Exception:
+                    proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except Exception:
+                        proc.kill()
+                    try:
+                        proc.wait(timeout=3)
+                    except Exception:
+                        pass
         elif parsed.path == "/take":
             qs = parse_qs(parsed.query)
             src = qs.get("src", [DEFAULT_SRC])[0]
             if src not in SOURCES: src = DEFAULT_SRC
             try:
-                take(src); body = json.dumps({"active": src}).encode()
+                take(src); body = json.dumps({"active": src}).encode(); code = 200
             except Exception as e:
-                body = json.dumps({"error": str(e)}).encode()
-            self.send_response(200)
+                body = json.dumps({"error": str(e)}).encode(); code = 500
+            self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()

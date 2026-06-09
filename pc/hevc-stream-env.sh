@@ -11,7 +11,7 @@ HEVC_H=2160
 HEVC_FPS=60000/1001        # 59.94
 HEVC_BITRATE=50000         # kbit/s, CBR
 HEVC_GOP=30                # IDR ~every 0.5s @ 59.94 (fast multicast late-join)
-HEVC_DISPLAY_W=1920        # GPU-downscale for the display window; NVDEC still decodes full 4K
+HEVC_DISPLAY_W=1920        # display-window size (downscaled from the full-4K decode); smooth at 1080p
 HEVC_DISPLAY_H=1080
 
 # --- transport: RTP/H.265 multicast on the island ---

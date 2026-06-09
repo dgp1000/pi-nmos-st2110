@@ -19,7 +19,8 @@ echo "  Ctrl+C to stop."
 # qtdemux splits the MP4: video_0 -> GPU decode (NVDEC) -> GPU re-encode HEVC (NVENC);
 # audio_0 (MP3) is passed through untouched. mpegtsmux gives a shared A/V timeline;
 # udpsink sync=true paces the non-live file at real time.
-exec gst-launch-1.0 -q \
+while true; do   # loop so the stream doesn't stop at end-of-file
+  gst-launch-1.0 -q \
   filesrc location="$SRC" ! qtdemux name=d \
   d.video_0 ! h264parse ! nvh264dec ! queue \
     ! nvh265enc rc-mode=cbr bitrate="${HEVC_BITRATE}" preset=p4 tune=low-latency gop-size="${HEVC_GOP}" aud=true \
@@ -27,3 +28,5 @@ exec gst-launch-1.0 -q \
   d.audio_0 ! queue ! mpegaudioparse ! mux. \
   mpegtsmux name=mux alignment=7 ! queue \
     ! udpsink host="${HEVC_ADDR}" port="${HEVC_PORT}" multicast-iface="${HEVC_IFACE}" auto-multicast=true ttl="${HEVC_TTL}" buffer-size=8388608 sync=true
+  echo "(reached end of file -- looping)"; sleep 0.5
+done

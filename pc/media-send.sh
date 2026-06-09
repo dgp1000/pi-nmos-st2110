@@ -13,10 +13,13 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$DIR/hevc-stream-env.sh"      # HEVC_ADDR / HEVC_PORT / HEVC_IFACE / HEVC_TTL
 source "$DIR/jxs-stream-env.sh"       # JXS_ADDR / JXS_PORT
 GRP="$HEVC_ADDR"; PORT="$HEVC_PORT"; TAG=hevc
-case "${1:-}" in
-  --jxs)  GRP="$JXS_ADDR"; PORT="$JXS_PORT"; TAG=jxs; shift;;
-  --hevc) shift;;
-esac
+while [ -n "${1:-}" ]; do
+  case "$1" in
+    --jxs)  GRP="$JXS_ADDR"; PORT="$JXS_PORT"; TAG=jxs; shift;;
+    --hevc) shift;;
+    *) break;;
+  esac
+done
 IFACE="${HEVC_IFACE:-eth0}"
 [ "$#" -ge 1 ] || { echo "usage: $(basename "$0") [--hevc|--jxs] <file|dir> [file ...]" >&2; exit 1; }
 # A single directory arg -> cycle every video file in it (sidesteps spaces/quotes/apostrophes
@@ -31,8 +34,11 @@ echo "media-send[$TAG]: $# clip(s) -> $GRP:$PORT on $IFACE  (Ctrl+C to stop)"
 # decodebin -> conform to 720p30 NV12 (videoscale add-borders preserves aspect) -> CUDA ->
 # NVENC HEVC; audio -> MP3. config-interval=-1 re-sends headers so mid-stream joiners sync.
 send() {
+  # decodebin3 -- the legacy 'decodebin' fails to autoplug H.264 decoders on this GStreamer
+  # 1.28 build. decodebin3 also selects a single stream per type, so files with multiple audio
+  # tracks (e.g. bbb-4k's mp3+ac3) don't leave an unlinked pad that EOS's the pipeline.
   gst-launch-1.0 -e \
-    filesrc location="$1" ! decodebin name=dec \
+    filesrc location="$1" ! decodebin3 name=dec \
     dec. ! videorate ! videoscale add-borders=true ! videoconvert \
       ! video/x-raw,format=NV12,width=1280,height=720,framerate=30/1,pixel-aspect-ratio=1/1 ! cudaupload \
       ! nvh265enc rc-mode=cbr bitrate=12000 preset=p4 tune=low-latency gop-size=30 aud=true \

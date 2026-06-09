@@ -324,7 +324,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  <div id="ov"><div id="ovbar"><b id="ovttl">resource</b><button onclick="document.getElementById('ov').style.display='none'">&times; close</button></div><pre id="ovpre"></pre></div>
 <script>
 const FPS=__FPS__;
-let offset=0, ptp={};
+let offset=0, ptp={}, synced=false;
 const BTN={jxs:'bjxs',raw:'braw',hevc:'bhevc'};
 function highlight(src){
   document.querySelectorAll('#ctrl button').forEach(b=>b.classList.remove('on'));
@@ -419,9 +419,10 @@ async function sync(){
   // the rest, so a laggy /time response (PC under load) doesn't make the timecode jump.
   try{const t0=Date.now();const r=await fetch('/time',{cache:'no-store'});const t1=Date.now();
       const d=await r.json();ptp=d;
-      const rtt=t1-t0; if(rtt>200) return;          // too jittery to trust this sample
+      const rtt=t1-t0; if(rtt>250) return;          // too jittery to trust this sample
       const est=d.epoch_ms-(t1-rtt/2);              // server time at the client receive-midpoint
-      offset = offset ? offset+(est-offset)*0.15 : est;   // gentle EMA toward the estimate
+      if(!synced){offset=est;synced=true;}          // fast initial lock
+      else{offset += Math.max(-40,Math.min(40,est-offset));}  // clamp to 40ms/sync -> never jumps
   }catch(e){}
 }
 const p=(n,l=2)=>String(n).padStart(l,'0');

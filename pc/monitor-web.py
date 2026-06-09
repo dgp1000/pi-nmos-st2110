@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""IS-05 source-switchable ST 2110 monitor (video + PTP timecode), iPad-friendly.
+"""IS-05 source-switchable ST 2110 monitor (video + audio + PTP timecode), iPad-friendly.
 
 Buttons issue real IS-05 takes to switch the active video receiver between the
 Pi raw ST 2110-20 flow (NMOS receiver v0) and the PC JPEG-XS island flow (NMOS
-receiver m0). /stream follows whichever receiver is master_enable=TRUE and
-transcodes it to MJPEG for the browser. PTP timecode is relayed from the Pi
-grandmaster, exactly as video-web.py.
+receiver m0). /stream follows the active receiver and transcodes video to MJPEG;
+/audio follows it and transcodes audio to AAC (the JPEG-XS clip's track, or the
+Pi's ST 2110-30 L24 flow). PTP timecode is relayed from the Pi grandmaster.
 
 Run in WSL:  python3 monitor-web.py    Open from iPad: http://<pc-wifi-ip>:8096
 """
@@ -27,9 +27,14 @@ SOURCES = {
 DEFAULT_SRC = "jxs"
 _active = {"src": DEFAULT_SRC, "ts": 0.0}
 _ACTIVE_TTL = 2.0  # seconds; avoids hammering the NMOS node on every /stream open
+
 RAW_CAPS = ("application/x-rtp,media=(string)video,clock-rate=(int)90000,"
             "encoding-name=(string)RAW,sampling=(string)YCbCr-4:2:2,depth=(string)8,"
             "width=(string)320,height=(string)240,payload=(int)96")
+# The Pi's ST 2110-30 L24 audio flow (played when the raw video source is active).
+AUDIO_RAW_GROUP, AUDIO_RAW_PORT = "239.10.10.10", 5004
+AUDIO_L24_CAPS = ("application/x-rtp,media=audio,clock-rate=48000,"
+                  "encoding-name=L24,channels=2,payload=96")
 
 def http_json(url):
     with urllib.request.urlopen(url, timeout=5) as r:
@@ -92,6 +97,22 @@ def stream_cmd(src):
             f"rawvideoparse format=Y42B width=1920 height=1080 framerate=60000/1001 ! "
             f"videoconvert ! {tail}")
 
+def audio_cmd(src):
+    if src == "jxs":
+        s = SOURCES["jxs"]
+        url = (f"udp://{s['group']}:{s['port']}?localaddr=10.10.10.2"
+               f"&overrun_nonfatal=1&fifo_size=5000000&buffer_size=67108864")
+        return (f"ffmpeg -hide_banner -loglevel error -fflags nobuffer "
+                f"-i '{url}' -vn -c:a aac -b:a 160k -ac 2 -f adts -")
+    # raw: the Pi's ST 2110-30 L24 flow -> PCM (gst) -> AAC (ffmpeg)
+    return ("gst-launch-1.0 -q "
+            f"udpsrc address={AUDIO_RAW_GROUP} port={AUDIO_RAW_PORT} multicast-iface={IFACE} "
+            f"auto-multicast=true caps='{AUDIO_L24_CAPS}' ! rtpjitterbuffer latency=100 ! "
+            f"rtpL24depay ! audioconvert ! audioresample ! "
+            f"audio/x-raw,format=S16LE,channels=2,rate=48000 ! fdsink fd=1 | "
+            f"ffmpeg -hide_banner -loglevel error -f s16le -ar 48000 -ac 2 -i - "
+            f"-c:a aac -b:a 160k -f adts -")
+
 def pi_time():
     try:
         with urllib.request.urlopen(PI_CLOCK, timeout=2) as r:
@@ -118,20 +139,33 @@ PAGE = f"""<!doctype html><html><head><meta charset="utf-8">
 <body><div id="wrap">
  <div id="tc">--:--:--:--</div>
  <img id="vid" src="/stream">
+ <audio id="aud"></audio>
  <div id="ctrl">
   <button id="bjxs" class="on" onclick="take('jxs',this)">PC JPEG-XS</button>
   <button id="braw" onclick="take('raw',this)">Pi raw 2110-20</button>
+  <button id="bsnd" onclick="toggleSound(this)">&#128264; Sound off</button>
  </div>
  <div id="info"></div>
 </div>
 <script>
 const FPS={FPS};
-let offset=0, ptp={{}};
+let offset=0, ptp={{}}, audioOn=false;
+function reconnectAudio(){{
+  const a=document.getElementById('aud');
+  a.src='/audio?t='+Date.now(); a.muted=false; a.play().catch(()=>{{}});
+}}
 async function take(src,btn){{
   try{{await fetch('/take?src='+src,{{cache:'no-store'}});}}catch(e){{}}
   document.getElementById('vid').src='/stream?t='+Date.now();
-  document.querySelectorAll('#ctrl button').forEach(b=>b.classList.remove('on'));
+  if(audioOn) reconnectAudio();
+  document.querySelectorAll('#ctrl button:not(#bsnd)').forEach(b=>b.classList.remove('on'));
   btn.classList.add('on');
+}}
+function toggleSound(btn){{
+  const a=document.getElementById('aud');
+  audioOn=!audioOn;
+  if(audioOn){{ reconnectAudio(); btn.textContent='\\u{{1F50A}} Sound on'; btn.classList.add('on'); }}
+  else {{ a.pause(); a.removeAttribute('src'); a.load(); btn.textContent='\\u{{1F507}} Sound off'; btn.classList.remove('on'); }}
 }}
 async function sync(){{
   try{{const t0=Date.now();const r=await fetch('/time',{{cache:'no-store'}});const t1=Date.now();
@@ -154,45 +188,53 @@ sync(); setInterval(sync,3000); tick();
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
+
+    def _serve_subprocess(self, cmd, content_type):
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            while True:
+                chunk = proc.stdout.read(8192)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except Exception:
+                proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    proc.kill()
+                try:
+                    proc.wait(timeout=3)
+                except Exception:
+                    pass
+
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/stream":
-            src = active_src()
-            self.send_response(200)
-            self.send_header("Content-Type", f"multipart/x-mixed-replace; boundary={BOUNDARY}")
-            self.send_header("Cache-Control", "no-cache")
-            self.end_headers()
-            proc = subprocess.Popen(stream_cmd(src), shell=True, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, start_new_session=True)
-            try:
-                while True:
-                    chunk = proc.stdout.read(8192)
-                    if not chunk: break
-                    self.wfile.write(chunk)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            finally:
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                except Exception:
-                    proc.terminate()
-                try:
-                    proc.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    try:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                    except Exception:
-                        proc.kill()
-                    try:
-                        proc.wait(timeout=3)
-                    except Exception:
-                        pass
+            self._serve_subprocess(stream_cmd(active_src()),
+                                   f"multipart/x-mixed-replace; boundary={BOUNDARY}")
+        elif parsed.path == "/audio":
+            self._serve_subprocess(audio_cmd(active_src()), "audio/aac")
         elif parsed.path == "/take":
             qs = parse_qs(parsed.query)
             src = qs.get("src", [DEFAULT_SRC])[0]
-            if src not in SOURCES: src = DEFAULT_SRC
+            if src not in SOURCES:
+                src = DEFAULT_SRC
             try:
                 take(src); body = json.dumps({"active": src}).encode(); code = 200
             except Exception as e:
@@ -222,7 +264,7 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 with Server(("0.0.0.0", PORT), Handler) as s:
-    print(f"ST 2110 IS-05 monitor on http://localhost:{PORT}  (sources: raw=v0, jxs=m0)")
+    print(f"ST 2110 IS-05 monitor on http://localhost:{PORT}  (video+audio; raw=v0, jxs=m0)")
     print("  Ctrl+C to stop")
     try: s.serve_forever()
     except KeyboardInterrupt: pass

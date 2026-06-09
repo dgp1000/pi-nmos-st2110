@@ -91,6 +91,11 @@ def stream_cmd(src):
     s = SOURCES[src]
     tail = (f"videoscale ! video/x-raw,width=640,height=480 ! "
             f"jpegenc quality=85 ! multipartmux boundary={BOUNDARY} ! fdsink fd=1")
+    if src == "hevc":
+        return ("gst-launch-1.0 -q "
+                f"udpsrc address={s['group']} port={s['port']} multicast-iface={IFACE} "
+                f"auto-multicast=true ! tsdemux ! h265parse ! nvh265dec ! "
+                f"cudadownload ! videoconvert ! {tail}")
     if src == "raw":
         return ("gst-launch-1.0 -q "
                 f"udpsrc address={s['group']} port={s['port']} multicast-iface={IFACE} "

@@ -8,6 +8,15 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$DIR/jxs-stream-env.sh"
 
 echo "JPEG-XS viewer <- udp://$JXS_ADDR:$JXS_PORT  (GPU window; close window or Ctrl+C to stop)"
+
+# Center the player on screen 1. Wayland/WSLg won't let the GStreamer client
+# position itself, so a background helper moves the window from the Windows side
+# once it appears. Skipped gracefully when not on WSL/Windows.
+if command -v powershell.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
+  CENTER_PS1="$(wslpath -w "$DIR/jxs-center-window.ps1" 2>/dev/null)"
+  [ -n "$CENTER_PS1" ] && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$CENTER_PS1" -W "$JXS_W" -H "$JXS_H" >/dev/null 2>&1 &
+fi
+
 ffmpeg -hide_banner -loglevel warning \
     -fflags nobuffer -flags low_delay \
     -i "udp://${JXS_ADDR}:${JXS_PORT}?localaddr=${JXS_LOCALADDR}&overrun_nonfatal=1&fifo_size=5000000&buffer_size=67108864" \

@@ -280,7 +280,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  <div id="top">
   <div id="tc">--:--:--:--</div>
   <div id="ctrl">
-   <button id="bjxs" onclick="take('jxs',this)">PC JPEG-XS</button>
+   <button id="bjxs" onclick="take('jxs',this)">Home videos</button>
    <button id="braw" onclick="take('raw',this)">Pi raw 2110-20</button>
    <button id="bhevc" onclick="take('hevc',this)">PC HEVC 4K</button>
   </div>

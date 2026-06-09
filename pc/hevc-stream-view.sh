@@ -15,5 +15,5 @@ fi
 exec gst-launch-1.0 -q \
   udpsrc address="${HEVC_ADDR}" port="${HEVC_PORT}" multicast-iface="${HEVC_IFACE}" auto-multicast=true buffer-size=8388608 caps="${HEVC_CAPS}" \
   ! rtpjitterbuffer latency=200 ! rtph265depay ! h265parse ! nvh265dec \
-  ! cudadownload ! videoconvert ! glupload ! glcolorscale ! "video/x-raw(memory:GLMemory),width=${HEVC_DISPLAY_W},height=${HEVC_DISPLAY_H}" \
+  ! cudadownload ! videoconvert ! videoscale ! "video/x-raw,width=${HEVC_DISPLAY_W},height=${HEVC_DISPLAY_H}" \
   ! glimagesink sync=false

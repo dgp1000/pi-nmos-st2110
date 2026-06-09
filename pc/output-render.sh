@@ -36,9 +36,9 @@ raw_video()  { echo "udpsrc address=239.10.10.20 port=5005 multicast-iface=$IFAC
 # TS; Pi raw's audio is the separate ST 2110-30 L24 flow on 239.10.10.10:5004.
 audio_cmd() {   # $1 = active source
   case "$1" in
-    hevc) echo "gst-launch-1.0 -q udpsrc address=$HEVC_GRP port=$HEVC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! h265parse ! fakesink sync=false a. ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! autoaudiosink sync=true" ;;
-    jxs)  echo "gst-launch-1.0 -q udpsrc address=$HOME_GRP port=$HOME_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! h265parse ! fakesink sync=false a. ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! autoaudiosink sync=true" ;;
-    raw)  echo "gst-launch-1.0 -q udpsrc address=239.10.10.10 port=5004 multicast-iface=$IFACE auto-multicast=true caps='application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96' ! rtpjitterbuffer latency=100 ! rtpL24depay ! audioconvert ! audioresample ! autoaudiosink sync=true" ;;
+    hevc) echo "gst-launch-1.0 -q udpsrc address=$HEVC_GRP port=$HEVC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue ! autoaudiosink sync=true" ;;
+    jxs)  echo "gst-launch-1.0 -q udpsrc address=$HOME_GRP port=$HOME_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue ! autoaudiosink sync=true" ;;
+    raw)  echo "gst-launch-1.0 -q udpsrc address=239.10.10.10 port=5004 multicast-iface=$IFACE auto-multicast=true caps='application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96' ! rtpjitterbuffer latency=100 ! rtpL24depay ! audioconvert ! audioresample ! queue ! autoaudiosink sync=true" ;;
   esac
 }
 

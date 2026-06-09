@@ -116,6 +116,12 @@ def audio_cmd(src):
                f"&overrun_nonfatal=1&fifo_size=5000000&buffer_size=67108864")
         return (f"ffmpeg -hide_banner -loglevel error -fflags nobuffer "
                 f"-i '{url}' -vn -c:a aac -b:a 160k -ac 2 -f adts -")
+    if src == "hevc":
+        s = SOURCES["hevc"]
+        url = (f"udp://{s['group']}:{s['port']}?localaddr=10.10.10.2"
+               f"&overrun_nonfatal=1&fifo_size=5000000&buffer_size=67108864")
+        return (f"ffmpeg -hide_banner -loglevel error -fflags nobuffer "
+                f"-i '{url}' -vn -c:a aac -b:a 160k -ac 2 -f adts -")
     # raw: the Pi's ST 2110-30 L24 flow -> PCM (gst) -> AAC (ffmpeg)
     return ("gst-launch-1.0 -q "
             f"udpsrc address={AUDIO_RAW_GROUP} port={AUDIO_RAW_PORT} multicast-iface={IFACE} "
@@ -138,6 +144,11 @@ def hls_cmd(src):
            f"-hls_segment_type mpegts -hls_segment_filename '{seg}' '{out}'")
     if src == "jxs":
         s = SOURCES["jxs"]
+        url = (f"udp://{s['group']}:{s['port']}?localaddr=10.10.10.2"
+               f"&overrun_nonfatal=1&fifo_size=5000000&buffer_size=67108864")
+        return f"ffmpeg -hide_banner -loglevel error -fflags nobuffer -i '{url}' -vn {hls}"
+    if src == "hevc":
+        s = SOURCES["hevc"]
         url = (f"udp://{s['group']}:{s['port']}?localaddr=10.10.10.2"
                f"&overrun_nonfatal=1&fifo_size=5000000&buffer_size=67108864")
         return f"ffmpeg -hide_banner -loglevel error -fflags nobuffer -i '{url}' -vn {hls}"

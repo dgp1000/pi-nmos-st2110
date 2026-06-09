@@ -9,7 +9,7 @@ Pi's ST 2110-30 L24 flow). PTP timecode is relayed from the Pi grandmaster.
 
 Run in WSL:  python3 monitor-web.py    Open from iPad: http://<pc-wifi-ip>:8096
 """
-import http.server, socketserver, subprocess, urllib.request, json, time, os, signal
+import http.server, socketserver, subprocess, urllib.request, json, time, os, signal, threading, glob, atexit
 from urllib.parse import urlparse, parse_qs
 
 PORT = 8096
@@ -113,6 +113,70 @@ def audio_cmd(src):
             f"ffmpeg -hide_banner -loglevel error -f s16le -ar 48000 -ac 2 -i - "
             f"-c:a aac -b:a 160k -f adts -")
 
+# --- audio-only HLS (iOS Safari needs HLS for live <audio>; progressive AAC won't play) ---
+HLS_DIR = "/tmp/jxs-hls"
+_hls = {"src": None, "proc": None}
+_hls_lock = threading.Lock()
+
+def hls_cmd(src):
+    out = f"{HLS_DIR}/aud.m3u8"
+    seg = f"{HLS_DIR}/seg%05d.ts"
+    hls = (f"-c:a aac -b:a 160k -ac 2 -f hls -hls_time 1 -hls_list_size 6 "
+           f"-hls_flags delete_segments+omit_endlist+independent_segments "
+           f"-hls_segment_type mpegts -hls_segment_filename '{seg}' '{out}'")
+    if src == "jxs":
+        s = SOURCES["jxs"]
+        url = (f"udp://{s['group']}:{s['port']}?localaddr=10.10.10.2"
+               f"&overrun_nonfatal=1&fifo_size=5000000&buffer_size=67108864")
+        return f"ffmpeg -hide_banner -loglevel error -fflags nobuffer -i '{url}' -vn {hls}"
+    return ("gst-launch-1.0 -q "
+            f"udpsrc address={AUDIO_RAW_GROUP} port={AUDIO_RAW_PORT} multicast-iface={IFACE} "
+            f"auto-multicast=true caps='{AUDIO_L24_CAPS}' ! rtpjitterbuffer latency=100 ! "
+            f"rtpL24depay ! audioconvert ! audioresample ! "
+            f"audio/x-raw,format=S16LE,channels=2,rate=48000 ! fdsink fd=1 | "
+            f"ffmpeg -hide_banner -loglevel error -f s16le -ar 48000 -ac 2 -i - {hls}")
+
+def _kill_proc(proc):
+    if not proc:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except Exception:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+    try:
+        proc.wait(timeout=3)
+    except Exception:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            pass
+
+def ensure_hls(src):
+    """Ensure a live HLS audio encoder for `src` is running; (re)start on change."""
+    with _hls_lock:
+        if _hls["src"] == src and _hls["proc"] and _hls["proc"].poll() is None:
+            return
+        _kill_proc(_hls["proc"])
+        os.makedirs(HLS_DIR, exist_ok=True)
+        for f in glob.glob(f"{HLS_DIR}/*"):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+        _hls["proc"] = subprocess.Popen(hls_cmd(src), shell=True,
+                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                        start_new_session=True)
+        _hls["src"] = src
+        for _ in range(50):  # wait up to ~5s for ffmpeg to write the first playlist
+            if os.path.exists(f"{HLS_DIR}/aud.m3u8"):
+                break
+            time.sleep(0.1)
+
+atexit.register(lambda: _kill_proc(_hls.get("proc")))
+
 def pi_time():
     try:
         with urllib.request.urlopen(PI_CLOCK, timeout=2) as r:
@@ -152,7 +216,7 @@ const FPS={FPS};
 let offset=0, ptp={{}}, audioOn=false;
 function reconnectAudio(){{
   const a=document.getElementById('aud');
-  a.src='/audio?t='+Date.now(); a.muted=false; a.play().catch(()=>{{}});
+  a.src='/hls/aud.m3u8?t='+Date.now(); a.muted=false; a.play().catch(()=>{{}});
 }}
 async function take(src,btn){{
   try{{await fetch('/take?src='+src,{{cache:'no-store'}});}}catch(e){{}}
@@ -223,6 +287,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
+    def _serve_file(self, path, content_type):
+        try:
+            with open(path, "rb") as f:
+                body = f.read()
+        except FileNotFoundError:
+            self.send_response(404)
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/stream":
@@ -230,6 +309,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                    f"multipart/x-mixed-replace; boundary={BOUNDARY}")
         elif parsed.path == "/audio":
             self._serve_subprocess(audio_cmd(active_src()), "audio/aac")
+        elif parsed.path == "/hls/aud.m3u8":
+            ensure_hls(active_src())
+            self._serve_file(f"{HLS_DIR}/aud.m3u8", "application/vnd.apple.mpegurl")
+        elif parsed.path.startswith("/hls/") and parsed.path.endswith(".ts"):
+            self._serve_file(f"{HLS_DIR}/{os.path.basename(parsed.path)}", "video/mp2t")
         elif parsed.path == "/take":
             qs = parse_qs(parsed.query)
             src = qs.get("src", [DEFAULT_SRC])[0]

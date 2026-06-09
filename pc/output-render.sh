@@ -24,11 +24,14 @@ RAW_CAPS="application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-n
 HEVC_GRP=239.10.10.65; HEVC_PORT=5010
 HOME_GRP=239.10.10.22; HOME_PORT=5008      # "PC JPEG-XS" slot, now HEVC home videos
 F="Sans Bold 22"
+# Semi-transparent "ATOLL" bug, top-right of every output (single/side/multi). color is
+# 0xAARRGGBB -> 0x80 = ~50% white; no shaded box so it reads as a transparent watermark.
+BRAND="textoverlay text=ATOLL valignment=top halignment=right ypad=18 xpad=28 font-desc='Sans Bold 20' color=0x80ffffff shaded-background=false"
 
 # HEVC decode -> tile WxH (no sink). $1=group $2=port $3=w $4=h $5=tsdemux-name.
 hevc_tile() { echo "udpsrc address=$1 port=$2 multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=$5 $5. ! h265parse ! queue ! nvh265dec ! cudadownload ! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! video/x-raw,width=$3,height=$4"; }
 # HEVC fullscreen viewer (video + MP3 audio). $1=group $2=port.
-hevc_full() { echo "gst-launch-1.0 -q udpsrc address=$1 port=$2 multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=d d. ! h265parse ! queue ! nvh265dec ! cudadownload ! videoconvert ! videoscale ! video/x-raw,width=1920,height=1080 ! videoconvert ! waylandsink fullscreen=true sync=true d. ! mpegaudioparse ! queue ! mpg123audiodec ! audioconvert ! audioresample ! autoaudiosink sync=true"; }
+hevc_full() { echo "gst-launch-1.0 -q udpsrc address=$1 port=$2 multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=d d. ! h265parse ! queue ! nvh265dec ! cudadownload ! videoconvert ! videoscale ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! waylandsink fullscreen=true sync=true d. ! mpegaudioparse ! queue ! mpg123audiodec ! audioconvert ! audioresample ! autoaudiosink sync=true"; }
 raw_video()  { echo "udpsrc address=239.10.10.20 port=5005 multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! video/x-raw,width=$1,height=$2"; }
 
 # Audio-only pipeline for the SELECTED source (used in side/multi, and single+raw); the
@@ -38,7 +41,7 @@ audio_cmd() {   # $1 = active source
   case "$1" in
     hevc) echo "gst-launch-1.0 -q udpsrc address=$HEVC_GRP port=$HEVC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=1000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=true buffer-time=500000" ;;
     jxs)  echo "gst-launch-1.0 -q udpsrc address=$HOME_GRP port=$HOME_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=1000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=true buffer-time=500000" ;;
-    raw)  echo "gst-launch-1.0 -q udpsrc address=239.10.10.10 port=5004 multicast-iface=$IFACE auto-multicast=true caps='application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96' ! rtpjitterbuffer latency=200 ! rtpL24depay ! audioconvert ! audioresample ! queue max-size-time=1000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=true buffer-time=500000" ;;
+    raw)  echo "gst-launch-1.0 -q udpsrc address=239.10.10.10 port=5004 multicast-iface=$IFACE auto-multicast=true buffer-size=16777216 caps='application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96' ! rtpjitterbuffer latency=500 ! rtpL24depay ! audioconvert ! audioresample ! queue max-size-time=1000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=true buffer-time=500000" ;;
   esac
 }
 
@@ -48,15 +51,15 @@ build_pipeline() {   # $1=layout  $2=active
       case "$2" in
         hevc) hevc_full "$HEVC_GRP" "$HEVC_PORT" ;;
         jxs)  hevc_full "$HOME_GRP" "$HOME_PORT" ;;
-        raw)  echo "gst-launch-1.0 -q udpsrc address=239.10.10.20 port=5005 multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! waylandsink fullscreen=true sync=false" ;;
+        raw)  echo "gst-launch-1.0 -q udpsrc address=239.10.10.20 port=5005 multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! $BRAND ! waylandsink fullscreen=true sync=false" ;;
       esac ;;
     side)
-      echo "gst-launch-1.0 -e compositor name=mix background=black sink_0::xpos=0 sink_0::ypos=270 sink_1::xpos=960 sink_1::ypos=270 ! video/x-raw,width=1920,height=1080 ! videoconvert ! waylandsink fullscreen=true sync=false \
+      echo "gst-launch-1.0 -e compositor name=mix background=black sink_0::xpos=0 sink_0::ypos=270 sink_1::xpos=960 sink_1::ypos=270 ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! waylandsink fullscreen=true sync=false \
         $(hevc_tile "$HEVC_GRP" "$HEVC_PORT" 960 540 hd) ! textoverlay text='PC HEVC 4K' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_0 \
         hd. ! mpegaudioparse ! fakesink sync=false \
         $(raw_video 960 540) ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_1" ;;
     multi)
-      echo "gst-launch-1.0 -e compositor name=mix background=black sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=960 sink_1::ypos=0 sink_2::xpos=0 sink_2::ypos=540 sink_3::xpos=960 sink_3::ypos=540 ! video/x-raw,width=1920,height=1080 ! videoconvert ! waylandsink fullscreen=true sync=false \
+      echo "gst-launch-1.0 -e compositor name=mix background=black sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=960 sink_1::ypos=0 sink_2::xpos=0 sink_2::ypos=540 sink_3::xpos=960 sink_3::ypos=540 ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! waylandsink fullscreen=true sync=false \
         $(hevc_tile "$HEVC_GRP" "$HEVC_PORT" 960 540 hd) ! textoverlay text='PC HEVC 4K' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_0 \
         hd. ! mpegaudioparse ! fakesink sync=false \
         $(raw_video 960 540) ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_1 \

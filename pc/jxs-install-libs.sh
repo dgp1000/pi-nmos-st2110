@@ -18,3 +18,14 @@ rm -f /etc/ld.so.conf.d/jxs.conf
 ldconfig
 echo "Registered:"
 ldconfig -p | grep -i jpegxs
+
+# High-bitrate JPEG-XS over UDP (1080p59.94 is ~380 Mbit/s) overruns the default
+# UDP socket buffers and drops packets, corrupting decoded frames. Raise the
+# kernel ceilings so the receiver can request a large SO_RCVBUF. Persist across
+# reboots (systemd applies /etc/sysctl.d on boot) and apply now.
+cat > /etc/sysctl.d/99-jxs-udp.conf <<'EOF'
+net.core.rmem_max=67108864
+net.core.wmem_max=67108864
+EOF
+sysctl -p /etc/sysctl.d/99-jxs-udp.conf
+echo "UDP buffer ceilings raised."

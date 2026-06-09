@@ -23,6 +23,7 @@ MOVER="$(wslpath -w "$DIR/move-window-screen.ps1")"
 RAW_CAPS="application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)RAW,sampling=(string)YCbCr-4:2:2,depth=(string)8,width=(string)320,height=(string)240,payload=(int)96"
 HEVC_GRP=239.10.10.65; HEVC_PORT=5010
 HOME_GRP=239.10.10.22; HOME_PORT=5008      # "PC JPEG-XS" slot, now HEVC home videos
+MUSIC_GRP=239.10.10.30; MUSIC_PORT=5012    # "Now Playing" music channel (Mac page, bridged onto the island)
 F="Sans Bold 22"
 # Semi-transparent "ATOLL" bug, top-right of every output (single/side/multi). color is
 # 0xAARRGGBB -> 0x80 = ~50% white; no shaded box so it reads as a transparent watermark.
@@ -39,8 +40,8 @@ raw_video()  { echo "udpsrc address=239.10.10.20 port=5005 multicast-iface=$IFAC
 # TS; Pi raw's audio is the separate ST 2110-30 L24 flow on 239.10.10.10:5004.
 audio_cmd() {   # $1 = active source
   case "$1" in
-    hevc) echo "gst-launch-1.0 -q udpsrc address=$HEVC_GRP port=$HEVC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=1000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=true buffer-time=500000" ;;
-    jxs)  echo "gst-launch-1.0 -q udpsrc address=$HOME_GRP port=$HOME_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=1000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=true buffer-time=500000" ;;
+    hevc) echo "gst-launch-1.0 -q udpsrc address=$HEVC_GRP port=$HEVC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
+    jxs)  echo "gst-launch-1.0 -q udpsrc address=$HOME_GRP port=$HOME_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
     raw)  echo "gst-launch-1.0 -q udpsrc address=239.10.10.10 port=5004 multicast-iface=$IFACE auto-multicast=true buffer-size=16777216 caps='application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96' ! rtpjitterbuffer latency=500 ! rtpL24depay ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
   esac
 }
@@ -59,13 +60,13 @@ build_pipeline() {   # $1=layout  $2=active
         hd. ! mpegaudioparse ! fakesink sync=false \
         $(raw_video 960 540) ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_1" ;;
     multi)
-      echo "gst-launch-1.0 -e compositor name=mix background=black sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=960 sink_1::ypos=0 sink_2::xpos=0 sink_2::ypos=540 sink_3::xpos=960 sink_3::ypos=540 ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! waylandsink fullscreen=true sync=false \
+      echo "gst-launch-1.0 -e compositor name=mix background=black sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=960 sink_1::ypos=0 sink_2::xpos=0 sink_2::ypos=540 sink_3::xpos=960 sink_3::ypos=540 ! video/x-raw,width=1920,height=1080 ! videoconvert ! clockoverlay valignment=top halignment=left time-format='%H:%M:%S' font-desc='Sans Bold 22' shaded-background=true ypad=14 xpad=16 ! textoverlay text='Pi5 PTP GM' valignment=top halignment=left ypad=48 xpad=18 font-desc='Sans Bold 12' color=0xc8ffffff shaded-background=false ! $BRAND ! waylandsink fullscreen=true sync=false \
         $(hevc_tile "$HEVC_GRP" "$HEVC_PORT" 960 540 hd) ! textoverlay text='PC HEVC 4K' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_0 \
         hd. ! mpegaudioparse ! fakesink sync=false \
         $(raw_video 960 540) ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_1 \
         $(hevc_tile "$HOME_GRP" "$HOME_PORT" 960 540 jd) ! textoverlay text='Home videos' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_2 \
         jd. ! mpegaudioparse ! fakesink sync=false \
-        videotestsrc pattern=black is-live=true ! video/x-raw,width=960,height=540,framerate=10/1 ! clockoverlay halignment=center valignment=center font-desc='Sans Bold 40' ! textoverlay text='PTP GM: Pi5' valignment=top halignment=center ypad=24 font-desc='Sans Bold 18' shaded-background=true ! mix.sink_3" ;;
+        $(hevc_tile "$MUSIC_GRP" "$MUSIC_PORT" 960 540 md) ! textoverlay text='Music' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_3" ;;
   esac
 }
 

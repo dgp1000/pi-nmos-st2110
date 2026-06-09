@@ -24,6 +24,8 @@ echo "  Ctrl+C to stop."
 # -re paces input at real time; scale/fps conform any source to the demo geometry
 # (upscales 720p, conforms frame rate to 59.94 so the fixed-caps viewer matches).
 exec ffmpeg -hide_banner -loglevel warning -re "${LOOP[@]}" -i "$SRC" \
-  -vf "scale=${JXS_W}:${JXS_H},fps=${JXS_FPS},format=${JXS_PIXFMT}" \
-  -c:v jpegxs -bpp "${JXS_BPP}" -an \
+  -map 0:v:0 -map 0:a:0? \
+  -filter:v "scale=${JXS_W}:${JXS_H},fps=${JXS_FPS},format=${JXS_PIXFMT}" \
+  -c:v jpegxs -bpp "${JXS_BPP}" \
+  -c:a aac -b:a 160k -ac 2 \
   -f mpegts "udp://${JXS_ADDR}:${JXS_PORT}?localaddr=${JXS_LOCALADDR}&ttl=${JXS_TTL}&pkt_size=1316&buffer_size=8388608"

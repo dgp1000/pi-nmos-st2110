@@ -235,6 +235,26 @@ def nmos_overview():
     _nmos_cache.update(t=now, data=data)
     return data
 
+def resource_detail(kind, rid):
+    """Everything we have on one resource: the full IS-04 object plus (for senders/
+    receivers) the IS-05 active/staged/constraints and the sender's SDP transport file.
+    The SDP is fetched via localhost:8090 (the node's manifest_href points at a
+    docker-internal IP the iPad can't reach)."""
+    out = {"is04": _safe_json(f"{QUERY}/{kind}/{rid}")}
+    if kind in ("senders", "receivers"):
+        out["is05_active"] = _safe_json(f"{CONN}/{kind}/{rid}/active", timeout=2)
+        out["is05_staged"] = _safe_json(f"{CONN}/{kind}/{rid}/staged", timeout=2)
+        out["is05_constraints"] = _safe_json(f"{CONN}/{kind}/{rid}/constraints", timeout=2)
+        href = (out["is04"] or {}).get("manifest_href")
+        if kind == "senders" and href:
+            try:
+                sdp_url = f"http://localhost:8090{urlparse(href).path}"
+                with urllib.request.urlopen(sdp_url, timeout=3) as r:
+                    out["sdp"] = r.read().decode("utf-8", "replace")
+            except Exception:
+                out["sdp"] = None
+    return out
+
 def pi_time():
     try:
         with urllib.request.urlopen(PI_CLOCK, timeout=2) as r:
@@ -275,6 +295,14 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  .mut{color:#666}.k{color:#3c9}.warn{color:#fc0}
  .pill{display:inline-block;background:#0a0;color:#000;font-weight:bold;border-radius:4px;padding:0 .4em;font-size:1.4vh}
  #meta{color:#555;font-size:1.6vh;margin-top:.6vh}
+ tr.clk{cursor:pointer}
+ tr.clk:active td{background:#093;color:#000}
+ #ov{position:fixed;inset:0;background:rgba(0,0,0,.93);z-index:20;display:none;
+   flex-direction:column;padding:2vh 2.5vw}
+ #ovbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:1vh}
+ #ovbar b{color:#3c9;font-size:2vh;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ #ovpre{flex:1;overflow:auto;color:#0f0;font-size:1.7vh;white-space:pre;line-height:1.4;
+   border:1px solid #131;padding:1vh;-webkit-overflow-scrolling:touch}
 </style></head>
 <body>
  <div id="top">
@@ -293,6 +321,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   </div>
  </div>
  <div id="nmos">loading IS-04/IS-05&hellip;</div>
+ <div id="ov"><div id="ovbar"><b id="ovttl">resource</b><button onclick="document.getElementById('ov').style.display='none'">&times; close</button></div><pre id="ovpre"></pre></div>
 <script>
 const FPS=__FPS__;
 let offset=0, ptp={};
@@ -351,32 +380,39 @@ function renderNmos(d){
     const clk=(n.clocks||[]).map(c=>esc(c.name)+':'+esc(c.ref_type)+(c.gmid?(' '+esc(c.gmid)):'')+(c.locked!=null?(c.locked?' locked':' unlocked'):'')).join(', ')||'<span class="mut">none</span>';
     const ifs=(n.interfaces||[]).map(i=>esc(i.name)+(i.mac?(' '+esc(i.mac)):'')).join(', ');
     const api=(n.api_versions||[]).slice(-1)[0]||'';
-    h+='<tr><td><span class="k">'+esc(n.label)+'</span></td><td>'+esc(n.hostname)+'</td><td>'+clk+'</td><td>'+ifs+'</td><td>'+esc(api)+'</td></tr>';
+    h+='<tr class="clk" onclick="detail(\'nodes\',\''+esc(n.id)+'\')"><td><span class="k">'+esc(n.label)+'</span></td><td>'+esc(n.hostname)+'</td><td>'+clk+'</td><td>'+ifs+'</td><td>'+esc(api)+'</td></tr>';
   }
   h+='</table>';
   // receivers
   h+='<h2>IS-04/05 RECEIVERS</h2><table><tr><th>receiver</th><th>format</th><th>caps</th><th>en</th><th>group:port</th><th>from sender</th><th>transport</th></tr>';
   for(const r of d.receivers){
     const a=r.is05||{};
-    const cls=r.switch?' class="sw"':'';
+    const cls=r.switch?'clk sw':'clk';
     const lab=esc(r.label)+(r.switch?(' <span class="pill">'+esc(r.switch)+'</span>'):'');
-    h+='<tr'+cls+'><td>'+lab+'</td><td>'+esc(r.format)+'</td><td>'+fmtCaps(r.caps)+'</td><td>'+dot(a.master_enable)+'</td><td>'+mcast(a)+'</td><td>'+(a.sender_id?sid(a.sender_id):(r.subscription&&r.subscription.sender_id?sid(r.subscription.sender_id):'<span class="mut">none</span>'))+'</td><td>'+esc(r.transport)+'</td></tr>';
+    h+='<tr class="'+cls+'" onclick="detail(\'receivers\',\''+esc(r.id)+'\')"><td>'+lab+'</td><td>'+esc(r.format)+'</td><td>'+fmtCaps(r.caps)+'</td><td>'+dot(a.master_enable)+'</td><td>'+mcast(a)+'</td><td>'+(a.sender_id?sid(a.sender_id):(r.subscription&&r.subscription.sender_id?sid(r.subscription.sender_id):'<span class="mut">none</span>'))+'</td><td>'+esc(r.transport)+'</td></tr>';
   }
   h+='</table>';
   // senders
   h+='<h2>IS-04/05 SENDERS</h2><table><tr><th>sender</th><th>flow</th><th>en</th><th>group:port</th><th>transport</th><th>sdp</th></tr>';
   for(const s of d.senders){
     const a=s.is05||{};
-    h+='<tr><td>'+esc(s.label)+'</td><td>'+fmtFlow(s.flow)+'</td><td>'+dot(a.master_enable)+'</td><td>'+mcast(a)+'</td><td>'+esc(s.transport)+'</td><td>'+(s.manifest_href?'<a href="'+esc(s.manifest_href)+'" style="color:#3c9">sdp</a>':'<span class="mut">&mdash;</span>')+'</td></tr>';
+    h+='<tr class="clk" onclick="detail(\'senders\',\''+esc(s.id)+'\')"><td>'+esc(s.label)+'</td><td>'+fmtFlow(s.flow)+'</td><td>'+dot(a.master_enable)+'</td><td>'+mcast(a)+'</td><td>'+esc(s.transport)+'</td><td>'+(s.manifest_href?'<span class="k">yes</span>':'<span class="mut">&mdash;</span>')+'</td></tr>';
   }
   h+='</table>';
   const c=d.counts||{};
-  h+='<div id="meta">registry: '+(c.nodes||0)+' nodes &middot; '+(c.devices||0)+' devices &middot; '+(c.senders||0)+' senders &middot; '+(c.receivers||0)+' receivers &middot; '+(c.flows||0)+' flows</div>';
+  h+='<div id="meta">tap any row for full IS-04/05 JSON &middot; '+(c.nodes||0)+' nodes &middot; '+(c.devices||0)+' devices &middot; '+(c.senders||0)+' senders &middot; '+(c.receivers||0)+' receivers &middot; '+(c.flows||0)+' flows</div>';
   document.getElementById('nmos').innerHTML=h;
 }
 async function loadNmos(){
   try{const r=await fetch('/nmos',{cache:'no-store'});renderNmos(await r.json());}
   catch(e){document.getElementById('nmos').innerHTML='<span class="warn">IS-04/05 unavailable</span>';}
+}
+async function detail(kind,id){
+  const ov=document.getElementById('ov'),pre=document.getElementById('ovpre'),ttl=document.getElementById('ovttl');
+  ttl.textContent=kind.replace(/s$/,'')+' '+id; pre.textContent='loading\\u2026'; ov.style.display='flex';
+  try{const r=await fetch('/resource?kind='+kind+'&id='+encodeURIComponent(id),{cache:'no-store'});
+      pre.textContent=JSON.stringify(await r.json(),null,2);}
+  catch(e){pre.textContent='error loading resource';}
 }
 async function sync(){
   try{const t0=Date.now();const r=await fetch('/time',{cache:'no-store'});const t1=Date.now();
@@ -439,6 +475,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_json(json.dumps(nmos_overview()).encode())
             except Exception as e:
                 self._send_json(json.dumps({"error": str(e)}).encode(), 500)
+        elif parsed.path == "/resource":
+            qs = parse_qs(parsed.query)
+            kind = qs.get("kind", [""])[0]
+            rid = qs.get("id", [""])[0]
+            if kind not in ("nodes", "devices", "sources", "flows", "senders", "receivers") or not rid:
+                self._send_json(json.dumps({"error": "bad kind/id"}).encode(), 400)
+            else:
+                try:
+                    self._send_json(json.dumps(resource_detail(kind, rid)).encode())
+                except Exception as e:
+                    self._send_json(json.dumps({"error": str(e)}).encode(), 500)
         elif parsed.path == "/time":
             self._send_json(pi_time())
         else:

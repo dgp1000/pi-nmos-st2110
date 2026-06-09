@@ -34,6 +34,7 @@ SOURCES = {
     "jxs":  {"label": "easy-nmos-node/receiver/m0"},   # PC JPEG-XS island flow
     "raw":  {"label": "easy-nmos-node/receiver/v0"},   # Pi raw ST 2110-20
     "hevc": {"label": None},                            # PC HEVC 4K island flow (not NMOS)
+    "music": {"label": None},                           # Music channel (Mac->island 239.10.10.30:5012, not NMOS)
 }
 DEFAULT_SRC = "jxs"
 _active = {"src": DEFAULT_SRC, "ts": 0.0}
@@ -337,6 +338,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="bjxs" onclick="take('jxs',this)">Home videos</button>
    <button id="braw" onclick="take('raw',this)">Pi raw 2110-20</button>
    <button id="bhevc" onclick="take('hevc',this)">PC HEVC 4K</button>
+   <button id="bmusic" onclick="take('music',this)">Music</button>
   </div>
   <div id="info"></div>
   <div id="lay">
@@ -359,7 +361,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
 <script>
 const FPS=__FPS__;
 let offset=0, ptp={}, synced=false;
-const BTN={jxs:'bjxs',raw:'braw',hevc:'bhevc'};
+const BTN={jxs:'bjxs',raw:'braw',hevc:'bhevc',music:'bmusic'};
 function highlight(src){
   document.querySelectorAll('#ctrl button').forEach(b=>b.classList.remove('on'));
   const b=document.getElementById(BTN[src]); if(b) b.classList.add('on');

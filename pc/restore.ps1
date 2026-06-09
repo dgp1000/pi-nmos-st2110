@@ -13,7 +13,7 @@ wsl -d Ubuntu -u root -- bash /mnt/c/Users/dgper/pi-nmos-st2110/pc/wsl-gpu-setup
 Write-Output "[3/5] Docker + NMOS registry/node + AMWA testing tool..."
 wsl -d Ubuntu -u root -- bash -lc "systemctl start docker; sleep 3; cd /root/easy-nmos && docker compose -f docker-compose.wsl.yml up -d nmos-registry nmos-virtnode nmos-testing 2>&1 | tail -3"
 
-Write-Output "[4/5] IS-05 switch panel + IS-04/05 inspector (background, port 8096)..."
+Write-Output "[4/6] IS-05 switch panel + IS-04/05 inspector (background, port 8096)..."
 # Stop any prior panel, then launch it as its own persistent hidden WSL process via
 # Start-Process (same pattern as the keepalive above) -- a backgrounded process inside a
 # transient `wsl` call does not survive. monitor-run.sh keeps these args space-free.
@@ -22,7 +22,14 @@ wsl -d Ubuntu -u root -- bash -lc "pkill -f '[m]onitor-web.py'; true"
 Start-Process wsl -ArgumentList '-d','Ubuntu','-u','root','--','bash','/mnt/c/Users/dgper/pi-nmos-st2110/pc/monitor-run.sh' -WindowStyle Hidden
 Start-Sleep -Seconds 4
 
-Write-Output "[5/5] Checks..."
+Write-Output "[5/6] Media pipeline: senders (bbb/home/music) + monitor-2 multiview, as the user..."
+# Runs senders + renderer from a Linux-side copy of pc/*.sh (dodges the /mnt/c 9p cache race
+# that silently broke a sender mid-session). As the user (not root) for GPU/NVENC + WSLg.
+# Idempotent; backgrounds its own work (setsid) and exits. Comment out for a control-only boot.
+Start-Process wsl -ArgumentList '-d','Ubuntu','--','bash','/mnt/c/Users/dgper/pi-nmos-st2110/pc/launch-media.sh' -WindowStyle Hidden
+Start-Sleep -Seconds 2
+
+Write-Output "[6/6] Checks..."
 # Checks live in restore-check.sh (called by path) because PowerShell 5.1 mangles quoted
 # bash passed inline to wsl.exe.
 wsl -d Ubuntu -- bash /mnt/c/Users/dgper/pi-nmos-st2110/pc/restore-check.sh

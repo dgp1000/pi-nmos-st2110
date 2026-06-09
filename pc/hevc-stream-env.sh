@@ -17,6 +17,10 @@ HEVC_DISPLAY_H=1080
 # --- transport: RTP/H.265 multicast on the island ---
 HEVC_ADDR=239.10.10.65     # mnemonic: H.265
 HEVC_PORT=5010
-HEVC_IFACE=eth1            # island NIC
+HEVC_LOCALADDR=10.10.10.2  # island IP (Windows Ethernet adapter, mirrored into WSL)
+# Detect the island NIC by its IP — WSL renames it (eth0/eth1/...) across reboots,
+# so hardcoding the name breaks the multicast. Fall back to eth0 if not found.
+HEVC_IFACE="$(ip -o -4 addr show 2>/dev/null | awk -v a="${HEVC_LOCALADDR}" '$4 ~ "^"a"/" {print $2; exit}')"
+HEVC_IFACE="${HEVC_IFACE:-eth0}"
 HEVC_TTL=1
 HEVC_CAPS="application/x-rtp,media=video,encoding-name=H265,clock-rate=90000,payload=96"

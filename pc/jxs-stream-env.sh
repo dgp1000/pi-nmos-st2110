@@ -15,6 +15,8 @@ JXS_PIXFMT=yuv422p      # ffmpeg pixel format; JPEG-XS is 4:2:2
 JXS_GSTFMT=Y42B         # GStreamer format token for planar yuv422p 8-bit
 JXS_BPP=3               # JPEG-XS bits/pixel (quality vs bandwidth)
 
-# --- transport: MPEG-TS over UDP ---
-JXS_ADDR=127.0.0.1      # loopback; use 239.10.10.22 for island multicast
+# --- transport: MPEG-TS over UDP multicast on the ST 2110 island ---
+JXS_ADDR=239.10.10.22       # multicast group (mnemonic: ST 2110-22; matches .10 audio / .20 video)
 JXS_PORT=5008
+JXS_LOCALADDR=10.10.10.2    # island NIC (eth1); pins send+recv to the island, not WiFi
+JXS_TTL=1                   # keep on the local L2 segment (ST 2110 practice; raise only if routed)

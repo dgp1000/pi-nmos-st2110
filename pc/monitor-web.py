@@ -28,6 +28,7 @@ PI_CLOCK = "http://10.10.10.1:8000/time"
 NODE = "http://localhost:8090/x-nmos/node/v1.3"
 CONN = "http://localhost:8090/x-nmos/connection/v1.1/single"
 QUERY = "http://localhost:8080/x-nmos/query/v1.3"
+MAC_MUSIC = "http://192.168.6.159:8008"   # Mac "Now Playing" server; control API proxied for the iPad
 
 SOURCES = {
     "jxs":  {"label": "easy-nmos-node/receiver/m0"},   # PC JPEG-XS island flow
@@ -262,6 +263,23 @@ def pi_time():
     except Exception:
         return json.dumps({"epoch_ms": time.time() * 1000}).encode()
 
+def music_state():
+    """Proxy the Mac music server's now-playing state for the iPad panel."""
+    try:
+        with urllib.request.urlopen(f"{MAC_MUSIC}/state", timeout=3) as r:
+            return r.read()
+    except Exception as e:
+        return json.dumps({"error": str(e)}).encode()
+
+def music_action(action):
+    """Proxy a playback control to the Mac music server (POST)."""
+    try:
+        req = urllib.request.Request(f"{MAC_MUSIC}/{action}", data=b"", method="POST")
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return json.dumps({"ok": True, "status": r.status}).encode()
+    except Exception as e:
+        return json.dumps({"error": str(e)}).encode()
+
 # --------------------------------- page ----------------------------------
 PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
@@ -286,6 +304,9 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #lay{margin-top:1vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
  #lay button{font-size:min(2.6vw,3vh);padding:.4em .8em;margin:.4vh .4vw}
  .l2{color:#5a5;font-size:min(1.7vw,2vh);letter-spacing:.12em;margin-right:.6vw}
+ #music{margin-top:.8vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
+ #music button{font-size:min(3vw,3.4vh);padding:.3em .7em;margin:.3vh .4vw}
+ #mnp{color:#9c9;font-size:min(1.9vw,2.2vh);margin-left:.8vw;max-width:62vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
  #nmos{padding:1.4vh 2vw 4vh}
  h2{color:#0a0;font-size:2.1vh;margin:2.2vh 0 .6vh;border-bottom:1px solid #131;padding-bottom:.3vh;
    letter-spacing:.12em}
@@ -324,6 +345,14 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="lside" onclick="setLayout('side')">Side &times; 2</button>
    <button id="lmulti" onclick="setLayout('multi')">Multiview</button>
   </div>
+  <div id="music">
+   <span class="l2">MUSIC</span>
+   <button onclick="music('prev')" title="previous">&#9198;</button>
+   <button id="mpp" onclick="music('playpause')" title="play/pause">&#9208;</button>
+   <button onclick="music('next')" title="next">&#9197;</button>
+   <button id="mshuf" onclick="music('shuffle')" title="shuffle">&#128256;</button>
+   <span id="mnp">&mdash;</span>
+  </div>
  </div>
  <div id="nmos">loading IS-04/IS-05&hellip;</div>
  <div id="ov"><div id="ovbar"><b id="ovttl">resource</b><button onclick="document.getElementById('ov').style.display='none'">&times; close</button></div><pre id="ovpre"></pre></div>
@@ -340,6 +369,19 @@ async function take(src,btn){
   try{const r=await fetch('/take?src='+src,{cache:'no-store'});const d=await r.json();
       if(d.error){ btn.textContent+=' !'; } }catch(e){}
   loadNmos();
+}
+async function music(action){
+  try{await fetch('/music/'+action,{cache:'no-store'});}catch(e){}
+  setTimeout(musicState,350);
+}
+async function musicState(){
+  const np=document.getElementById('mnp');
+  try{const r=await fetch('/music/state',{cache:'no-store'});const d=await r.json();
+      if(d.error){np.textContent='(offline)';return;}
+      np.textContent=(d.title||'\\u2014')+(d.artist?(' \\u2014 '+d.artist):'');
+      const pp=document.getElementById('mpp'); if(pp) pp.innerHTML=d.playing?'&#9208;':'&#9654;';
+      const sh=document.getElementById('mshuf'); if(sh) sh.classList.toggle('on',!!d.shuffle);
+  }catch(e){np.textContent='(offline)';}
 }
 const LAYBTN={single:'lsingle',side:'lside',multi:'lmulti'};
 function hlLayout(m){ document.querySelectorAll('#lay button').forEach(b=>b.classList.remove('on')); const b=document.getElementById(LAYBTN[m]); if(b) b.classList.add('on'); }
@@ -444,6 +486,7 @@ function tick(){   // per-frame: ONLY the timecode text (cheap); no innerHTML, n
 }
 refreshState(); setInterval(refreshState,5000);
 loadNmos();     setInterval(loadNmos,6000);
+musicState();   setInterval(musicState,4000);
 sync(); setInterval(sync,3000); tick();
 </script></body></html>"""
 
@@ -501,6 +544,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     self._send_json(json.dumps({"error": str(e)}).encode(), 500)
         elif parsed.path == "/time":
             self._send_json(pi_time())
+        elif parsed.path.startswith("/music/"):
+            action = parsed.path[len("/music/"):]
+            if action == "state":
+                self._send_json(music_state())
+            elif action in ("next", "prev", "playpause", "shuffle"):
+                self._send_json(music_action(action))
+            else:
+                self._send_json(json.dumps({"error": "unknown music action"}).encode(), 404)
         else:
             body = PAGE.encode("utf-8")
             self.send_response(200)

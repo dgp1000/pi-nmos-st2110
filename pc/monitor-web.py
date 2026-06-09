@@ -24,6 +24,7 @@ CONN = "http://localhost:8090/x-nmos/connection/v1.1"
 SOURCES = {
     "raw": {"label": "easy-nmos-node/receiver/v0", "group": "239.10.10.20", "port": 5005},
     "jxs": {"label": "easy-nmos-node/receiver/m0", "group": "239.10.10.22", "port": 5008},
+    "hevc": {"label": None, "group": "239.10.10.65", "port": 5010},  # GPU HEVC island flow (not NMOS)
 }
 DEFAULT_SRC = "jxs"
 _active = {"src": DEFAULT_SRC, "ts": 0.0}
@@ -62,12 +63,17 @@ def is_enabled(label):
 
 def take(src):
     for key, s in SOURCES.items():
+        if s["label"] is None:        # non-NMOS source (e.g. HEVC) -> nothing to take
+            continue
         set_enable(s["label"], key == src)
     _active["src"] = src
     _active["ts"] = time.monotonic()
 
 def active_src():
     if time.monotonic() - _active["ts"] < _ACTIVE_TTL:
+        return _active["src"]
+    if SOURCES.get(_active["src"], {}).get("label") is None:   # non-NMOS -> trust last take
+        _active["ts"] = time.monotonic()
         return _active["src"]
     src = DEFAULT_SRC
     for key, s in SOURCES.items():

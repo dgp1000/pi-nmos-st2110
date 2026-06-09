@@ -37,6 +37,7 @@ SOURCES = {
 DEFAULT_SRC = "jxs"
 _active = {"src": DEFAULT_SRC, "ts": 0.0}
 _ACTIVE_TTL = 2.0  # seconds; avoids hammering the NMOS node on every /state poll
+_output = {"layout": "single"}   # native output (monitor 2) layout: single|side|multi
 
 def http_json(url, timeout=5):
     with urllib.request.urlopen(url, timeout=timeout) as r:
@@ -258,6 +259,9 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  button:active{transform:scale(.96)}
  #info{color:#777;font-size:min(1.9vw,2.2vh);margin-top:1vh;line-height:1.5}
  .gm{color:#fc0;font-weight:bold}
+ #lay{margin-top:1vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
+ #lay button{font-size:min(2.6vw,3vh);padding:.4em .8em;margin:.4vh .4vw}
+ .l2{color:#5a5;font-size:min(1.7vw,2vh);letter-spacing:.12em;margin-right:.6vw}
  #nmos{padding:1.4vh 2vw 4vh}
  h2{color:#0a0;font-size:2.1vh;margin:2.2vh 0 .6vh;border-bottom:1px solid #131;padding-bottom:.3vh;
    letter-spacing:.12em}
@@ -281,6 +285,12 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="bhevc" onclick="take('hevc',this)">PC HEVC 4K</button>
   </div>
   <div id="info"></div>
+  <div id="lay">
+   <span class="l2">OUTPUT &middot; MON 2</span>
+   <button id="lsingle" onclick="setLayout('single')">Follow take</button>
+   <button id="lside" onclick="setLayout('side')">Side &times; 2</button>
+   <button id="lmulti" onclick="setLayout('multi')">Multiview</button>
+  </div>
  </div>
  <div id="nmos">loading IS-04/IS-05&hellip;</div>
 <script>
@@ -297,9 +307,12 @@ async function take(src,btn){
       if(d.error){ btn.textContent+=' !'; } }catch(e){}
   loadNmos();
 }
+const LAYBTN={single:'lsingle',side:'lside',multi:'lmulti'};
+function hlLayout(m){ document.querySelectorAll('#lay button').forEach(b=>b.classList.remove('on')); const b=document.getElementById(LAYBTN[m]); if(b) b.classList.add('on'); }
+async function setLayout(m){ hlLayout(m); try{await fetch('/layout?mode='+m,{cache:'no-store'});}catch(e){} }
 async function refreshState(){
   try{const r=await fetch('/state',{cache:'no-store'});const d=await r.json();
-      if(d.active) highlight(d.active);}catch(e){}
+      if(d.active) highlight(d.active); if(d.layout) hlLayout(d.layout);}catch(e){}
 }
 const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const dot=b=>b?'<span class="on-dot">&#9679;</span>':'<span class="off-dot">&#9675;</span>';
@@ -411,9 +424,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_json(json.dumps({"error": str(e)}).encode(), 500)
         elif parsed.path == "/state":
             try:
-                self._send_json(json.dumps({"active": active_src()}).encode())
+                self._send_json(json.dumps({"active": active_src(), "layout": _output["layout"]}).encode())
             except Exception as e:
                 self._send_json(json.dumps({"error": str(e)}).encode(), 500)
+        elif parsed.path == "/layout":
+            qs = parse_qs(parsed.query)
+            mode = qs.get("mode", ["single"])[0]
+            if mode not in ("single", "side", "multi"):
+                mode = "single"
+            _output["layout"] = mode
+            self._send_json(json.dumps({"layout": mode}).encode())
         elif parsed.path == "/nmos":
             try:
                 self._send_json(json.dumps(nmos_overview()).encode())

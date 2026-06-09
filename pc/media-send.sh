@@ -18,7 +18,14 @@ case "${1:-}" in
   --hevc) shift;;
 esac
 IFACE="${HEVC_IFACE:-eth0}"
-[ "$#" -ge 1 ] || { echo "usage: $(basename "$0") [--hevc|--jxs] <file> [file ...]" >&2; exit 1; }
+[ "$#" -ge 1 ] || { echo "usage: $(basename "$0") [--hevc|--jxs] <file|dir> [file ...]" >&2; exit 1; }
+# A single directory arg -> cycle every video file in it (sidesteps spaces/quotes/apostrophes
+# in filenames, and auto-includes anything dropped in later).
+if [ "$#" -eq 1 ] && [ -d "$1" ]; then
+  shopt -s nullglob
+  D="$1"; set -- "$D"/*.mpg "$D"/*.mp4 "$D"/*.mov "$D"/*.mkv "$D"/*.avi "$D"/*.m4v
+  [ "$#" -ge 1 ] || { echo "no video files in: $D" >&2; exit 1; }
+fi
 echo "media-send[$TAG]: $# clip(s) -> $GRP:$PORT on $IFACE  (Ctrl+C to stop)"
 
 # decodebin -> conform to 720p30 NV12 (videoscale add-borders preserves aspect) -> CUDA ->

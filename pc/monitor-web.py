@@ -415,8 +415,14 @@ async function detail(kind,id){
   catch(e){pre.textContent='error loading resource';}
 }
 async function sync(){
+  // NTP-ish: estimate (server clock - local clock). Reject jittery round-trips and smooth
+  // the rest, so a laggy /time response (PC under load) doesn't make the timecode jump.
   try{const t0=Date.now();const r=await fetch('/time',{cache:'no-store'});const t1=Date.now();
-      const d=await r.json();offset=d.epoch_ms-(t1+(t1-t0)/2);ptp=d;}catch(e){}
+      const d=await r.json();ptp=d;
+      const rtt=t1-t0; if(rtt>200) return;          // too jittery to trust this sample
+      const est=d.epoch_ms-(t1-rtt/2);              // server time at the client receive-midpoint
+      offset = offset ? offset+(est-offset)*0.15 : est;   // gentle EMA toward the estimate
+  }catch(e){}
 }
 const p=(n,l=2)=>String(n).padStart(l,'0');
 function tick(){

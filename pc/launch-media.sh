@@ -14,12 +14,19 @@ RUN=/home/dgper/atoll-run
 LOGS="$RUN/logs"
 PANEL=http://localhost:8096
 MACBASE=http://192.168.6.159:8008
-HOMEDIR="/mnt/c/Users/dgper/OneDrive/Music/Home Videos"
+MUSICROOT="/mnt/c/Users/dgper/OneDrive/Music"
+PLAYLIST=/home/dgper/atoll-playlist
 BBB=/home/dgper/jxs-media/bbb-4k.mp4
 
 mkdir -p "$RUN" "$LOGS"
 cp "$SRC"/media-send.sh "$SRC"/music-send.sh "$SRC"/music-placeholder.sh "$SRC"/output-render.sh \
    "$SRC"/move-window-screen.ps1 "$SRC"/hevc-stream-env.sh "$SRC"/jxs-stream-env.sh "$RUN"/
+
+# Build the home-video playlist: symlink every video under the Music tree into one folder (the
+# sender globs a single dir, which sidesteps spaces/apostrophes in filenames). -size -200M skips
+# the big "making of" doc. Rebuilt each run so newly-added videos get picked up automatically.
+mkdir -p "$PLAYLIST"; rm -f "$PLAYLIST"/*
+find "$MUSICROOT" -type f -size -200M \( -iname "*.mpg" -o -iname "*.m4v" -o -iname "*.mp4" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.mkv" \) -exec ln -sf {} "$PLAYLIST"/ \; 2>/dev/null
 
 # Stop any prior pipeline. Each pkill is bracketed and there are NO bare matching literals
 # elsewhere on these lines, so pkill can never match (and kill) this script's own process.
@@ -31,7 +38,7 @@ sleep 2
 # Senders (HEVC video + audio muxed into the TS). Logs go to a user-owned dir (not /tmp, which
 # may hold root-owned leftovers that block the redirect).
 setsid bash "$RUN"/media-send.sh --hevc "$BBB"     >"$LOGS"/media-hevc.log 2>&1 </dev/null &
-setsid bash "$RUN"/media-send.sh --jxs  "$HOMEDIR" >"$LOGS"/media-jxs.log  2>&1 </dev/null &
+setsid bash "$RUN"/media-send.sh --jxs  "$PLAYLIST" >"$LOGS"/media-jxs.log  2>&1 </dev/null &
 # Music tile: real Mac bridge if the server is reachable (probe /state -- a quick JSON, NOT the
 # never-ending .ts), else the "connecting" placeholder so 5012 is always fed (the compositor
 # stalls on a tile whose pad never gets caps).

@@ -13,10 +13,10 @@
 # Run:  bash pc/music-send.sh            (default Mac URL)
 #       bash pc/music-send.sh <ts-url>   (override)
 set -uo pipefail
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/hevc-stream-env.sh"   # HEVC_IFACE
-IFACE="${HEVC_IFACE:-eth0}"
-SRC="${1:-http://192.168.6.159:8008/nowplaying.ts}"
-echo "music-send: $SRC -> 239.10.10.30:5012 on $IFACE  (Ctrl+C to stop)"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/atoll.conf"   # ISLAND_IFACE, MUSIC_*, MAC_MUSIC_TS
+IFACE="${ISLAND_IFACE:-eth0}"
+SRC="${1:-$MAC_MUSIC_TS}"
+echo "music-send: $SRC -> $MUSIC_GRP:$MUSIC_PORT on $IFACE  (Ctrl+C to stop)"
 while true; do
   # pull the H.264+AAC TS -> NVDEC video, conform to 720p30, NVENC HEVC; AAC audio -> MP3.
   # Both are re-muxed into one MPEG-TS on the island (5012) so the multiview tile decodes the
@@ -30,6 +30,6 @@ while true; do
       ! h265parse config-interval=-1 ! queue ! mux. \
     d. ! aacparse ! avdec_aac ! audioconvert ! audioresample ! lamemp3enc target=bitrate bitrate=192 ! mpegaudioparse ! queue ! mux. \
     mpegtsmux name=mux ! queue \
-      ! udpsink host=239.10.10.30 port=5012 multicast-iface="$IFACE" auto-multicast=true ttl=1
+      ! udpsink host=$MUSIC_GRP port=$MUSIC_PORT multicast-iface="$IFACE" auto-multicast=true ttl=$MCAST_TTL
   echo "(stream unavailable/dropped -- retry in 3s)"; sleep 3
 done

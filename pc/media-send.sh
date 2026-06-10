@@ -10,18 +10,17 @@
 # Usage:  bash pc/media-send.sh [--hevc|--jxs] <file> [file ...]
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$DIR/hevc-stream-env.sh"      # HEVC_ADDR / HEVC_PORT / HEVC_IFACE / HEVC_TTL
-source "$DIR/jxs-stream-env.sh"       # JXS_ADDR / JXS_PORT
-GRP="$HEVC_ADDR"; PORT="$HEVC_PORT"; TAG=hevc
+source "$DIR/atoll.conf"              # HEVC_*/HOME_*/REELS_* groups, ISLAND_IFACE, MCAST_TTL
+GRP="$HEVC_GRP"; PORT="$HEVC_PORT"; TAG=hevc
 while [ -n "${1:-}" ]; do
   case "$1" in
-    --jxs)   GRP="$JXS_ADDR"; PORT="$JXS_PORT"; TAG=jxs; shift;;
-    --reels) GRP=239.10.10.31; PORT=5014; TAG=reels; shift;;   # "Test Reels" channel
+    --jxs)   GRP="$HOME_GRP";  PORT="$HOME_PORT";  TAG=jxs;   shift;;
+    --reels) GRP="$REELS_GRP"; PORT="$REELS_PORT"; TAG=reels; shift;;
     --hevc)  shift;;
     *) break;;
   esac
 done
-IFACE="${HEVC_IFACE:-eth0}"
+IFACE="${ISLAND_IFACE:-eth0}"
 [ "$#" -ge 1 ] || { echo "usage: $(basename "$0") [--hevc|--jxs] <file|dir> [file ...]" >&2; exit 1; }
 # A single directory arg -> cycle every video file in it (sidesteps spaces/quotes/apostrophes
 # in filenames, and auto-includes anything dropped in later).

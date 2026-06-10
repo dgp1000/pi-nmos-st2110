@@ -9,19 +9,20 @@
 #   home -> 239.10.10.22:5008   ("Home videos")
 #   music-> 239.10.10.30:5012   (Mac "Now Playing" bridge, or a placeholder card if Mac is down)
 set -uo pipefail
-SRC=/mnt/c/Users/dgper/pi-nmos-st2110/pc
-RUN=/home/dgper/atoll-run
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/atoll.conf"
+SRC="$ATOLL_SRC"
+RUN="$ATOLL_RUN"
 LOGS="$RUN/logs"
-PANEL=http://localhost:8096
-MACBASE=http://192.168.6.159:8008
-MUSICROOT="/mnt/c/Users/dgper/OneDrive/Music"
-PLAYLIST=/home/dgper/atoll-playlist
-BBB=/home/dgper/jxs-media/bbb-4k.mp4
-REELS_LOOP="/mnt/c/Users/dgper/test-reels-loop.mp4"   # one continuous file; build with build-reels-loop.ps1
+PANEL="http://localhost:$PANEL_PORT"
+MACBASE="http://$MAC_MUSIC_HOST:$MAC_MUSIC_PORT"
+MUSICROOT="$MUSIC_ROOT"
+PLAYLIST="$HOME_PLAYLIST"
+BBB="$BBB_FILE"
+# REELS_LOOP comes from atoll.conf
 
 mkdir -p "$RUN" "$LOGS"
-cp "$SRC"/media-send.sh "$SRC"/music-send.sh "$SRC"/music-placeholder.sh "$SRC"/output-render.sh \
-   "$SRC"/move-window-screen.ps1 "$SRC"/hevc-stream-env.sh "$SRC"/jxs-stream-env.sh "$SRC"/reels-nmos.py "$RUN"/
+cp "$SRC"/atoll.conf "$SRC"/media-send.sh "$SRC"/music-send.sh "$SRC"/music-placeholder.sh "$SRC"/output-render.sh \
+   "$SRC"/move-window-screen.ps1 "$SRC"/reels-nmos.py "$RUN"/
 
 # Build the home-video playlist: symlink every video under the Music tree into one folder (the
 # sender globs a single dir, which sidesteps spaces/apostrophes in filenames). -size -200M skips
@@ -33,7 +34,7 @@ find "$MUSICROOT" -type f -size -200M \( -iname "*.mpg" -o -iname "*.m4v" -o -in
 # elsewhere on these lines, so pkill can never match (and kill) this script's own process.
 pkill -f "[m]edia-send.sh"; pkill -f "[m]usic-send.sh"; pkill -f "[m]usic-placeholder.sh"; pkill -f "[o]utput-render.sh"
 sleep 1
-pkill -f "[g]st-launch.*udpsink host=239.10.10"; pkill -f "[s]ouphttpsrc location=http://192.168.6.159"; pkill -f "[w]aylandsink"
+pkill -f "[g]st-launch.*udpsink host=239.10.10"; pkill -f "[s]ouphttpsrc location=http://$MAC_MUSIC_HOST"; pkill -f "[w]aylandsink"
 sleep 2
 
 # Senders (HEVC video + audio muxed into the TS). Logs go to a user-owned dir (not /tmp, which

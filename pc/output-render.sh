@@ -13,18 +13,13 @@
 # Run in a LOCAL WSL terminal:  bash pc/output-render.sh [SCREEN]   (SCREEN=2 default; 0=primary)
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$DIR/hevc-stream-env.sh"
-IFACE="${HEVC_IFACE:-eth0}"
-PANEL="${PANEL:-http://localhost:8096}"
+source "$DIR/atoll.conf"             # groups (HEVC/HOME/MUSIC/REELS/PI_RAW/PI_AUDIO), ISLAND_IFACE, PANEL_PORT
+IFACE="${ISLAND_IFACE:-eth0}"
+PANEL="${PANEL:-http://localhost:$PANEL_PORT}"
 SCREEN="${1:-2}"
 export PULSE_SERVER="${PULSE_SERVER:-unix:/mnt/wslg/PulseServer}"
-export GALLIUM_DRIVER="${GALLIUM_DRIVER:-d3d12}"
 MOVER="$(wslpath -w "$DIR/move-window-screen.ps1")"
 RAW_CAPS="application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)RAW,sampling=(string)YCbCr-4:2:2,depth=(string)8,width=(string)320,height=(string)240,payload=(int)96"
-HEVC_GRP=239.10.10.65; HEVC_PORT=5010
-HOME_GRP=239.10.10.22; HOME_PORT=5008      # "PC JPEG-XS" slot, now HEVC home videos
-MUSIC_GRP=239.10.10.30; MUSIC_PORT=5012    # "Now Playing" music channel (Mac page, bridged onto the island)
-REELS_GRP=239.10.10.31; REELS_PORT=5014    # "Test Reels" channel (PC media-send --reels)
 F="Sans Bold 22"
 # Semi-transparent "ATOLL" bug, top-right of every output (single/side/multi). color is
 # 0xAARRGGBB -> 0x80 = ~50% white; no shaded box so it reads as a transparent watermark.
@@ -34,7 +29,7 @@ BRAND="textoverlay text=ATOLL valignment=top halignment=right ypad=18 xpad=28 fo
 hevc_tile() { echo "udpsrc address=$1 port=$2 multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=$5 $5. ! h265parse ! queue ! nvh265dec ! cudadownload ! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! video/x-raw,width=$3,height=$4"; }
 # HEVC fullscreen viewer (video + MP3 audio). $1=group $2=port.
 hevc_full() { echo "gst-launch-1.0 -q udpsrc address=$1 port=$2 multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=d d. ! h265parse ! queue ! nvh265dec ! cudadownload ! videoconvert ! videoscale ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! waylandsink fullscreen=true sync=true d. ! mpegaudioparse ! queue ! mpg123audiodec ! audioconvert ! audioresample ! autoaudiosink sync=true"; }
-raw_video()  { echo "udpsrc address=239.10.10.20 port=5005 multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! video/x-raw,width=$1,height=$2"; }
+raw_video()  { echo "udpsrc address=$PI_RAW_GRP port=$PI_RAW_PORT multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! video/x-raw,width=$1,height=$2"; }
 
 # One 2x2 multiview tile for a source key, wired to mix.sink_<idx> with a label. HEVC tiles also
 # terminate their TS audio pad (an unlinked pad would error). $1=src $2=idx $3=w $4=h
@@ -60,7 +55,7 @@ audio_cmd() {   # $1 = active source
     jxs)  echo "gst-launch-1.0 -q udpsrc address=$HOME_GRP port=$HOME_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
     music) echo "gst-launch-1.0 -q udpsrc address=$MUSIC_GRP port=$MUSIC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
     reels) echo "gst-launch-1.0 -q udpsrc address=$REELS_GRP port=$REELS_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
-    raw)  echo "gst-launch-1.0 -q udpsrc address=239.10.10.10 port=5004 multicast-iface=$IFACE auto-multicast=true buffer-size=16777216 caps='application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96' ! rtpjitterbuffer latency=500 ! rtpL24depay ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
+    raw)  echo "gst-launch-1.0 -q udpsrc address=$PI_AUDIO_GRP port=$PI_AUDIO_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=16777216 caps='application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96' ! rtpjitterbuffer latency=500 ! rtpL24depay ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
   esac
 }
 
@@ -72,7 +67,7 @@ build_pipeline() {   # $1=layout  $2=active
         jxs)   hevc_full "$HOME_GRP" "$HOME_PORT" ;;
         music) hevc_full "$MUSIC_GRP" "$MUSIC_PORT" ;;
         reels) hevc_full "$REELS_GRP" "$REELS_PORT" ;;
-        raw)  echo "gst-launch-1.0 -q udpsrc address=239.10.10.20 port=5005 multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! $BRAND ! waylandsink fullscreen=true sync=false" ;;
+        raw)  echo "gst-launch-1.0 -q udpsrc address=$PI_RAW_GRP port=$PI_RAW_PORT multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! $BRAND ! waylandsink fullscreen=true sync=false" ;;
       esac ;;
     side)
       echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=270 sink_1::xpos=960 sink_1::ypos=270 ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! waylandsink fullscreen=true sync=false \

@@ -21,7 +21,7 @@ REELS_DIR="/mnt/c/Users/dgper/OneDrive/Music/Test Reels"
 
 mkdir -p "$RUN" "$LOGS"
 cp "$SRC"/media-send.sh "$SRC"/music-send.sh "$SRC"/music-placeholder.sh "$SRC"/output-render.sh \
-   "$SRC"/move-window-screen.ps1 "$SRC"/hevc-stream-env.sh "$SRC"/jxs-stream-env.sh "$RUN"/
+   "$SRC"/move-window-screen.ps1 "$SRC"/hevc-stream-env.sh "$SRC"/jxs-stream-env.sh "$SRC"/reels-nmos.py "$RUN"/
 
 # Build the home-video playlist: symlink every video under the Music tree into one folder (the
 # sender globs a single dir, which sidesteps spaces/apostrophes in filenames). -size -200M skips
@@ -51,6 +51,9 @@ else
   setsid bash "$RUN"/music-placeholder.sh >"$LOGS"/music-ph.log   2>&1 </dev/null &
   echo "music: Mac unreachable -> placeholder card"
 fi
+
+# Register Test Reels as a discoverable NMOS sender (heartbeats + serves its SDP on :8097).
+setsid python3 "$RUN"/reels-nmos.py >"$LOGS"/reels-nmos.log 2>&1 </dev/null &
 
 # Let the encoders warm up + start feeding before the renderer joins their groups.
 sleep 14

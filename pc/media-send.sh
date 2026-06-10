@@ -15,8 +15,9 @@ source "$DIR/jxs-stream-env.sh"       # JXS_ADDR / JXS_PORT
 GRP="$HEVC_ADDR"; PORT="$HEVC_PORT"; TAG=hevc
 while [ -n "${1:-}" ]; do
   case "$1" in
-    --jxs)  GRP="$JXS_ADDR"; PORT="$JXS_PORT"; TAG=jxs; shift;;
-    --hevc) shift;;
+    --jxs)   GRP="$JXS_ADDR"; PORT="$JXS_PORT"; TAG=jxs; shift;;
+    --reels) GRP=239.10.10.31; PORT=5014; TAG=reels; shift;;   # "Test Reels" channel
+    --hevc)  shift;;
     *) break;;
   esac
 done

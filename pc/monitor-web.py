@@ -35,11 +35,14 @@ SOURCES = {
     "raw":  {"label": "easy-nmos-node/receiver/v0"},   # Pi raw ST 2110-20
     "hevc": {"label": None},                            # PC HEVC 4K island flow (not NMOS)
     "music": {"label": None},                           # Music channel (Mac->island 239.10.10.30:5012, not NMOS)
+    "reels": {"label": None},                           # Test Reels (PC->island 239.10.10.31:5014; NMOS m1 later)
 }
 DEFAULT_SRC = "jxs"
 _active = {"src": DEFAULT_SRC, "ts": 0.0}
 _ACTIVE_TTL = 2.0  # seconds; avoids hammering the NMOS node on every /state poll
 _output = {"layout": "single"}   # native output (monitor 2) layout: single|side|multi
+# Multiview tile assignment: which source fills each 2x2 slot (TL, TR, BL, BR). Any source -> any slot.
+_slots = ["hevc", "raw", "jxs", "music"]
 
 def http_json(url, timeout=5):
     with urllib.request.urlopen(url, timeout=timeout) as r:
@@ -308,6 +311,11 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #music{margin-top:.8vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
  #music button{font-size:min(3vw,3.4vh);padding:.3em .7em;margin:.3vh .4vw}
  #mnp{color:#9c9;font-size:min(1.9vw,2.2vh);margin-left:.8vw;max-width:62vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+ #slotwrap{margin-top:.8vh;display:flex;flex-direction:column;align-items:center}
+ #slots{display:grid;grid-template-columns:repeat(2,1fr);gap:.5vh .6vw;width:min(44vw,50vh);margin-top:.5vh}
+ #slots .slot{font-size:min(2vw,2.4vh);padding:.7em .3em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
+ #slots .slot.sel{background:#093;color:#000;border-color:#0f0;font-weight:bold}
+ #slothint{margin-top:.5vh;font-size:min(1.7vw,2vh)}
  #nmos{padding:1.4vh 2vw 4vh}
  h2{color:#0a0;font-size:2.1vh;margin:2.2vh 0 .6vh;border-bottom:1px solid #131;padding-bottom:.3vh;
    letter-spacing:.12em}
@@ -339,6 +347,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="braw" onclick="take('raw',this)">Pi raw 2110-20</button>
    <button id="bhevc" onclick="take('hevc',this)">PC HEVC 4K</button>
    <button id="bmusic" onclick="take('music',this)">Music</button>
+   <button id="breels" onclick="take('reels',this)">Test Reels</button>
   </div>
   <div id="info"></div>
   <div id="lay">
@@ -355,18 +364,43 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="mshuf" onclick="music('shuffle')" title="shuffle">&#128256;</button>
    <span id="mnp">&mdash;</span>
   </div>
+  <div id="slotwrap">
+   <span class="l2">MULTIVIEW TILES</span>
+   <div id="slots">
+    <button class="slot" id="slot0" onclick="selSlotFn(0)">&mdash;</button>
+    <button class="slot" id="slot1" onclick="selSlotFn(1)">&mdash;</button>
+    <button class="slot" id="slot2" onclick="selSlotFn(2)">&mdash;</button>
+    <button class="slot" id="slot3" onclick="selSlotFn(3)">&mdash;</button>
+   </div>
+   <span id="slothint" class="mut">tap a tile, then a source</span>
+  </div>
  </div>
  <div id="nmos">loading IS-04/IS-05&hellip;</div>
  <div id="ov"><div id="ovbar"><b id="ovttl">resource</b><button onclick="document.getElementById('ov').style.display='none'">&times; close</button></div><pre id="ovpre"></pre></div>
 <script>
 const FPS=__FPS__;
 let offset=0, ptp={}, synced=false;
-const BTN={jxs:'bjxs',raw:'braw',hevc:'bhevc',music:'bmusic'};
+const BTN={jxs:'bjxs',raw:'braw',hevc:'bhevc',music:'bmusic',reels:'breels'};
+const SRCLABEL={jxs:'Home',raw:'Pi raw',hevc:'PC HEVC',music:'Music',reels:'Test Reels'};
+let selSlot=null, curSlots=['hevc','raw','jxs','music'];
+function selSlotFn(i){ selSlot=(selSlot===i)?null:i; renderSlots(); }
+function renderSlots(){
+  for(let i=0;i<4;i++){ const b=document.getElementById('slot'+i);
+    if(b){ b.textContent=(i+1)+': '+(SRCLABEL[curSlots[i]]||curSlots[i]||'\\u2014'); b.classList.toggle('sel',selSlot===i); } }
+  const h=document.getElementById('slothint');
+  if(h) h.textContent = selSlot!=null ? ('now tap a source for tile '+(selSlot+1)) : 'tap a tile, then a source';
+}
+async function assignSlot(pos,src){
+  try{const r=await fetch('/slot?pos='+pos+'&src='+src,{cache:'no-store'});const d=await r.json();
+      if(d.slots) curSlots=d.slots.split(',');}catch(e){}
+  selSlot=null; renderSlots();
+}
 function highlight(src){
   document.querySelectorAll('#ctrl button').forEach(b=>b.classList.remove('on'));
   const b=document.getElementById(BTN[src]); if(b) b.classList.add('on');
 }
 async function take(src,btn){
+  if(selSlot!=null){ assignSlot(selSlot,src); return; }   // a tile is selected -> place this source there
   highlight(src);
   try{const r=await fetch('/take?src='+src,{cache:'no-store'});const d=await r.json();
       if(d.error){ btn.textContent+=' !'; } }catch(e){}
@@ -390,7 +424,8 @@ function hlLayout(m){ document.querySelectorAll('#lay button').forEach(b=>b.clas
 async function setLayout(m){ hlLayout(m); try{await fetch('/layout?mode='+m,{cache:'no-store'});}catch(e){} }
 async function refreshState(){
   try{const r=await fetch('/state',{cache:'no-store'});const d=await r.json();
-      if(d.active) highlight(d.active); if(d.layout) hlLayout(d.layout);}catch(e){}
+      if(d.active) highlight(d.active); if(d.layout) hlLayout(d.layout);
+      if(d.slots){ curSlots=d.slots.split(','); renderSlots(); } }catch(e){}
 }
 const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const dot=b=>b?'<span class="on-dot">&#9679;</span>':'<span class="off-dot">&#9675;</span>';
@@ -518,7 +553,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_json(json.dumps({"error": str(e)}).encode(), 500)
         elif parsed.path == "/state":
             try:
-                self._send_json(json.dumps({"active": active_src(), "layout": _output["layout"]}).encode())
+                self._send_json(json.dumps({"active": active_src(), "layout": _output["layout"], "slots": ",".join(_slots)}).encode())
             except Exception as e:
                 self._send_json(json.dumps({"error": str(e)}).encode(), 500)
         elif parsed.path == "/layout":
@@ -528,6 +563,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 mode = "single"
             _output["layout"] = mode
             self._send_json(json.dumps({"layout": mode}).encode())
+        elif parsed.path == "/slot":
+            qs = parse_qs(parsed.query)
+            try:
+                pos = int(qs.get("pos", ["-1"])[0])
+            except ValueError:
+                pos = -1
+            src = qs.get("src", [""])[0]
+            if 0 <= pos < 4 and src in SOURCES:
+                _slots[pos] = src
+                self._send_json(json.dumps({"slots": ",".join(_slots)}).encode())
+            else:
+                self._send_json(json.dumps({"error": "bad pos/src"}).encode(), 400)
         elif parsed.path == "/nmos":
             try:
                 self._send_json(json.dumps(nmos_overview()).encode())

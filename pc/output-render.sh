@@ -24,6 +24,7 @@ RAW_CAPS="application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-n
 HEVC_GRP=239.10.10.65; HEVC_PORT=5010
 HOME_GRP=239.10.10.22; HOME_PORT=5008      # "PC JPEG-XS" slot, now HEVC home videos
 MUSIC_GRP=239.10.10.30; MUSIC_PORT=5012    # "Now Playing" music channel (Mac page, bridged onto the island)
+REELS_GRP=239.10.10.31; REELS_PORT=5014    # "Test Reels" channel (PC media-send --reels)
 F="Sans Bold 22"
 # Semi-transparent "ATOLL" bug, top-right of every output (single/side/multi). color is
 # 0xAARRGGBB -> 0x80 = ~50% white; no shaded box so it reads as a transparent watermark.
@@ -35,6 +36,21 @@ hevc_tile() { echo "udpsrc address=$1 port=$2 multicast-iface=$IFACE auto-multic
 hevc_full() { echo "gst-launch-1.0 -q udpsrc address=$1 port=$2 multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=d d. ! h265parse ! queue ! nvh265dec ! cudadownload ! videoconvert ! videoscale ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! waylandsink fullscreen=true sync=true d. ! mpegaudioparse ! queue ! mpg123audiodec ! audioconvert ! audioresample ! autoaudiosink sync=true"; }
 raw_video()  { echo "udpsrc address=239.10.10.20 port=5005 multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! video/x-raw,width=$1,height=$2"; }
 
+# One 2x2 multiview tile for a source key, wired to mix.sink_<idx> with a label. HEVC tiles also
+# terminate their TS audio pad (an unlinked pad would error). $1=src $2=idx $3=w $4=h
+tile_full() {
+  local src=$1 idx=$2 w=$3 h=$4 name="t$2" grp port label
+  case "$src" in
+    raw)   echo "$(raw_video "$w" "$h") ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_$idx"; return ;;
+    hevc)  grp=$HEVC_GRP;  port=$HEVC_PORT;  label='PC HEVC 4K' ;;
+    jxs)   grp=$HOME_GRP;  port=$HOME_PORT;  label='Home videos' ;;
+    music) grp=$MUSIC_GRP; port=$MUSIC_PORT; label='Music' ;;
+    reels) grp=$REELS_GRP; port=$REELS_PORT; label='Test Reels' ;;
+    *)     grp=$HEVC_GRP;  port=$HEVC_PORT;  label="$src" ;;
+  esac
+  echo "$(hevc_tile "$grp" "$port" "$w" "$h" "$name") ! textoverlay text='$label' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_$idx $name. ! queue ! mpegaudioparse ! fakesink sync=false"
+}
+
 # Audio-only pipeline for the SELECTED source (used in side/multi, and single+raw); the
 # video pad is parsed-then-dropped so we don't waste a decode. hevc/home carry MP3 in the
 # TS; Pi raw's audio is the separate ST 2110-30 L24 flow on 239.10.10.10:5004.
@@ -43,6 +59,7 @@ audio_cmd() {   # $1 = active source
     hevc) echo "gst-launch-1.0 -q udpsrc address=$HEVC_GRP port=$HEVC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
     jxs)  echo "gst-launch-1.0 -q udpsrc address=$HOME_GRP port=$HOME_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
     music) echo "gst-launch-1.0 -q udpsrc address=$MUSIC_GRP port=$MUSIC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
+    reels) echo "gst-launch-1.0 -q udpsrc address=$REELS_GRP port=$REELS_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
     raw)  echo "gst-launch-1.0 -q udpsrc address=239.10.10.10 port=5004 multicast-iface=$IFACE auto-multicast=true buffer-size=16777216 caps='application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96' ! rtpjitterbuffer latency=500 ! rtpL24depay ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
   esac
 }
@@ -54,6 +71,7 @@ build_pipeline() {   # $1=layout  $2=active
         hevc)  hevc_full "$HEVC_GRP" "$HEVC_PORT" ;;
         jxs)   hevc_full "$HOME_GRP" "$HOME_PORT" ;;
         music) hevc_full "$MUSIC_GRP" "$MUSIC_PORT" ;;
+        reels) hevc_full "$REELS_GRP" "$REELS_PORT" ;;
         raw)  echo "gst-launch-1.0 -q udpsrc address=239.10.10.20 port=5005 multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! $BRAND ! waylandsink fullscreen=true sync=false" ;;
       esac ;;
     side)
@@ -62,13 +80,13 @@ build_pipeline() {   # $1=layout  $2=active
         hd. ! mpegaudioparse ! fakesink sync=false \
         $(raw_video 960 540) ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_1" ;;
     multi)
+      # $3 = slots "tl,tr,bl,br" (any source -> any of the four 960x540 quadrants).
+      IFS=',' read -r m0 m1 m2 m3 <<< "${3:-hevc,raw,jxs,music}"
       echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=960 sink_1::ypos=0 sink_2::xpos=0 sink_2::ypos=540 sink_3::xpos=960 sink_3::ypos=540 ! video/x-raw,width=1920,height=1080 ! videoconvert ! clockoverlay halignment=center valignment=position ypos=0.35 time-format='%H:%M:%S' font-desc='Sans Bold 24' shaded-background=true ! textoverlay text='Pi5 PTP GM' halignment=center valignment=position ypos=0.405 font-desc='Sans Bold 12' color=0xc8ffffff shaded-background=false ! $BRAND ! waylandsink fullscreen=true sync=false \
-        $(hevc_tile "$HEVC_GRP" "$HEVC_PORT" 960 540 hd) ! textoverlay text='PC HEVC 4K' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_0 \
-        hd. ! mpegaudioparse ! fakesink sync=false \
-        $(raw_video 960 540) ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_1 \
-        $(hevc_tile "$HOME_GRP" "$HOME_PORT" 960 540 jd) ! textoverlay text='Home videos' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_2 \
-        jd. ! mpegaudioparse ! fakesink sync=false \
-        $(hevc_tile "$MUSIC_GRP" "$MUSIC_PORT" 960 540 md) ! textoverlay text='Music' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_3" ;;
+        $(tile_full "$m0" 0 960 540) \
+        $(tile_full "$m1" 1 960 540) \
+        $(tile_full "$m2" 2 960 540) \
+        $(tile_full "$m3" 3 960 540)" ;;
   esac
 }
 
@@ -85,13 +103,15 @@ while true; do
   resp="$(curl -s --max-time 2 "$PANEL/state" || true)"
   active="$(printf '%s' "$resp" | sed -n 's/.*"active"[: ]*"\([a-z]*\)".*/\1/p')"
   layout="$(printf '%s' "$resp" | sed -n 's/.*"layout"[: ]*"\([a-z]*\)".*/\1/p')"
+  slots="$(printf '%s' "$resp" | sed -n 's/.*"slots"[: ]*"\([a-z,]*\)".*/\1/p')"
   [ -z "$layout" ] && layout="single"
+  [ -z "$slots" ]  && slots="hevc,raw,jxs,music"
   [ -z "$active" ] && { sleep 1; continue; }
 
-  # --- video: relaunch the pipeline only on layout/source change ---
-  if [ "$layout" = "single" ]; then key="single:$active"; else key="$layout"; fi
+  # --- video: relaunch the pipeline only on layout/source/tile-assignment change ---
+  case "$layout" in single) key="single:$active";; multi) key="multi:$slots";; *) key="$layout";; esac
   if [ "$key" != "$cur_key" ]; then
-    cmd="$(build_pipeline "$layout" "$active")"
+    cmd="$(build_pipeline "$layout" "$active" "$slots")"
     if [ -n "$cmd" ]; then
       echo "$(date +%T) render -> $key"
       kill_view

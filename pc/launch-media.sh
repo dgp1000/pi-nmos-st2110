@@ -28,7 +28,10 @@ cp "$SRC"/atoll.conf "$SRC"/atoll_config.py "$SRC"/media-send.sh "$SRC"/music-se
 # sender globs a single dir, which sidesteps spaces/apostrophes in filenames). -size -200M skips
 # the big "making of" doc. Rebuilt each run so newly-added videos get picked up automatically.
 mkdir -p "$PLAYLIST"; rm -f "$PLAYLIST"/*
-find "$MUSICROOT" -type f -size -200M \( -iname "*.mpg" -o -iname "*.m4v" -o -iname "*.mp4" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.mkv" \) -exec ln -sf {} "$PLAYLIST"/ \; 2>/dev/null
+# Exclude the Test Reels folder: those are short, vertical phone clips that stall the file-paced
+# udpsink (they have their own dedicated channel via the concatenated loop), and they'd poison the
+# home sender if it looped onto one.
+find "$MUSICROOT" -type f -size -200M -not -path "*/Test Reels/*" \( -iname "*.mpg" -o -iname "*.m4v" -o -iname "*.mp4" -o -iname "*.mov" -o -iname "*.avi" -o -iname "*.mkv" \) -exec ln -sf {} "$PLAYLIST"/ \; 2>/dev/null
 
 # Stop any prior pipeline. Each pkill is bracketed and there are NO bare matching literals
 # elsewhere on these lines, so pkill can never match (and kill) this script's own process.

@@ -99,12 +99,10 @@ $EDITOR pc/atoll.conf           # user, island subnet, the 6 multicast groups, m
 sudo ip addr add 10.10.10.2/24 dev eth0      # Linux
 #   New-NetIPAddress -InterfaceAlias Ethernet -IPAddress 10.10.10.2 -PrefixLength 24   (Windows admin)
 
-# 4. Start it.
-bash pc/monitor-run.sh          # the panel (:8096)
-bash pc/launch-media.sh         # the senders + the monitor-2 multiview
-
-# On Windows/WSL you can do steps 1-4 in one shot after a reboot:
-#   powershell -ExecutionPolicy Bypass -File pc/restore.ps1
+# 4. Start it — Linux-native, one shot (NMOS stack + panel + senders + multiview):
+bash pc/atoll-up.sh
+#   …or piecemeal:       bash pc/monitor-run.sh   then   bash pc/launch-media.sh
+#   …or on Windows/WSL:  powershell -ExecutionPolicy Bypass -File pc/restore.ps1
 ```
 
 Open the panel at `http://<this-host>:8096` (from the iPad, the PC's WiFi IP). On the Pi:
@@ -169,10 +167,15 @@ docs/                 design notes / project state
 ## Platform notes
 
 The reference rig runs on **Windows + WSL2** (mirrored networking, WSLg for the GPU display, the
-`d3d12` Mesa driver). Those specifics — the `restore.ps1` boot, the `/mnt/c` 9p handling, the GPU
-driver export — are isolated and noted in the code. A **Linux-native** deployment (a box on the island
-with an NVIDIA GPU) removes them entirely and is the natural target for an appliance; that port is the
-main remaining work toward a turnkey release.
+`d3d12` Mesa driver). Atoll **auto-detects** WSL vs Linux-native (`ATOLL_PLATFORM`, set in
+`atoll.conf` from `/proc/version`) and branches the GPU driver, audio server, display sink
+(`VIDEO_SINK`), media paths, and window placement accordingly — so the same scripts run on both.
+
+On a **Linux-native** box (on the island, with an NVIDIA GPU) none of the WSL machinery runs:
+no `d3d12`/WSLg, no `/mnt/c`, no PowerShell window-mover. Bring the whole rig up with
+**`bash pc/atoll-up.sh`** (the cross-platform sibling of `restore.ps1`). For an X11 session set
+`VIDEO_SINK=ximagesink` in `atoll.conf` (and handle fullscreen via your window manager); on Wayland
+the default `waylandsink fullscreen=true` works as-is. This is the natural turnkey-appliance target.
 
 ---
 

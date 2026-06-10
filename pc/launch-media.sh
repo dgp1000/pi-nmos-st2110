@@ -9,8 +9,8 @@
 #   home -> 239.10.10.22:5008   ("Home videos")
 #   music-> 239.10.10.30:5012   (Mac "Now Playing" bridge, or a placeholder card if Mac is down)
 set -uo pipefail
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/atoll.conf"
-SRC="$ATOLL_SRC"
+SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SRC/atoll.conf"
 RUN="$ATOLL_RUN"
 LOGS="$RUN/logs"
 PANEL="http://localhost:$PANEL_PORT"

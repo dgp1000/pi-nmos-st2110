@@ -17,8 +17,9 @@ source "$DIR/atoll.conf"             # groups (HEVC/HOME/MUSIC/REELS/PI_RAW/PI_A
 IFACE="${ISLAND_IFACE:-eth0}"
 PANEL="${PANEL:-http://localhost:$PANEL_PORT}"
 SCREEN="${1:-2}"
-export PULSE_SERVER="${PULSE_SERVER:-unix:/mnt/wslg/PulseServer}"
-MOVER="$(wslpath -w "$DIR/move-window-screen.ps1")"
+# GALLIUM_DRIVER + PULSE_SERVER come from atoll.conf (WSL only). The window-mover is WSL-only too.
+MOVER=""
+[ "${ATOLL_PLATFORM:-}" = wsl ] && MOVER="$(wslpath -w "$DIR/move-window-screen.ps1")"
 RAW_CAPS="application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)RAW,sampling=(string)YCbCr-4:2:2,depth=(string)8,width=(string)320,height=(string)240,payload=(int)96"
 F="Sans Bold 22"
 # Semi-transparent "ATOLL" bug, top-right of every output (single/side/multi). color is
@@ -28,7 +29,7 @@ BRAND="textoverlay text=ATOLL valignment=top halignment=right ypad=18 xpad=28 fo
 # HEVC decode -> tile WxH (no sink). $1=group $2=port $3=w $4=h $5=tsdemux-name.
 hevc_tile() { echo "udpsrc address=$1 port=$2 multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=$5 $5. ! h265parse ! queue ! nvh265dec ! cudadownload ! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! video/x-raw,width=$3,height=$4"; }
 # HEVC fullscreen viewer (video + MP3 audio). $1=group $2=port.
-hevc_full() { echo "gst-launch-1.0 -q udpsrc address=$1 port=$2 multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=d d. ! h265parse ! queue ! nvh265dec ! cudadownload ! videoconvert ! videoscale ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! waylandsink fullscreen=true sync=true d. ! mpegaudioparse ! queue ! mpg123audiodec ! audioconvert ! audioresample ! autoaudiosink sync=true"; }
+hevc_full() { echo "gst-launch-1.0 -q udpsrc address=$1 port=$2 multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=d d. ! h265parse ! queue ! nvh265dec ! cudadownload ! videoconvert ! videoscale ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! $VIDEO_SINK sync=true d. ! mpegaudioparse ! queue ! mpg123audiodec ! audioconvert ! audioresample ! autoaudiosink sync=true"; }
 raw_video()  { echo "udpsrc address=$PI_RAW_GRP port=$PI_RAW_PORT multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! video/x-raw,width=$1,height=$2"; }
 
 # One 2x2 multiview tile for a source key, wired to mix.sink_<idx> with a label. HEVC tiles also
@@ -67,17 +68,17 @@ build_pipeline() {   # $1=layout  $2=active
         jxs)   hevc_full "$HOME_GRP" "$HOME_PORT" ;;
         music) hevc_full "$MUSIC_GRP" "$MUSIC_PORT" ;;
         reels) hevc_full "$REELS_GRP" "$REELS_PORT" ;;
-        raw)  echo "gst-launch-1.0 -q udpsrc address=$PI_RAW_GRP port=$PI_RAW_PORT multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! $BRAND ! waylandsink fullscreen=true sync=false" ;;
+        raw)  echo "gst-launch-1.0 -q udpsrc address=$PI_RAW_GRP port=$PI_RAW_PORT multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! $BRAND ! $VIDEO_SINK sync=false" ;;
       esac ;;
     side)
-      echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=270 sink_1::xpos=960 sink_1::ypos=270 ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! waylandsink fullscreen=true sync=false \
+      echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=270 sink_1::xpos=960 sink_1::ypos=270 ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! $VIDEO_SINK sync=false \
         $(hevc_tile "$HEVC_GRP" "$HEVC_PORT" 960 540 hd) ! textoverlay text='PC HEVC 4K' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_0 \
         hd. ! mpegaudioparse ! fakesink sync=false \
         $(raw_video 960 540) ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_1" ;;
     multi)
       # $3 = slots "tl,tr,bl,br" (any source -> any of the four 960x540 quadrants).
       IFS=',' read -r m0 m1 m2 m3 <<< "${3:-hevc,raw,jxs,music}"
-      echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=960 sink_1::ypos=0 sink_2::xpos=0 sink_2::ypos=540 sink_3::xpos=960 sink_3::ypos=540 ! video/x-raw,width=1920,height=1080 ! videoconvert ! clockoverlay halignment=center valignment=position ypos=0.35 time-format='%H:%M:%S' font-desc='Sans Bold 24' shaded-background=true ! textoverlay text='Pi5 PTP GM' halignment=center valignment=position ypos=0.405 font-desc='Sans Bold 12' color=0xc8ffffff shaded-background=false ! $BRAND ! waylandsink fullscreen=true sync=false \
+      echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=960 sink_1::ypos=0 sink_2::xpos=0 sink_2::ypos=540 sink_3::xpos=960 sink_3::ypos=540 ! video/x-raw,width=1920,height=1080 ! videoconvert ! clockoverlay halignment=center valignment=position ypos=0.35 time-format='%H:%M:%S' font-desc='Sans Bold 24' shaded-background=true ! textoverlay text='Pi5 PTP GM' halignment=center valignment=position ypos=0.405 font-desc='Sans Bold 12' color=0xc8ffffff shaded-background=false ! $BRAND ! $VIDEO_SINK sync=false \
         $(tile_full "$m0" 0 960 540) \
         $(tile_full "$m1" 1 960 540) \
         $(tile_full "$m2" 2 960 540) \
@@ -113,7 +114,7 @@ while true; do
       setsid bash -c "$cmd" >/tmp/output-view.log 2>&1 &
       pid=$!
       cur_key="$key"
-      [ "$SCREEN" != "0" ] && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$MOVER" -Screen "$SCREEN" -TimeoutSec 12 >/dev/null 2>&1 &
+      [ "${ATOLL_PLATFORM:-}" = wsl ] && [ "$SCREEN" != "0" ] && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$MOVER" -Screen "$SCREEN" -TimeoutSec 12 >/dev/null 2>&1 &
     fi
   fi
 

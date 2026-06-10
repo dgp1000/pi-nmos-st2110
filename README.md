@@ -11,6 +11,10 @@ from a Mac, and a looping reels channel — every one discoverable over NMOS.
 It started as a home lab for learning ST 2110 / NMOS end to end. Everything is config-driven, so with
 the right hardware you can re-home it to your own network by editing two files.
 
+![The Atoll multiview output: a 2x2 wall — PC HEVC, Pi raw ST 2110-20 (bars), home videos, and the Music "Now Playing" card — with the centered PTP timecode and the ATOLL watermark](docs/img/multiview.png)
+
+*The monitor-2 output — the assignable 2×2 multiview, with the PTP timecode relayed from the Pi grandmaster.*
+
 ---
 
 ## What it does

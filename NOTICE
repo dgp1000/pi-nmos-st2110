@@ -1,0 +1,17 @@
+Atoll
+Copyright 2026 The Atoll Authors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product builds on third-party components, each under its own license:
+  - nmos-cpp (Apache-2.0)              https://github.com/sony/nmos-cpp
+  - easy-nmos (Apache-2.0)             https://github.com/rhastie/easy-nmos
+  - AMWA NMOS Testing Tool (Apache-2.0)  https://github.com/AMWA-TV/nmos-testing
+  - GStreamer (LGPL-2.1+)              https://gstreamer.freedesktop.org/
+  - FFmpeg (LGPL-2.1+/GPL)             https://ffmpeg.org/
+
+The "Big Buck Bunny" demo clip is (C) Blender Foundation, licensed CC-BY 3.0
+(https://peach.blender.org/) and is NOT distributed as part of this repository.
+
+NMOS is a family of specifications from the Advanced Media Workflow Association
+(AMWA, https://www.amwa.tv/); SMPTE ST 2110 is a standard of SMPTE.

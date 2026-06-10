@@ -187,5 +187,5 @@ Built on excellent open infrastructure:
 - **[GStreamer](https://gstreamer.freedesktop.org/)** + **[FFmpeg](https://ffmpeg.org/)** — the media pipeline.
 - **Big Buck Bunny** (© Blender Foundation, CC-BY 3.0) — the HEVC demo clip.
 
-Add a `LICENSE` of your choice before publishing. NMOS is an [AMWA](https://www.amwa.tv/) family of specs;
-SMPTE ST 2110 is a SMPTE standard.
+Atoll is licensed under **Apache-2.0** — see [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE). NMOS is an
+[AMWA](https://www.amwa.tv/) family of specifications; SMPTE ST 2110 is a SMPTE standard.

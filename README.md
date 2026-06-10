@@ -132,6 +132,11 @@ Re-homing Atoll to your network is: edit those two files. See `pc/atoll.conf` fo
 
 ## Using the panel
 
+<p align="center">
+  <img src="docs/img/control.jpg" width="380"
+       alt="The Atoll iPad control panel: ATOLL wordmark, PTP timecode, source + layout buttons, music transport, the 2x2 tile picker, and the live IS-04/05 receivers inspector">
+</p>
+
 - **Sources** — tap **Home / Pi raw / PC HEVC / Music / Test Reels** to take that source (the output
   follows, and so does the audio).
 - **Output · Mon 2** — **Follow take** (single fullscreen), **Side × 2**, or **Multiview** (2×2).

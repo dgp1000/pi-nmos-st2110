@@ -4,3 +4,4 @@
 # Images are binary -- never apply line-ending conversion (core.autocrlf=true would corrupt them).
 *.png binary
 *.jpg binary
+*.gif binary

@@ -28,6 +28,13 @@ the right hardware you can re-home it to your own network by editing two files.
 - **Audio that follows the selected source**, lip-synced where the source carries its own audio.
 - **A discoverable NMOS sender** registered for the reels channel (source → flow → sender + SDP).
 
+<p align="center">
+  <img src="docs/img/tile-picker.gif" width="640"
+       alt="Reassigning the multiview tiles live: each step swaps a different source into a quadrant of the 2x2">
+</p>
+
+*The assignable multiview in action — pick a tile, then a source, and it swaps into that quadrant live.*
+
 ### Channels
 
 | Channel        | Transport                         | Group : port        | Source                          |

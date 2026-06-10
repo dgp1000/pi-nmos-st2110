@@ -14,12 +14,10 @@ Write-Output "[3/5] Docker + NMOS registry/node + AMWA testing tool..."
 wsl -d Ubuntu -u root -- bash -lc "systemctl start docker; sleep 3; cd /root/easy-nmos && docker compose -f docker-compose.wsl.yml up -d nmos-registry nmos-virtnode nmos-testing 2>&1 | tail -3"
 
 Write-Output "[4/6] IS-05 switch panel + IS-04/05 inspector (background, port 8096)..."
-# Stop any prior panel, then launch it as its own persistent hidden WSL process via
-# Start-Process (same pattern as the keepalive above) -- a backgrounded process inside a
-# transient `wsl` call does not survive. monitor-run.sh keeps these args space-free.
-# Bracket trick ([m]) so pkill doesn't match this very command line and kill the shell.
-wsl -d Ubuntu -u root -- bash -lc "pkill -f '[m]onitor-web.py'; true"
-Start-Process wsl -ArgumentList '-d','Ubuntu','-u','root','--','bash','/mnt/c/Users/dgper/pi-nmos-st2110/pc/monitor-run.sh' -WindowStyle Hidden
+# Persistent hidden WSL window holds the panel (monitor-run.sh exec's it in the foreground).
+# Run as the USER (no -u root) -- the earlier root launch died right after start (8096 empty).
+# monitor-run.sh stops any prior panel itself.
+Start-Process wsl -ArgumentList '-d','Ubuntu','--','bash','/mnt/c/Users/dgper/pi-nmos-st2110/pc/monitor-run.sh' -WindowStyle Hidden
 Start-Sleep -Seconds 4
 
 Write-Output "[5/6] Media pipeline: senders (bbb/home/music) + monitor-2 multiview, as the user..."

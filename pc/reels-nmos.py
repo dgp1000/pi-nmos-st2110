@@ -10,11 +10,13 @@ periodically (a bumped version) as a safety net. An SDP for the sender is served
 Run in WSL:  python3 pc/reels-nmos.py     (Ctrl+C to deregister + stop)
 """
 import urllib.request, urllib.error, json, uuid, time, http.server, threading, signal, sys
+import atoll_config as cfg
 
+_c = cfg.load()
 REGBASE = "http://localhost:8080/x-nmos/registration/v1.3"
 QUERY   = "http://localhost:8080/x-nmos/query/v1.3"
-ISLAND_IP = "10.10.10.2"; SDP_PORT = 8097
-GRP = "239.10.10.31"; PORT = 5014
+ISLAND_IP = _c.get("ISLAND_PC_IP", "10.10.10.2"); SDP_PORT = int(_c.get("REELS_SDP_PORT", "8097"))
+GRP = _c.get("REELS_GRP", "239.10.10.31"); PORT = int(_c.get("REELS_PORT", "5014"))
 
 def q(path):
     with urllib.request.urlopen(f"{QUERY}/{path}", timeout=5) as r:

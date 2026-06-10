@@ -21,14 +21,16 @@ Run in WSL:  python3 monitor-web.py    Open from iPad: http://<pc-wifi-ip>:8096
 """
 import http.server, socketserver, urllib.request, json, time
 from urllib.parse import urlparse, parse_qs
+import atoll_config as cfg
 
-PORT = 8096
+_c = cfg.load()
+PORT = int(_c.get("PANEL_PORT", "8096"))
 FPS = 60000 / 1001
-PI_CLOCK = "http://10.10.10.1:8000/time"
+PI_CLOCK = f"http://{_c.get('ISLAND_PI_IP', '10.10.10.1')}:8000/time"
 NODE = "http://localhost:8090/x-nmos/node/v1.3"
 CONN = "http://localhost:8090/x-nmos/connection/v1.1/single"
 QUERY = "http://localhost:8080/x-nmos/query/v1.3"
-MAC_MUSIC = "http://192.168.6.159:8008"   # Mac "Now Playing" server; control API proxied for the iPad
+MAC_MUSIC = f"http://{_c.get('MAC_MUSIC_HOST', '192.168.6.159')}:{_c.get('MAC_MUSIC_PORT', '8008')}"   # Mac "Now Playing"; proxied for the iPad
 
 SOURCES = {
     "jxs":  {"label": "easy-nmos-node/receiver/m0"},   # PC JPEG-XS island flow

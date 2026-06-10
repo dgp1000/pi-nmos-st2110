@@ -21,7 +21,7 @@ BBB="$BBB_FILE"
 # REELS_LOOP comes from atoll.conf
 
 mkdir -p "$RUN" "$LOGS"
-cp "$SRC"/atoll.conf "$SRC"/media-send.sh "$SRC"/music-send.sh "$SRC"/music-placeholder.sh "$SRC"/output-render.sh \
+cp "$SRC"/atoll.conf "$SRC"/atoll_config.py "$SRC"/media-send.sh "$SRC"/music-send.sh "$SRC"/music-placeholder.sh "$SRC"/output-render.sh \
    "$SRC"/move-window-screen.ps1 "$SRC"/reels-nmos.py "$RUN"/
 
 # Build the home-video playlist: symlink every video under the Music tree into one folder (the

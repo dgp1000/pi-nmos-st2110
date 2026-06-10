@@ -17,7 +17,7 @@ MACBASE=http://192.168.6.159:8008
 MUSICROOT="/mnt/c/Users/dgper/OneDrive/Music"
 PLAYLIST=/home/dgper/atoll-playlist
 BBB=/home/dgper/jxs-media/bbb-4k.mp4
-REELS_DIR="/mnt/c/Users/dgper/OneDrive/Music/Test Reels"
+REELS_LOOP="/mnt/c/Users/dgper/test-reels-loop.mp4"   # one continuous file; build with build-reels-loop.ps1
 
 mkdir -p "$RUN" "$LOGS"
 cp "$SRC"/media-send.sh "$SRC"/music-send.sh "$SRC"/music-placeholder.sh "$SRC"/output-render.sh \
@@ -40,7 +40,7 @@ sleep 2
 # may hold root-owned leftovers that block the redirect).
 setsid bash "$RUN"/media-send.sh --hevc "$BBB"     >"$LOGS"/media-hevc.log 2>&1 </dev/null &
 setsid bash "$RUN"/media-send.sh --jxs   "$PLAYLIST"  >"$LOGS"/media-jxs.log   2>&1 </dev/null &
-setsid bash "$RUN"/media-send.sh --reels "$REELS_DIR" >"$LOGS"/media-reels.log 2>&1 </dev/null &
+setsid bash "$RUN"/media-send.sh --reels "$REELS_LOOP" >"$LOGS"/media-reels.log 2>&1 </dev/null &
 # Music tile: real Mac bridge if the server is reachable (probe /state -- a quick JSON, NOT the
 # never-ending .ts), else the "connecting" placeholder so 5012 is always fed (the compositor
 # stalls on a tile whose pad never gets caps).

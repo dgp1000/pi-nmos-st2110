@@ -70,6 +70,7 @@ build_pipeline() {   # $1=layout  $2=active
         jxs)   hevc_full "$HOME_GRP" "$HOME_PORT" ;;
         music) hevc_full "$MUSIC_GRP" "$MUSIC_PORT" ;;
         reels) hevc_full "$REELS_GRP" "$REELS_PORT" ;;
+        jpegxs) echo "gst-launch-1.0 -q videotestsrc pattern=ball is-live=true ! video/x-raw,width=1280,height=720,framerate=30/1 ! textoverlay text='JPEG XS 2110-22 codec' valignment=top halignment=center font-desc='$F' shaded-background=true ! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert ! videoscale ! $BRAND ! $VIDEO_SINK sync=false" ;;
         raw)  echo "gst-launch-1.0 -q udpsrc address=$PI_RAW_GRP port=$PI_RAW_PORT multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! $BRAND ! $VIDEO_SINK sync=false" ;;
       esac ;;
     side)

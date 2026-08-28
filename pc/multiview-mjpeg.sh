@@ -32,6 +32,9 @@ src_full() {
 # one tile (video-only) wired to mix.sink_<idx>, scaled to WxH, with a label
 tile() {   # $1=key $2=w $3=h $4=idx
   local key="$1" w="$2" h="$3" idx="$4" lab; lab="$(labof "$key")"
+  if [ "$key" = jpegxs ]; then
+    echo "videotestsrc pattern=ball is-live=true ! video/x-raw,width=$w,height=$h,framerate=30/1 ! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert ! textoverlay text=\"JPEG XS 2110-22\" valignment=top halignment=left xpad=14 ypad=10 font-desc=\"$F\" shaded-background=true ! mix.sink_$idx"; return
+  fi
   if [ "$key" = raw ]; then
     echo "udpsrc address=$PI_RAW_GRP port=$PI_RAW_PORT multicast-iface=$IFACE auto-multicast=true caps=\"$RAW_CAPS\" ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! video/x-raw,width=$w,height=$h ! textoverlay text=\"$lab\" valignment=top halignment=left xpad=14 ypad=10 font-desc=\"$F\" shaded-background=true ! mix.sink_$idx"
   else

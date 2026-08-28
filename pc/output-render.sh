@@ -38,6 +38,7 @@ tile_full() {
   local src=$1 idx=$2 w=$3 h=$4 name="t$2" grp port label
   case "$src" in
     raw)   echo "$(raw_video "$w" "$h") ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_$idx"; return ;;
+    jpegxs) echo "videotestsrc pattern=ball is-live=true ! video/x-raw,width=$w,height=$h,framerate=30/1 ! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert ! textoverlay text='JPEG XS 2110-22' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_$idx"; return ;;
     hevc)  grp=$HEVC_GRP;  port=$HEVC_PORT;  label='Live TV' ;;
     jxs)   grp=$HOME_GRP;  port=$HOME_PORT;  label='Home videos' ;;
     music) grp=$MUSIC_GRP; port=$MUSIC_PORT; label='Music' ;;

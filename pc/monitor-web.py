@@ -288,6 +288,33 @@ def music_action(action):
     except Exception as e:
         return json.dumps({"error": str(e)}).encode()
 
+# --------------------------------- TV channels ---------------------------
+HDHR_HOST = _c.get('HDHR_HOST', '192.168.7.88')
+TV_STATE = _c.get('ATOLL_RUN', '/home/david/atoll-run') + '/tv-channel'
+
+def tv_lineup():
+    """The HDHomeRun lineup + the currently-tuned channel, for the panel grid."""
+    try:
+        with urllib.request.urlopen(f"http://{HDHR_HOST}/lineup.json", timeout=6) as r:
+            d = json.load(r)
+        chans = [{"num": c.get("GuideNumber", ""), "name": c.get("GuideName", ""), "hd": bool(c.get("HD"))} for c in d]
+    except Exception:
+        chans = []
+    try:
+        cur = open(TV_STATE).read().strip()
+    except Exception:
+        cur = ""
+    return json.dumps({"channels": chans, "current": cur}).encode()
+
+def tv_set(ch):
+    """Write the tv-channel state file that tv-send.sh watches -> retunes the Live TV tile."""
+    try:
+        with open(TV_STATE, "w") as f:
+            f.write(ch.strip())
+        return json.dumps({"channel": ch}).encode()
+    except Exception as e:
+        return json.dumps({"error": str(e)}).encode()
+
 # --------------------------------- page ----------------------------------
 PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
@@ -319,6 +346,11 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #slots{display:grid;grid-template-columns:repeat(2,1fr);gap:.5vh .6vw;width:min(44vw,50vh);margin-top:.5vh}
  #slots .slot{font-size:min(2vw,2.4vh);padding:.7em .3em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
  #slots .slot.sel{background:#093;color:#000;border-color:#0f0;font-weight:bold}
+ #tvwrap{padding:.3vh 0}
+ #tvtoggle{font-size:min(1.9vw,2.2vh);padding:.5em 1em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
+ #tvchan{display:none;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.4vh .4vw;margin-top:.5vh;max-height:34vh;overflow-y:auto}
+ .tvch{font-size:min(1.7vw,2vh);padding:.5em .4em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px;text-align:left;cursor:pointer}
+ .tvch.sel{background:#093;color:#000;border-color:#0f0;font-weight:bold}
  #slothint{margin-top:.5vh;font-size:min(1.7vw,2vh)}
  #nmos{padding:1.4vh 2vw 4vh}
  h2{color:#0a0;font-size:2.1vh;margin:2.2vh 0 .6vh;border-bottom:1px solid #131;padding-bottom:.3vh;
@@ -355,6 +387,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="bjpegxs" onclick="take('jpegxs',this)">JPEG XS</button>
    <button id="bj2k" onclick="take('j2k',this)">JPEG 2000</button>
   </div>
+  <div id="tvwrap"><button id="tvtoggle" onclick="toggleTv()">&#128250; TV Channels</button><div id="tvchan"></div></div>
   <div id="info"></div>
   <div id="lay">
    <span class="l2">OUTPUT &middot; MON 2</span>
@@ -416,6 +449,11 @@ async function music(action){
   try{await fetch('/music/'+action,{cache:'no-store'});}catch(e){}
   setTimeout(musicState,350);
 }
+let tvOpen=false;
+async function loadTv(){try{const r=await fetch('/tv/lineup',{cache:'no-store'});const d=await r.json();
+document.getElementById('tvchan').innerHTML=(d.channels||[]).map(c=>'<button class="tvch'+(c.num===d.current?' sel':'')+'" onclick="tvPick(\''+c.num+'\')">'+c.num+' '+c.name+(c.hd?' HD':'')+'</button>').join('');}catch(e){}}
+function toggleTv(){tvOpen=!tvOpen;document.getElementById('tvchan').style.display=tvOpen?'grid':'none';if(tvOpen)loadTv();}
+async function tvPick(ch){try{await fetch('/tv/set?ch='+encodeURIComponent(ch),{cache:'no-store'});}catch(e){}setTimeout(loadTv,400);}
 async function musicState(){
   const np=document.getElementById('mnp');
   try{const r=await fetch('/music/state',{cache:'no-store'});const d=await r.json();
@@ -607,6 +645,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_json(music_action(action))
             else:
                 self._send_json(json.dumps({"error": "unknown music action"}).encode(), 404)
+        elif parsed.path == "/tv/lineup":
+            self._send_json(tv_lineup())
+        elif parsed.path == "/tv/set":
+            self._send_json(tv_set(parse_qs(parsed.query).get("ch", [""])[0]))
         else:
             body = PAGE.encode("utf-8")
             self.send_response(200)

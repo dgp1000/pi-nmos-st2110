@@ -1,5 +1,7 @@
 # Atoll
 
+> **Running the rig?** See [STARTUP.md](STARTUP.md) for the bring-up / shutdown runbook.
+
 **An iPad-controlled ST 2110 / NMOS broadcast-over-IP multiviewer and monitoring rig.**
 
 Atoll turns a PC with an NVIDIA GPU into a small broadcast-IP monitoring island: a layout-switchable

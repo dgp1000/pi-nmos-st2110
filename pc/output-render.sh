@@ -56,11 +56,11 @@ tile_full() {
 # TS; Pi raw's audio is the separate ST 2110-30 L24 flow on 239.10.10.10:5004.
 audio_cmd() {   # $1 = active source
   case "$1" in
-    hevc) echo "gst-launch-1.0 -q udpsrc address=$HEVC_GRP port=$HEVC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
-    jxs)  echo "gst-launch-1.0 -q udpsrc address=$HOME_GRP port=$HOME_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
-    music) echo "gst-launch-1.0 -q udpsrc address=$MUSIC_GRP port=$MUSIC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
-    reels) echo "gst-launch-1.0 -q udpsrc address=$REELS_GRP port=$REELS_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
-    raw)  echo "gst-launch-1.0 -q udpsrc address=$PI_AUDIO_GRP port=$PI_AUDIO_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=16777216 caps='application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96' ! rtpjitterbuffer latency=500 ! rtpL24depay ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000" ;;
+    hevc) echo "gst-launch-1.0 -q udpsrc address=$HEVC_GRP port=$HEVC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! $ASINK" ;;
+    jxs)  echo "gst-launch-1.0 -q udpsrc address=$HOME_GRP port=$HOME_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! $ASINK" ;;
+    music) echo "gst-launch-1.0 -q udpsrc address=$MUSIC_GRP port=$MUSIC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! $ASINK" ;;
+    reels) echo "gst-launch-1.0 -q udpsrc address=$REELS_GRP port=$REELS_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! $ASINK" ;;
+    raw)  echo "gst-launch-1.0 -q udpsrc address=$PI_AUDIO_GRP port=$PI_AUDIO_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=16777216 caps='application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96' ! rtpjitterbuffer latency=500 ! rtpL24depay ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! $ASINK" ;;
   esac
 }
 
@@ -96,6 +96,8 @@ cur_key=""
 pid=""
 apid=""
 aud_key="__init__"
+ADELAY_FILE="$ATOLL_RUN/audio-delay-ms"
+last_adelay="__init__"
 last_tvch=""
 tv_settle=0
 kill_view()  { [ -n "$pid" ]  && kill -- -"$pid"  2>/dev/null; pid=""; }
@@ -134,14 +136,16 @@ while true; do
   # (lip-synced) audio; run the standalone follower only where the video has none:
   # side/multi, and single+raw. Switches instantly without touching the video. ---
   if [ "$layout" = "single" ] && [ "$active" != "raw" ]; then akey=""; else akey="$active"; fi
-  if [ "$akey" != "$aud_key" ]; then
+  adelay="$(cat "$ADELAY_FILE" 2>/dev/null)"; [[ "$adelay" =~ ^[0-9]+$ ]] || adelay=0
+  if [ "$akey" != "$aud_key" ] || [ "$adelay" != "$last_adelay" ]; then
     kill_audio
+    if [ "$adelay" -gt 0 ]; then ASINK="pulsesink sync=true buffer-time=200000 ts-offset=$((adelay*1000000))"; else ASINK="pulsesink sync=false buffer-time=200000"; fi
     if [ -n "$akey" ]; then
       acmd="$(audio_cmd "$akey")"
       [ -n "$acmd" ] && { setsid bash -c "$acmd" >/tmp/output-audio.log 2>&1 & apid=$!; }
     fi
-    aud_key="$akey"
-    echo "$(date +%T) audio -> ${akey:-embedded}"
+    aud_key="$akey"; last_adelay="$adelay"
+    echo "$(date +%T) audio -> ${akey:-embedded} (delay ${adelay}ms)"
   fi
   sleep 1
 done

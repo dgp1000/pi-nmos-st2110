@@ -37,9 +37,9 @@ raw_video()  { echo "udpsrc address=$PI_RAW_GRP port=$PI_RAW_PORT multicast-ifac
 tile_full() {
   local src=$1 idx=$2 w=$3 h=$4 name="t$2" grp port label
   case "$src" in
-    raw)   echo "$(raw_video "$w" "$h") ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_$idx"; return ;;
-    jpegxs) echo "videotestsrc pattern=ball is-live=true ! video/x-raw,width=$w,height=$h,framerate=30/1 ! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert ! textoverlay text='JPEG XS 2110-22' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_$idx"; return ;;
-    j2k) echo "udpsrc address=$J2K_GRP port=$J2K_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 caps='application/x-rtp,media=video,encoding-name=JPEG2000,clock-rate=90000,sampling=YCbCr-4:2:0' ! rtpj2kdepay ! avdec_jpeg2000 ! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! video/x-raw,width=$w,height=$h ! textoverlay text='JPEG 2000' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_$idx"; return ;;
+    raw)   echo "$(raw_video "$w" "$h") ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! queue leaky=downstream max-size-buffers=2 ! mix.sink_$idx"; return ;;
+    jpegxs) echo "videotestsrc pattern=ball is-live=true ! video/x-raw,width=$w,height=$h,framerate=30/1 ! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert ! textoverlay text='JPEG XS 2110-22' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! queue leaky=downstream max-size-buffers=2 ! mix.sink_$idx"; return ;;
+    j2k) echo "udpsrc address=$J2K_GRP port=$J2K_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 caps='application/x-rtp,media=video,encoding-name=JPEG2000,clock-rate=90000,sampling=YCbCr-4:2:0' ! rtpj2kdepay ! avdec_jpeg2000 ! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! video/x-raw,width=$w,height=$h ! textoverlay text='JPEG 2000' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! queue leaky=downstream max-size-buffers=2 ! mix.sink_$idx"; return ;;
     hevc)  grp=$HEVC_GRP;  port=$HEVC_PORT;  label='Live TV' ;;
     jxs)   grp=$HOME_GRP;  port=$HOME_PORT;  label='Home videos' ;;
     music) grp=$MUSIC_GRP; port=$MUSIC_PORT; label='Music' ;;
@@ -48,7 +48,7 @@ tile_full() {
   esac
   local abranch=" $name. ! queue ! mpegaudioparse ! fakesink sync=false"
   [ "$src" = music ] && abranch=""   # video-only placeholder: no TS audio pad to terminate
-  echo "$(hevc_tile "$grp" "$port" "$w" "$h" "$name") ! textoverlay text='$label' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_$idx$abranch"
+  echo "$(hevc_tile "$grp" "$port" "$w" "$h" "$name") ! textoverlay text='$label' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! queue leaky=downstream max-size-buffers=2 ! mix.sink_$idx$abranch"
 }
 
 # Audio-only pipeline for the SELECTED source (used in side/multi, and single+raw); the
@@ -96,8 +96,6 @@ cur_key=""
 pid=""
 apid=""
 aud_key="__init__"
-last_tvch=""
-tv_settle=0
 kill_view()  { [ -n "$pid" ]  && kill -- -"$pid"  2>/dev/null; pid=""; }
 kill_audio() { [ -n "$apid" ] && kill -- -"$apid" 2>/dev/null; apid=""; }
 trap 'kill_view; kill_audio; exit 0' INT TERM EXIT
@@ -112,10 +110,6 @@ while true; do
   [ -z "$slots" ]  && slots="hevc,raw,jxs,music"
   [ -z "$active" ] && { sleep 1; continue; }
 
-  # --- auto-rebuild when the Live TV channel changes (avoids the retune-gap compositor stall) ---
-  tvch="$(cat "$ATOLL_RUN/tv-channel" 2>/dev/null)"
-  if [ "$tvch" != "$last_tvch" ]; then last_tvch="$tvch"; tv_settle=6; fi
-  if [ "$tv_settle" -gt 0 ]; then tv_settle=$((tv_settle-1)); [ "$tv_settle" -eq 0 ] && cur_key="__force_rebuild__"; fi
   # --- video: relaunch the pipeline only on layout/source/tile-assignment change ---
   case "$layout" in single) key="single:$active";; multi) key="multi:$slots";; *) key="$layout";; esac
   if [ "$key" != "$cur_key" ]; then

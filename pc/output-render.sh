@@ -105,9 +105,9 @@ trap 'kill_view; kill_audio; exit 0' INT TERM EXIT
 echo "output-render: following $PANEL/state -> monitor $SCREEN (Ctrl+C to stop)"
 while true; do
   resp="$(curl -s --max-time 2 "$PANEL/state" || true)"
-  active="$(printf '%s' "$resp" | sed -n 's/.*"active"[: ]*"\([a-z]*\)".*/\1/p')"
-  layout="$(printf '%s' "$resp" | sed -n 's/.*"layout"[: ]*"\([a-z]*\)".*/\1/p')"
-  slots="$(printf '%s' "$resp" | sed -n 's/.*"slots"[: ]*"\([a-z,]*\)".*/\1/p')"
+  active="$(printf '%s' "$resp" | sed -n 's/.*"active"[: ]*"\([a-z0-9]*\)".*/\1/p')"
+  layout="$(printf '%s' "$resp" | sed -n 's/.*"layout"[: ]*"\([a-z0-9]*\)".*/\1/p')"
+  slots="$(printf '%s' "$resp" | sed -n 's/.*"slots"[: ]*"\([a-z0-9,]*\)".*/\1/p')"
   [ -z "$layout" ] && layout="single"
   [ -z "$slots" ]  && slots="hevc,raw,jxs,music"
   [ -z "$active" ] && { sleep 1; continue; }

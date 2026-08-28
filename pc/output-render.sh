@@ -96,6 +96,8 @@ cur_key=""
 pid=""
 apid=""
 aud_key="__init__"
+last_tvch=""
+tv_settle=0
 kill_view()  { [ -n "$pid" ]  && kill -- -"$pid"  2>/dev/null; pid=""; }
 kill_audio() { [ -n "$apid" ] && kill -- -"$apid" 2>/dev/null; apid=""; }
 trap 'kill_view; kill_audio; exit 0' INT TERM EXIT
@@ -110,6 +112,10 @@ while true; do
   [ -z "$slots" ]  && slots="hevc,raw,jxs,music"
   [ -z "$active" ] && { sleep 1; continue; }
 
+  # --- recover on channel change / pipeline death (single gst-launch dies on a tile decode error) ---
+  tvch="$(cat "$ATOLL_RUN/tv-channel" 2>/dev/null)"
+  if [ "$tvch" != "$last_tvch" ]; then last_tvch="$tvch"; tv_settle=6; fi
+  if [ "$tv_settle" -gt 0 ]; then tv_settle=$((tv_settle-1)); [ "$tv_settle" -eq 0 ] && cur_key="__force_rebuild__"; fi
   # --- video: relaunch the pipeline only on layout/source/tile-assignment change ---
   case "$layout" in single) key="single:$active";; multi) key="multi:$slots";; *) key="$layout";; esac
   if [ "$key" != "$cur_key" ]; then

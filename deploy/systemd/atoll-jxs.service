@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll JPEG XS source (ST 2110-22 codec) -> 239.10.10.60:5030
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/bin/bash /home/david/pi-nmos-st2110/pc/jxs-send.sh
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll JPEG 2000 source (J2K/RTP RFC 5371) -> 239.10.10.70:5050
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/bin/bash /home/david/pi-nmos-st2110/pc/j2k-send.sh
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

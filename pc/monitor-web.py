@@ -38,6 +38,7 @@ SOURCES = {
     "hevc": {"label": None},                            # PC HEVC 4K island flow (not NMOS)
     "music": {"label": None},                           # Music channel (Mac->island 239.10.10.30:5012, not NMOS)
     "jpegxs": {"label": None},                          # JPEG XS ST 2110-22 codec (local encode->decode)
+    "j2k": {"label": None},                             # JPEG 2000 island flow (J2K/RTP RFC 5371)
     "reels": {"label": None},                           # Test Reels (PC->island 239.10.10.31:5014; NMOS m1 later)
 }
 DEFAULT_SRC = "jxs"
@@ -352,6 +353,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="bmusic" onclick="take('music',this)">Music</button>
    <button id="breels" onclick="take('reels',this)">Test Reels</button>
    <button id="bjpegxs" onclick="take('jpegxs',this)">JPEG XS</button>
+   <button id="bj2k" onclick="take('j2k',this)">JPEG 2000</button>
   </div>
   <div id="info"></div>
   <div id="lay">
@@ -385,7 +387,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
 const FPS=__FPS__;
 let offset=0, ptp={}, synced=false;
 const BTN={jxs:'bjxs',raw:'braw',hevc:'bhevc',music:'bmusic',reels:'breels'};
-const SRCLABEL={jxs:'Home',raw:'Pi raw',hevc:"Live TV",music:'Music',reels:'Test Reels',jpegxs:'JPEG XS'};
+const SRCLABEL={jxs:'Home',raw:'Pi raw',hevc:"Live TV",music:'Music',reels:'Test Reels',jpegxs:'JPEG XS',j2k:'JPEG 2000'};
 let selSlot=null, curSlots=['hevc','raw','jxs','music'];
 function selSlotFn(i){ selSlot=(selSlot===i)?null:i; renderSlots(); }
 function renderSlots(){

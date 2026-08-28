@@ -39,6 +39,7 @@ tile_full() {
   case "$src" in
     raw)   echo "$(raw_video "$w" "$h") ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_$idx"; return ;;
     jpegxs) echo "videotestsrc pattern=ball is-live=true ! video/x-raw,width=$w,height=$h,framerate=30/1 ! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert ! textoverlay text='JPEG XS 2110-22' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_$idx"; return ;;
+    j2k) echo "udpsrc address=$J2K_GRP port=$J2K_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 caps='application/x-rtp,media=video,encoding-name=JPEG2000,clock-rate=90000,sampling=YCbCr-4:2:0' ! rtpj2kdepay ! avdec_jpeg2000 ! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! video/x-raw,width=$w,height=$h ! textoverlay text='JPEG 2000' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_$idx"; return ;;
     hevc)  grp=$HEVC_GRP;  port=$HEVC_PORT;  label='Live TV' ;;
     jxs)   grp=$HOME_GRP;  port=$HOME_PORT;  label='Home videos' ;;
     music) grp=$MUSIC_GRP; port=$MUSIC_PORT; label='Music' ;;
@@ -72,6 +73,7 @@ build_pipeline() {   # $1=layout  $2=active
         music) hevc_full "$MUSIC_GRP" "$MUSIC_PORT" ;;
         reels) hevc_full "$REELS_GRP" "$REELS_PORT" ;;
         jpegxs) echo "gst-launch-1.0 -q videotestsrc pattern=ball is-live=true ! video/x-raw,width=1280,height=720,framerate=30/1 ! textoverlay text='JPEG XS 2110-22 codec' valignment=top halignment=center font-desc='$F' shaded-background=true ! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert ! videoscale ! $BRAND ! $VIDEO_SINK sync=false" ;;
+        j2k) echo "gst-launch-1.0 -q udpsrc address=$J2K_GRP port=$J2K_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 caps='application/x-rtp,media=video,encoding-name=JPEG2000,clock-rate=90000,sampling=YCbCr-4:2:0' ! rtpj2kdepay ! avdec_jpeg2000 ! videoconvert ! videoscale ! $BRAND ! $VIDEO_SINK sync=false" ;;
         raw)  echo "gst-launch-1.0 -q udpsrc address=$PI_RAW_GRP port=$PI_RAW_PORT multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! $BRAND ! $VIDEO_SINK sync=false" ;;
       esac ;;
     side)

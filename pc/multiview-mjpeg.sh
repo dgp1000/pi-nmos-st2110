@@ -32,6 +32,9 @@ src_full() {
 # one tile (video-only) wired to mix.sink_<idx>, scaled to WxH, with a label
 tile() {   # $1=key $2=w $3=h $4=idx
   local key="$1" w="$2" h="$3" idx="$4" lab; lab="$(labof "$key")"
+  if [ "$key" = j2k ]; then
+    echo "udpsrc address=$J2K_GRP port=$J2K_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 caps='application/x-rtp,media=video,encoding-name=JPEG2000,clock-rate=90000,sampling=YCbCr-4:2:0' ! rtpj2kdepay ! avdec_jpeg2000 ! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! video/x-raw,width=$w,height=$h ! textoverlay text=\"JPEG 2000\" valignment=top halignment=left xpad=14 ypad=10 font-desc=\"$F\" shaded-background=true ! mix.sink_$idx"; return
+  fi
   if [ "$key" = jpegxs ]; then
     echo "videotestsrc pattern=ball is-live=true ! video/x-raw,width=$w,height=$h,framerate=30/1 ! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert ! textoverlay text=\"JPEG XS 2110-22\" valignment=top halignment=left xpad=14 ypad=10 font-desc=\"$F\" shaded-background=true ! mix.sink_$idx"; return
   fi

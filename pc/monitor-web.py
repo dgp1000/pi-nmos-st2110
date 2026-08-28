@@ -451,7 +451,10 @@ async function music(action){
 }
 let tvOpen=false;
 async function loadTv(){try{const r=await fetch('/tv/lineup',{cache:'no-store'});const d=await r.json();
-document.getElementById('tvchan').innerHTML=(d.channels||[]).map(c=>'<button class="tvch'+(c.num===d.current?' sel':'')+'" onclick="tvPick(\''+c.num+'\')">'+c.num+' '+c.name+(c.hd?' HD':'')+'</button>').join('');}catch(e){}}
+const g=document.getElementById('tvchan');
+g.innerHTML=(d.channels||[]).map(c=>'<button class="tvch'+(c.num===d.current?' sel':'')+'" data-ch="'+c.num+'">'+c.num+' '+c.name+(c.hd?' HD':'')+'</button>').join('');
+g.querySelectorAll('.tvch').forEach(b=>b.onclick=function(){tvPick(b.getAttribute('data-ch'));});
+}catch(e){}}
 function toggleTv(){tvOpen=!tvOpen;document.getElementById('tvchan').style.display=tvOpen?'grid':'none';if(tvOpen)loadTv();}
 async function tvPick(ch){try{await fetch('/tv/set?ch='+encodeURIComponent(ch),{cache:'no-store'});}catch(e){}setTimeout(loadTv,400);}
 async function musicState(){

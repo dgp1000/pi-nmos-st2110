@@ -59,3 +59,11 @@ next WSL boot.
   come up black — pick a plain HD channel.
 - Rapid multicast join/leave can wedge a group's Windows-side membership; if a tile goes dark on a
   specific group, move it to a nearby free port (a port collision with Windows is why J2K is on 5016).
+- **Live TV A/V sync (multi/side)**: the audio follower is a separate pipeline from the video
+  tile, so it can drift. Tune it live by writing milliseconds to the delay file — higher if audio
+  still leads the picture, lower if it now lags; `0` restores the old (undelayed) behavior:
+  `echo 300 > ~/atoll-run/audio-delay-ms`  (seeded at 250). The follower re-applies within ~1s.
+  If `sync=true` audio ever stutters, set it back to `0`.
+- **multiview-app.py** is an EXPERIMENTAL per-tile renderer (each tile its own pipeline via
+  intervideosink, so a channel change restarts only that tile). Isolation works but 4-channel
+  startup is still racy — `output-render.sh` remains the default renderer. See the file header.

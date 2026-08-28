@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll Home-videos tile sender (-> 239.10.10.22:5008)
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/bin/bash -c "source ./atoll.conf && exec bash media-send.sh --jxs \"$HOME_PLAYLIST\""
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

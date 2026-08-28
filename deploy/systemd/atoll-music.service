@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll music channel bridge (Mac Now-Playing -> 239.10.10.30:5012 HEVC)
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/bin/bash /home/david/pi-nmos-st2110/pc/music-channel.sh
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

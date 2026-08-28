@@ -347,7 +347,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   <div id="ctrl">
    <button id="bjxs" onclick="take('jxs',this)">Home videos</button>
    <button id="braw" onclick="take('raw',this)">Pi raw 2110-20</button>
-   <button id="bhevc" onclick="take('hevc',this)">PC HEVC 4K</button>
+   <button id="bhevc" onclick="take('hevc',this)">Live TV</button>
    <button id="bmusic" onclick="take('music',this)">Music</button>
    <button id="breels" onclick="take('reels',this)">Test Reels</button>
   </div>
@@ -383,7 +383,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
 const FPS=__FPS__;
 let offset=0, ptp={}, synced=false;
 const BTN={jxs:'bjxs',raw:'braw',hevc:'bhevc',music:'bmusic',reels:'breels'};
-const SRCLABEL={jxs:'Home',raw:'Pi raw',hevc:'PC HEVC',music:'Music',reels:'Test Reels'};
+const SRCLABEL={jxs:'Home',raw:'Pi raw',hevc:"Live TV",music:'Music',reels:'Test Reels'};
 let selSlot=null, curSlots=['hevc','raw','jxs','music'];
 function selSlotFn(i){ selSlot=(selSlot===i)?null:i; renderSlots(); }
 function renderSlots(){

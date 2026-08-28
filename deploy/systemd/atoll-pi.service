@@ -1,0 +1,13 @@
+[Unit]
+Description=Atoll Pi ST 2110 generators (PTP grandmaster + L24 audio + raw video + web clock)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash /home/dgperkins/launch-all.sh
+ExecStop=/bin/bash /home/dgperkins/stop-all.sh
+
+[Install]
+WantedBy=multi-user.target

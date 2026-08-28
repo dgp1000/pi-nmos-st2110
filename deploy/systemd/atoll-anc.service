@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll ST 2110-40 ancillary (ATC timecode, RFC 8331) -> 239.10.10.50:5020
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/bin/bash -c "source ./atoll.conf && ANC_GRP=$ANC_GRP ANC_PORT=$ANC_PORT ISLAND_PC_IP=$ISLAND_PC_IP MCAST_TTL=$MCAST_TTL exec python3 anc-send.py"
+Restart=on-failure
+RestartSec=3
+[Install]
+WantedBy=multi-user.target

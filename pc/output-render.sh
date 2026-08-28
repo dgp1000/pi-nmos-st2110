@@ -4,7 +4,7 @@
 # GStreamer pipeline only when the relevant key changes.
 #
 #   layout=single -> the active source fullscreen (follows IS-05 takes)
-#   layout=side   -> PC HEVC 4K | Pi raw 2110-20, side by side
+#   layout=side   -> Live TV | Pi raw 2110-20, side by side
 #   layout=multi  -> 2x2 mosaic: HEVC 4K, Pi raw, Home videos (5008), clock
 #
 # Sources: HEVC on 239.10.10.65:5010 and Home videos on 239.10.10.22:5008 are both HEVC/TS
@@ -20,7 +20,7 @@ SCREEN="${1:-2}"
 # GALLIUM_DRIVER + PULSE_SERVER come from atoll.conf (WSL only). The window-mover is WSL-only too.
 MOVER=""
 [ "${ATOLL_PLATFORM:-}" = wsl ] && MOVER="$(wslpath -w "$DIR/move-window-screen.ps1")"
-RAW_CAPS="application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)RAW,sampling=(string)YCbCr-4:2:2,depth=(string)8,width=(string)320,height=(string)240,payload=(int)96"
+RAW_CAPS="application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)RAW,sampling=(string)YCbCr-4:2:2,depth=(string)8,width=(string)320,height=(string)240,colorimetry=(string)BT601-5,payload=(int)96"
 F="Sans Bold 22"
 # Semi-transparent "ATOLL" bug, top-right of every output (single/side/multi). color is
 # 0xAARRGGBB -> 0x80 = ~50% white; no shaded box so it reads as a transparent watermark.
@@ -38,13 +38,15 @@ tile_full() {
   local src=$1 idx=$2 w=$3 h=$4 name="t$2" grp port label
   case "$src" in
     raw)   echo "$(raw_video "$w" "$h") ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_$idx"; return ;;
-    hevc)  grp=$HEVC_GRP;  port=$HEVC_PORT;  label='PC HEVC 4K' ;;
+    hevc)  grp=$HEVC_GRP;  port=$HEVC_PORT;  label='Live TV' ;;
     jxs)   grp=$HOME_GRP;  port=$HOME_PORT;  label='Home videos' ;;
     music) grp=$MUSIC_GRP; port=$MUSIC_PORT; label='Music' ;;
     reels) grp=$REELS_GRP; port=$REELS_PORT; label='Test Reels' ;;
     *)     grp=$HEVC_GRP;  port=$HEVC_PORT;  label="$src" ;;
   esac
-  echo "$(hevc_tile "$grp" "$port" "$w" "$h" "$name") ! textoverlay text='$label' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_$idx $name. ! queue ! mpegaudioparse ! fakesink sync=false"
+  local abranch=" $name. ! queue ! mpegaudioparse ! fakesink sync=false"
+  [ "$src" = music ] && abranch=""   # video-only placeholder: no TS audio pad to terminate
+  echo "$(hevc_tile "$grp" "$port" "$w" "$h" "$name") ! textoverlay text='$label' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_$idx$abranch"
 }
 
 # Audio-only pipeline for the SELECTED source (used in side/multi, and single+raw); the
@@ -72,7 +74,7 @@ build_pipeline() {   # $1=layout  $2=active
       esac ;;
     side)
       echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=270 sink_1::xpos=960 sink_1::ypos=270 ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! $VIDEO_SINK sync=false \
-        $(hevc_tile "$HEVC_GRP" "$HEVC_PORT" 960 540 hd) ! textoverlay text='PC HEVC 4K' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_0 \
+        $(hevc_tile "$HEVC_GRP" "$HEVC_PORT" 960 540 hd) ! textoverlay text='Live TV' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_0 \
         hd. ! mpegaudioparse ! fakesink sync=false \
         $(raw_video 960 540) ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_1" ;;
     multi)
@@ -90,6 +92,8 @@ cur_key=""
 pid=""
 apid=""
 aud_key="__init__"
+last_tvch=""
+tv_settle=0
 kill_view()  { [ -n "$pid" ]  && kill -- -"$pid"  2>/dev/null; pid=""; }
 kill_audio() { [ -n "$apid" ] && kill -- -"$apid" 2>/dev/null; apid=""; }
 trap 'kill_view; kill_audio; exit 0' INT TERM EXIT
@@ -104,6 +108,10 @@ while true; do
   [ -z "$slots" ]  && slots="hevc,raw,jxs,music"
   [ -z "$active" ] && { sleep 1; continue; }
 
+  # --- auto-rebuild when the Live TV channel changes (avoids the retune-gap compositor stall) ---
+  tvch="$(cat "$ATOLL_RUN/tv-channel" 2>/dev/null)"
+  if [ "$tvch" != "$last_tvch" ]; then last_tvch="$tvch"; tv_settle=6; fi
+  if [ "$tv_settle" -gt 0 ]; then tv_settle=$((tv_settle-1)); [ "$tv_settle" -eq 0 ] && cur_key="__force_rebuild__"; fi
   # --- video: relaunch the pipeline only on layout/source/tile-assignment change ---
   case "$layout" in single) key="single:$active";; multi) key="multi:$slots";; *) key="$layout";; esac
   if [ "$key" != "$cur_key" ]; then

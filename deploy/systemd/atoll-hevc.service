@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll HEVC tile sender (PC HEVC -> 239.10.10.65:5010)
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/bin/bash -c "source ./atoll.conf && exec bash media-send.sh --hevc \"$BBB_FILE\""
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

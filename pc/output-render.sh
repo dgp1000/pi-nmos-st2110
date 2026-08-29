@@ -139,7 +139,7 @@ while true; do
   adelay="$(cat "$ADELAY_FILE" 2>/dev/null)"; [[ "$adelay" =~ ^[0-9]+$ ]] || adelay=0
   if [ "$akey" != "$aud_key" ] || [ "$adelay" != "$last_adelay" ]; then
     kill_audio
-    if [ "$adelay" -gt 0 ]; then ASINK="pulsesink sync=true buffer-time=200000 ts-offset=$((adelay*1000000))"; else ASINK="pulsesink sync=false buffer-time=200000"; fi
+    if [ "$adelay" -gt 0 ]; then ASINK="queue min-threshold-time=$((adelay*1000000)) max-size-time=$(( (adelay+3000)*1000000 )) max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000"; else ASINK="pulsesink sync=false buffer-time=200000"; fi
     if [ -n "$akey" ]; then
       acmd="$(audio_cmd "$akey")"
       [ -n "$acmd" ] && { setsid bash -c "$acmd" >/tmp/output-audio.log 2>&1 & apid=$!; }

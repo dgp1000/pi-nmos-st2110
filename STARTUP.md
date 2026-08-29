@@ -59,11 +59,17 @@ next WSL boot.
   come up black — pick a plain HD channel.
 - Rapid multicast join/leave can wedge a group's Windows-side membership; if a tile goes dark on a
   specific group, move it to a nearby free port (a port collision with Windows is why J2K is on 5016).
-- **Live TV A/V sync (multi/side)**: the audio follower is a separate pipeline from the video
-  tile, so it can drift. Tune it live by writing milliseconds to the delay file — higher if audio
-  still leads the picture, lower if it now lags; `0` restores the old (undelayed) behavior:
-  `echo 300 > ~/atoll-run/audio-delay-ms`  (seeded at 250). The follower re-applies within ~1s.
-  If `sync=true` audio ever stutters, set it back to `0`.
-- **multiview-app.py** is an EXPERIMENTAL per-tile renderer (each tile its own pipeline via
-  intervideosink, so a channel change restarts only that tile). Isolation works but 4-channel
-  startup is still racy — `output-render.sh` remains the default renderer. See the file header.
+- **Live TV A/V sync**: single / follow-take view is lip-synced (audio+video share one pipeline).
+  In multi/side the audio is a SEPARATE follower with no shared clock, so its offset vs the video is
+  non-deterministic (each restart lands at a different phase) and can't be reliably tuned. A knob
+  exists — `~/atoll-run/audio-delay-ms` (queue min-threshold-time delay, default 0 = smooth, audio
+  slightly early) — but don't expect it to lock. For synced Live TV audio, watch in single view.
+- **Seamless channel changes**: the `atoll-tv` service runs `tv-send-seamless.py` — a continuous
+  HEVC encoder tail (fed by intervideosrc/interaudiosrc) whose SOURCE pipeline restarts on a channel
+  change. 5010 never stops, so the multiview never sees a discontinuity and no longer crashes on a
+  channel change (only the Live TV tile briefly freezes during the HDHR retune). `tv-send.sh` is the
+  older restart-the-whole-pipeline sender, kept as a fallback.
+- **multiview-app.py** is an OPTIONAL per-tile renderer (each tile its own pipeline via
+  intervideosink; tile sinks MUST be sync=false). It genuinely isolates a tile's decode error, but
+  intervideosrc flashes black when a tile is briefly late, so `output-render.sh` stays the default.
+  The channel-change problem it targeted was ultimately solved in tv-send instead.

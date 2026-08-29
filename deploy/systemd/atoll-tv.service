@@ -5,7 +5,7 @@ Wants=network-online.target
 [Service]
 User=david
 WorkingDirectory=/home/david/pi-nmos-st2110/pc
-ExecStart=/bin/bash /home/david/pi-nmos-st2110/pc/tv-send.sh
+ExecStart=/usr/bin/python3 /home/david/pi-nmos-st2110/pc/tv-send-seamless.py
 Restart=on-failure
 RestartSec=5
 [Install]

@@ -18,13 +18,11 @@
 #
 #  Run in a LOCAL WSL terminal:  python3 pc/multiview-app.py [SCREEN]   (SCREEN=2 default)
 #
-#  STATUS: EXPERIMENTAL, not the default renderer (output-render.sh still is). The isolation
-#  concept is proven -- the compositor holds solid 30fps straight through a tile's source dying
-#  and restarting (see the intervideosink prototype). What still needs hardening before this can
-#  be the daily driver: (a) intervideosink<->intervideosrc startup CONNECTION is racy across 4
-#  channels -- starting the tile sinks before the compositor's srcs (done below) helps but is not
-#  yet 100%; (b) live-HEVC tiles occasionally stall in PAUSED preroll; (c) the software codecs
-#  (SVT JPEG XS, avdec_jpeg2000) can starve for CPU when several run at once. Treat as WIP.
+#  Verified: all four tiles render, and a live TV channel change blips ONLY the Live TV tile for
+#  ~1s (its decoder throws "Internal data stream error" on the retune -> that one pipeline restarts
+#  and self-recovers) while the compositor holds ~30fps and the other three tiles never flinch.
+#  Key detail: tile intervideosinks MUST be sync=false -- sync=true stalls live-source preroll and
+#  was the sole reason tiles came up black earlier (it was never an intervideo connection race).
 # ===========================================================================
 import gi, os, sys, time, subprocess, threading
 gi.require_version("Gst", "1.0")
@@ -38,11 +36,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 NEED = ["ISLAND_IFACE", "VIDEO_SINK", "PANEL_PORT", "ATOLL_RUN", "ATOLL_PLATFORM",
         "HEVC_GRP", "HEVC_PORT", "HOME_GRP", "HOME_PORT", "MUSIC_GRP", "MUSIC_PORT",
         "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT", "PI_AUDIO_GRP", "PI_AUDIO_PORT",
-        "J2K_GRP", "J2K_PORT"]
+        "J2K_GRP", "J2K_PORT",
+        # GPU/display/audio env the sinks need (atoll.conf exports these on WSL)
+        "GALLIUM_DRIVER", "PULSE_SERVER", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"]
 raw = subprocess.check_output(
     ["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)],
     text=True)
 CFG = dict(line.split("=", 1) for line in raw.strip().splitlines() if "=" in line)
+# propagate the GPU/display/audio env into our own process so waylandsink/pulsesink find them
+for k in ("GALLIUM_DRIVER", "PULSE_SERVER", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"):
+    if CFG.get(k):
+        os.environ[k] = CFG[k]
 IFACE = CFG["ISLAND_IFACE"] or "eth0"
 SINK = CFG["VIDEO_SINK"] or "waylandsink fullscreen=true"
 PANEL = f"http://localhost:{CFG['PANEL_PORT']}"
@@ -66,7 +70,7 @@ def ts_tile(group, port, label, ch, drain_audio=True):
     a = f" d. ! queue ! mpegaudioparse ! fakesink sync=false" if drain_audio else ""
     return (f"udpsrc address={group} port={port} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 "
             f"! tsdemux name=d d. ! h265parse ! queue ! nvh265dec ! cudadownload ! videorate ! video/x-raw,framerate=30/1 "
-            f"! videoconvert ! videoscale ! {OUT} ! textoverlay text='{label}' {LBL} ! intervideosink channel={ch} sync=true{a}")
+            f"! videoconvert ! videoscale ! {OUT} ! textoverlay text='{label}' {LBL} ! intervideosink channel={ch} sync=false{a}")
 
 # --- source-key -> a full tile pipeline string ending in intervideosink channel=ch ---
 def tile_desc(src, ch):
@@ -78,16 +82,16 @@ def tile_desc(src, ch):
         g, p = grp("PI_RAW")
         return (f"udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true caps=\"{RAW_CAPS}\" "
                 f"! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! {OUT} "
-                f"! textoverlay text='Pi raw 2110-20' {LBL} ! intervideosink channel={ch} sync=true")
+                f"! textoverlay text='Pi raw 2110-20' {LBL} ! intervideosink channel={ch} sync=false")
     if src == "j2k":
         g, p = grp("J2K")
         return (f"udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{J2K_CAPS}\" "
                 f"! rtpj2kdepay ! avdec_jpeg2000 ! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! {OUT} "
-                f"! textoverlay text='JPEG 2000' {LBL} ! intervideosink channel={ch} sync=true")
+                f"! textoverlay text='JPEG 2000' {LBL} ! intervideosink channel={ch} sync=false")
     if src == "jpegxs":
         return (f"videotestsrc pattern=ball is-live=true ! video/x-raw,width={TW},height={TH},framerate=30/1 "
                 f"! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert ! {OUT} "
-                f"! textoverlay text='JPEG XS 2110-22' {LBL} ! intervideosink channel={ch} sync=true")
+                f"! textoverlay text='JPEG XS 2110-22' {LBL} ! intervideosink channel={ch} sync=false")
     # unknown -> treat as Live TV group with the key as label
     g, p = grp("HEVC");  return ts_tile(g, p, src, ch)
 
@@ -214,8 +218,10 @@ print(f"multiview-app: following {PANEL}/state -> screen {SCREEN} (Ctrl+C to sto
 
 def move_window():
     try:
+        from shutil import which
+        pwsh = which("powershell.exe") or "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
         mover = subprocess.check_output(["wslpath", "-w", os.path.join(HERE, "move-window-screen.ps1")], text=True).strip()
-        subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", mover,
+        subprocess.run([pwsh, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", mover,
                         "-Screen", SCREEN, "-TimeoutSec", "15"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception as e:
         print(f"(window mover skipped: {e})", flush=True)

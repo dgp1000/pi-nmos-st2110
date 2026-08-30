@@ -67,15 +67,9 @@ audio_cmd() {   # $1 = active source
 build_pipeline() {   # $1=layout  $2=active
   case "$1" in
     single)
-      case "$2" in
-        hevc)  hevc_full "$HEVC_GRP" "$HEVC_PORT" ;;
-        jxs)   hevc_full "$HOME_GRP" "$HOME_PORT" ;;
-        music) hevc_full "$MUSIC_GRP" "$MUSIC_PORT" ;;
-        reels) hevc_full "$REELS_GRP" "$REELS_PORT" ;;
-        jpegxs) echo "gst-launch-1.0 -q videotestsrc pattern=ball is-live=true ! video/x-raw,width=1280,height=720,framerate=30/1 ! textoverlay text='JPEG XS 2110-22 codec' valignment=top halignment=center font-desc='$F' shaded-background=true ! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert ! videoscale ! $BRAND ! $VIDEO_SINK sync=false" ;;
-        j2k) echo "gst-launch-1.0 -q udpsrc address=$J2K_GRP port=$J2K_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 caps='application/x-rtp,media=video,encoding-name=JPEG2000,clock-rate=90000,sampling=YCbCr-4:2:0' ! rtpj2kdepay ! avdec_jpeg2000 ! videoconvert ! videoscale ! $BRAND ! $VIDEO_SINK sync=false" ;;
-        raw)  echo "gst-launch-1.0 -q udpsrc address=$PI_RAW_GRP port=$PI_RAW_PORT multicast-iface=$IFACE auto-multicast=true caps='$RAW_CAPS' ! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert ! videoscale ! $BRAND ! $VIDEO_SINK sync=false" ;;
-      esac ;;
+      # video+audio+VU meters, following the active source (Python: cairooverlay + level)
+      echo "python3 \"$DIR/meter-view.py\" \"$2\" \"$SCREEN\""
+      ;;
     side)
       echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=270 sink_1::xpos=960 sink_1::ypos=270 ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! $VIDEO_SINK sync=false \
         $(hevc_tile "$HEVC_GRP" "$HEVC_PORT" 960 540 hd) ! textoverlay text='Live TV' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_0 \
@@ -132,7 +126,7 @@ while true; do
   # --- audio: follow the SELECTED source. single hevc/jxs already embed their own
   # (lip-synced) audio; run the standalone follower only where the video has none:
   # side/multi, and single+raw. Switches instantly without touching the video. ---
-  if [ "$layout" = "single" ] && [ "$active" != "raw" ]; then akey=""; else akey="$active"; fi
+  if [ "$layout" = "single" ]; then akey=""; else akey="$active"; fi
   adelay="$(cat "$ADELAY_FILE" 2>/dev/null)"; [[ "$adelay" =~ ^[0-9]+$ ]] || adelay=0
   if [ "$akey" != "$aud_key" ] || [ "$adelay" != "$last_adelay" ]; then
     kill_audio

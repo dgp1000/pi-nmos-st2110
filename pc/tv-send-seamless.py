@@ -28,11 +28,21 @@ STATE = sys.argv[3] if len(sys.argv) > 3 else os.path.join(CFG["ATOLL_RUN"], "tv
 TTL = CFG["MCAST_TTL"] or "1"
 DEFCH = CFG["TV_CHANNEL"] or "8.1"
 VCAPS = "video/x-raw,format=NV12,width=1280,height=720,framerate=30/1"
+# Video content runs ahead of audio (the two inter-bridges have different latency); delay the
+# video in the source by this much to line them up. Deterministic here, so tune once by eye.
+# Read from a file so it can be adjusted without editing code (source restart / channel change applies it).
+try:
+    VDELAY_MS = int(open(os.path.join(CFG["ATOLL_RUN"], "tv-video-delay-ms")).read().strip())
+except Exception:
+    VDELAY_MS = 743   # tuned by eye to lip-sync single-view Live TV (audio bridge ~740ms slower than video)
+VDELAY_NS = VDELAY_MS * 1_000_000
 
 # ---- persistent encoder tail: inter srcs -> HEVC + MP3 -> TS -> island. Never stops. ----
 ACAPS = "audio/x-raw,format=S16LE,rate=48000,channels=2,layout=interleaved"
 tail = Gst.parse_launch(
-    "intervideosrc channel=tvv timeout=200000000 ! " + VCAPS + " ! queue ! cudaupload "
+    # timeout 4s: on a brief source gap, repeat the last frame instead of emitting all-zero YUV
+    # (which renders GREEN, not black). Only a multi-second dropout eventually freezes/greens.
+    "intervideosrc channel=tvv timeout=4000000000 ! " + VCAPS + " ! queue ! cudaupload "
     "! nvh265enc rc-mode=cbr bitrate=6000 preset=p4 tune=low-latency gop-size=30 aud=true ! h265parse config-interval=-1 ! queue ! mux. "
     "interaudiosrc channel=tva ! " + ACAPS + " ! queue ! audioconvert ! audioresample "
     "! lamemp3enc target=bitrate bitrate=192 ! mpegaudioparse ! queue ! mux. "
@@ -43,7 +53,8 @@ tail = Gst.parse_launch(
 # format on the interaudiosink input as the interaudiosrc output (else only silence flows).
 def source_desc(ch):
     return (f"souphttpsrc location=http://{HDHR}:5004/auto/v{ch} is-live=true ! decodebin3 name=dec "
-            f"dec. ! queue ! videorate ! videoscale ! videoconvert ! {VCAPS} ! intervideosink channel=tvv sync=false "
+            f"dec. ! queue max-size-time=4000000000 max-size-bytes=0 max-size-buffers=0 min-threshold-time={VDELAY_NS} "
+            f"! videorate ! videoscale ! videoconvert ! {VCAPS} ! intervideosink channel=tvv sync=false "
             f"dec. ! queue ! audioconvert ! audioresample ! {ACAPS} ! interaudiosink channel=tva sync=false")
 
 src = {"pipe": None, "ch": None}

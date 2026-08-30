@@ -64,11 +64,14 @@ next WSL boot.
   non-deterministic (each restart lands at a different phase) and can't be reliably tuned. A knob
   exists — `~/atoll-run/audio-delay-ms` (queue min-threshold-time delay, default 0 = smooth, audio
   slightly early) — but don't expect it to lock. For synced Live TV audio, watch in single view.
-- **Seamless channel changes**: the `atoll-tv` service runs `tv-send-seamless.py` — a continuous
-  HEVC encoder tail (fed by intervideosrc/interaudiosrc) whose SOURCE pipeline restarts on a channel
-  change. 5010 never stops, so the multiview never sees a discontinuity and no longer crashes on a
-  channel change (only the Live TV tile briefly freezes during the HDHR retune). `tv-send.sh` is the
-  older restart-the-whole-pipeline sender, kept as a fallback.
+- **Seamless channel changes**: the `atoll-tv` service runs `tv-send-inputselect.py` — one pipeline
+  where souphttpsrc→decodebin3 feeds input-selectors (video+audio kept TOGETHER) → one encoder each →
+  mpegtsmux → 5010, with a black/silence fallback the selectors switch to during a retune so the
+  encoder never stops. 5010 stays continuous (the multiview never crashes on a channel change; the
+  Live TV tile shows black — not green — during the ~2-3s HDHR retune) AND A/V stays in sync with no
+  delay knob (PTS preserved end-to-end). Fallbacks kept in the repo: `tv-send-seamless.py` (older
+  inter-bridge design — had a ~0.7s A/V skew + green frames) and `tv-send.sh` (restart-the-whole-
+  pipeline — perfect single view but rebuilds the multiview on every channel change).
 - **multiview-app.py** is an OPTIONAL per-tile renderer (each tile its own pipeline via
   intervideosink; tile sinks MUST be sync=false). It genuinely isolates a tile's decode error, but
   intervideosrc flashes black when a tile is briefly late, so `output-render.sh` stays the default.

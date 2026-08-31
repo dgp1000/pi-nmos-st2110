@@ -48,7 +48,7 @@ ALEVEL = "audioconvert ! level name=lvl post-messages=true interval=50000000"
 # The named queue 'aq' holds min-threshold-time of audio -> a live-tunable playback delay to line the
 # (early) sync=false audio up with the picture. See ADELAY_FILE below.
 APLAY = ("audioconvert ! audio/x-raw,channels=2 ! audioresample "
-         "! queue name=aq max-size-time=4000000000 max-size-buffers=0 max-size-bytes=0 ! autoaudiosink sync=false")
+         "! queue name=aq leaky=downstream max-size-buffers=0 max-size-bytes=0 ! autoaudiosink sync=false")
 
 def ts_pipeline(g, p):   # HEVC video + MP3 audio in a TS (Live TV / Home / Music / Reels)
     return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=d "
@@ -139,9 +139,13 @@ def apply_adelay():
     try:
         ms = int(open(ADELAY_FILE).read().strip())
     except Exception:
-        ms = 150   # tuned by eye to lip-sync single-view Live TV audio
+        ms = 250   # tuned by eye to lip-sync single-view Live TV audio
     if aq:
-        aq.set_property("min-threshold-time", max(0, ms) * 1_000_000)
+        ns = max(0, ms) * 1_000_000
+        # set max just above the threshold so lowering the delay makes the leaky queue drop the
+        # excess (drains down); raising it holds more. -> tunes both directions live.
+        aq.set_property("max-size-time", ns + 400_000_000)
+        aq.set_property("min-threshold-time", ns)
     return True
 if aq:
     GLib.timeout_add_seconds(1, apply_adelay)

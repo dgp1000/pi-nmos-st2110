@@ -139,7 +139,7 @@ def apply_adelay():
     try:
         ms = int(open(ADELAY_FILE).read().strip())
     except Exception:
-        ms = 250   # tuned by eye to lip-sync single-view Live TV audio
+        ms = 150   # tuned by eye to lip-sync single-view Live TV audio
     if aq:
         aq.set_property("min-threshold-time", max(0, ms) * 1_000_000)
     return True

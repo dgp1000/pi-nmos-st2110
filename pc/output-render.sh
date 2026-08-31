@@ -46,7 +46,7 @@ tile_full() {
     reels) grp=$REELS_GRP; port=$REELS_PORT; label='Test Reels' ;;
     *)     grp=$HEVC_GRP;  port=$HEVC_PORT;  label="$src" ;;
   esac
-  local abranch=" $name. ! queue ! mpegaudioparse ! fakesink sync=false"
+  local abranch=" $name. ! audio/mpeg ! fakesink sync=false"
   [ "$src" = music ] && abranch=""   # video-only placeholder: no TS audio pad to terminate
   echo "$(hevc_tile "$grp" "$port" "$w" "$h" "$name") ! textoverlay text='$label' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! queue leaky=downstream max-size-buffers=2 ! mix.sink_$idx$abranch"
 }
@@ -56,10 +56,10 @@ tile_full() {
 # TS; Pi raw's audio is the separate ST 2110-30 L24 flow on 239.10.10.10:5004.
 audio_cmd() {   # $1 = active source
   case "$1" in
-    hevc) echo "gst-launch-1.0 -q udpsrc address=$HEVC_GRP port=$HEVC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! $ASINK" ;;
-    jxs)  echo "gst-launch-1.0 -q udpsrc address=$HOME_GRP port=$HOME_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! $ASINK" ;;
-    music) echo "gst-launch-1.0 -q udpsrc address=$MUSIC_GRP port=$MUSIC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! $ASINK" ;;
-    reels) echo "gst-launch-1.0 -q udpsrc address=$REELS_GRP port=$REELS_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! mpegaudioparse ! mpg123audiodec ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! $ASINK" ;;
+    hevc) echo "gst-launch-1.0 -q udpsrc address=$HEVC_GRP port=$HEVC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! audio/mpeg ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! decodebin ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! $ASINK" ;;
+    jxs)  echo "gst-launch-1.0 -q udpsrc address=$HOME_GRP port=$HOME_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! audio/mpeg ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! decodebin ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! $ASINK" ;;
+    music) echo "gst-launch-1.0 -q udpsrc address=$MUSIC_GRP port=$MUSIC_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! audio/mpeg ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! decodebin ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! $ASINK" ;;
+    reels) echo "gst-launch-1.0 -q udpsrc address=$REELS_GRP port=$REELS_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 ! tsdemux name=a a. ! queue ! h265parse ! fakesink sync=false a. ! audio/mpeg ! queue max-size-time=1500000000 max-size-bytes=0 max-size-buffers=0 ! decodebin ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! $ASINK" ;;
     raw)  echo "gst-launch-1.0 -q udpsrc address=$PI_AUDIO_GRP port=$PI_AUDIO_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=16777216 caps='application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96' ! rtpjitterbuffer latency=500 ! rtpL24depay ! audioconvert ! audioresample ! queue max-size-time=2000000000 max-size-bytes=0 max-size-buffers=0 ! $ASINK" ;;
   esac
 }
@@ -73,7 +73,7 @@ build_pipeline() {   # $1=layout  $2=active
     side)
       echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=270 sink_1::xpos=960 sink_1::ypos=270 ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! $VIDEO_SINK sync=false \
         $(hevc_tile "$HEVC_GRP" "$HEVC_PORT" 960 540 hd) ! textoverlay text='Live TV' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_0 \
-        hd. ! mpegaudioparse ! fakesink sync=false \
+        hd. ! audio/mpeg ! fakesink sync=false \
         $(raw_video 960 540) ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_1" ;;
     multi)
       # $3 = slots "tl,tr,bl,br" (any source -> any of the four 960x540 quadrants).

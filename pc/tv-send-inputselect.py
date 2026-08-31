@@ -29,17 +29,20 @@ STATE = sys.argv[3] if len(sys.argv) > 3 else os.path.join(CFG["ATOLL_RUN"], "tv
 TTL = CFG["MCAST_TTL"] or "1"
 DEFCH = CFG["TV_CHANNEL"] or "8.1"
 VCAPS = Gst.Caps.from_string("video/x-raw,format=NV12,width=1280,height=720,framerate=30/1")
-ACAPS = Gst.Caps.from_string("audio/x-raw,format=S16LE,rate=48000,channels=2,layout=interleaved")
+# Always 6-channel (5.1) so the channel count NEVER changes mid-stream (a changing count is a
+# discontinuity that breaks the seamless switch). audioconvert upmixes stereo sources into this
+# layout; a real 5.1 broadcast passes straight through. Mask 0x3f = FL|FR|FC|LFE|RL|RR (L R C LFE Ls Rs).
+ACAPS = Gst.Caps.from_string("audio/x-raw,format=S16LE,rate=48000,channels=6,channel-mask=(bitmask)0x3f,layout=interleaved")
 
 # ---- persistent tail + fallback (one pipeline). vsel/asel sink_0 = the black/silence fallback. ----
 pipeline = Gst.parse_launch(
     "input-selector name=vsel sync-streams=false ! queue ! cudaupload ! nvh265enc rc-mode=cbr bitrate=6000 "
     "preset=p4 tune=low-latency gop-size=30 aud=true ! h265parse config-interval=-1 ! queue ! mux. "
-    "input-selector name=asel sync-streams=false ! queue ! audioconvert ! audioresample ! lamemp3enc "
-    "target=bitrate bitrate=192 ! mpegaudioparse ! queue ! mux. "
+    "input-selector name=asel sync-streams=false ! queue ! audioconvert ! audioresample "
+    "! audio/x-raw,channels=6,channel-mask=(bitmask)0x3f ! avenc_aac bitrate=384000 ! aacparse ! queue ! mux. "
     f"mpegtsmux name=mux ! queue ! udpsink host={GRP} port={PORT} multicast-iface={IFACE} auto-multicast=true ttl={TTL} "
     "videotestsrc pattern=black is-live=true ! video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 ! vsel. "
-    "audiotestsrc wave=silence is-live=true ! audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=2 ! asel.")
+    "audiotestsrc wave=silence is-live=true ! audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=6,channel-mask=(bitmask)0x3f ! asel.")
 vsel = pipeline.get_by_name("vsel"); asel = pipeline.get_by_name("asel")
 vfb = vsel.get_static_pad("sink_0"); afb = asel.get_static_pad("sink_0")
 

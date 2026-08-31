@@ -45,7 +45,7 @@ ALEVEL = "audioconvert ! level name=lvl post-messages=true interval=50000000 ! a
 def ts_pipeline(g, p):   # HEVC video + MP3 audio in a TS (Live TV / Home / Music / Reels)
     return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=d "
             f"d. ! h265parse ! queue ! nvh265dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
-            f"d. ! queue ! mpegaudioparse ! mpg123audiodec ! {ALEVEL} ! autoaudiosink sync=true")
+            f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! autoaudiosink sync=true")   # audio/mpeg pins the audio pad; decodebin = AAC (Live TV) or MP3
 
 def build():
     if SRC in ("hevc", "jxs", "music", "reels"):
@@ -70,7 +70,7 @@ SRCNAME = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "reels": "
            "raw": "Pi raw 2110-20", "j2k": "JPEG 2000 island", "jpegxs": "JPEG XS codec"}
 VCODEC = {"hevc": "HEVC / H.265", "jxs": "HEVC / H.265", "music": "HEVC / H.265", "reels": "HEVC / H.265",
           "raw": "Uncompressed RFC 4175", "j2k": "JPEG 2000", "jpegxs": "JPEG XS"}
-ACODEC = {"hevc": "MPEG audio (MP3)", "jxs": "MPEG audio (MP3)", "music": "MPEG audio (MP3)",
+ACODEC = {"hevc": "AAC 5.1", "jxs": "MPEG audio (MP3)", "music": "MPEG audio (MP3)",
           "reels": "MPEG audio (MP3)", "raw": "L24 PCM (2110-30)"}
 TRANSPORT = {"hevc": "MPEG-TS / UDP", "jxs": "MPEG-TS / UDP", "music": "MPEG-TS / UDP",
              "reels": "MPEG-TS / UDP", "raw": "ST 2110-20 RTP", "j2k": "J2K/RTP", "jpegxs": "local"}

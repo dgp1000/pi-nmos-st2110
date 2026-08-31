@@ -53,6 +53,7 @@ def mk(factory, **props):
     return e
 
 src = {"els": [], "vpad": None, "apad": None, "ch": None, "live": False}
+LASTGOOD = {"ch": DEFCH}   # last channel that actually went live; reverted to if a bad channel errors
 
 def to_fallback():
     vsel.set_property("active-pad", vfb); asel.set_property("active-pad", afb)
@@ -61,6 +62,7 @@ def to_live():
     if src["vpad"]: vsel.set_property("active-pad", src["vpad"])
     if src["apad"]: asel.set_property("active-pad", src["apad"])
     src["live"] = True
+    LASTGOOD["ch"] = src["ch"]   # this channel decoded successfully
 
 def teardown_source():
     for e in src["els"]:
@@ -109,6 +111,22 @@ def change(ch):
     to_fallback()
     teardown_source()
     build_source(ch)
+
+# self-heal: a bad channel (undecodable / NextGen) can error the shared pipeline and kill the feed.
+# On any pipeline ERROR, revert the channel file to the last good one and exit -> systemd restarts us
+# fresh on a channel we know decodes, instead of leaving 5010 dead.
+def on_bus(_bus, msg):
+    if msg.type == Gst.MessageType.ERROR:
+        e, _dbg = msg.parse_error()
+        bad = src["ch"]
+        print(f"{time.strftime('%T')} ERROR on {bad}: {e.message} -> revert to {LASTGOOD['ch']}, restart", flush=True)
+        try:
+            if LASTGOOD["ch"] and LASTGOOD["ch"] != bad:
+                open(STATE, "w").write(LASTGOOD["ch"])
+        except Exception:
+            pass
+        os._exit(1)
+bus = pipeline.get_bus(); bus.add_signal_watch(); bus.connect("message", on_bus)
 
 pipeline.set_state(Gst.State.PLAYING)
 to_fallback()

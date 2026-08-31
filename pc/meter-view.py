@@ -43,7 +43,9 @@ VTAIL = f"videoconvert ! cairooverlay name=ov ! {BRAND} ! videoconvert ! {SINK} 
 # measure ALL channels at 'level' (so the meters show 5.1), THEN downmix to stereo for playback --
 # WSLg's Pulse output is stereo and autoaudiosink won't take a 6-channel stream.
 ALEVEL = "audioconvert ! level name=lvl post-messages=true interval=50000000"
-APLAY = "audioconvert ! audio/x-raw,channels=2 ! audioresample ! autoaudiosink sync=true"
+# Use pulsesink EXPLICITLY, not autoaudiosink: in WSL, autoaudiosink falls back to ALSA (no card ->
+# silence). Explicit pulsesink targets WSLg's PulseServer, so lip-synced (sync=true) audio plays.
+APLAY = "audioconvert ! audio/x-raw,channels=2 ! audioresample ! queue ! pulsesink sync=true buffer-time=200000"
 
 def ts_pipeline(g, p):   # HEVC video + MP3 audio in a TS (Live TV / Home / Music / Reels)
     return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=d "

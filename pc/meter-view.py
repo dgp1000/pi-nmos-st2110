@@ -43,12 +43,12 @@ VTAIL = f"videoconvert ! cairooverlay name=ov ! {BRAND} ! videoconvert ! {SINK} 
 # measure ALL channels at 'level' (so the meters show 5.1), THEN downmix to stereo for playback --
 # WSLg's Pulse output is stereo and autoaudiosink won't take a 6-channel stream.
 ALEVEL = "audioconvert ! level name=lvl post-messages=true interval=50000000"
-# sync=false + a big jitter buffer: sync=true stutters badly on WSLg Pulse (same reason the multi/side
-# follower uses sync=false). Trade a little lip-sync for smooth sound. autoaudiosink (not explicit
-# pulsesink) so a dead Pulse can't error and kill the video. Downmix to stereo (WSLg Pulse is stereo);
-# level upstream keeps the 6-channel meters.
+# sync=false + jitter buffer (sync=true stutters on WSLg Pulse). autoaudiosink so a dead Pulse falls
+# back silently instead of killing the video. Downmix to stereo; level upstream keeps 6-ch meters.
+# The named queue 'aq' holds min-threshold-time of audio -> a live-tunable playback delay to line the
+# (early) sync=false audio up with the picture. See ADELAY_FILE below.
 APLAY = ("audioconvert ! audio/x-raw,channels=2 ! audioresample "
-         "! queue max-size-time=1000000000 max-size-buffers=0 max-size-bytes=0 ! autoaudiosink sync=false")
+         "! queue name=aq max-size-time=4000000000 max-size-buffers=0 max-size-bytes=0 ! autoaudiosink sync=false")
 
 def ts_pipeline(g, p):   # HEVC video + MP3 audio in a TS (Live TV / Home / Music / Reels)
     return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=d "
@@ -130,6 +130,22 @@ def set_acaps(s):
     if okr: st["arate"] = r
 caps_probe("vpre", "sink", set_vcaps)
 caps_probe("lvl", "src", set_acaps)
+
+# --- live-tunable audio playback delay (sync=false plays audio early; delay it to match the video) ---
+# echo <milliseconds> > ~/atoll-run/tv-audio-delay-ms  -> applied within ~1s, no restart.
+aq = pipe.get_by_name("aq")
+ADELAY_FILE = os.path.join(RUN, "tv-audio-delay-ms")
+def apply_adelay():
+    try:
+        ms = int(open(ADELAY_FILE).read().strip())
+    except Exception:
+        ms = 300
+    if aq:
+        aq.set_property("min-threshold-time", max(0, ms) * 1_000_000)
+    return True
+if aq:
+    GLib.timeout_add_seconds(1, apply_adelay)
+    apply_adelay()
 
 LABELS = ["L", "R", "C", "LFE", "Ls", "Rs", "7", "8"]
 def on_draw(_ov, ctx, _ts, _dur):

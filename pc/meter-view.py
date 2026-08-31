@@ -40,12 +40,15 @@ BRAND = ("textoverlay text=ATOLL valignment=top halignment=right ypad=18 xpad=28
          "font-desc='Sans Bold 20' color=0x80ffffff shaded-background=false")
 # video ends at a named cairooverlay 'ov'; 'usrc' is tapped for bitrate, 'vpre' for source caps.
 VTAIL = f"videoconvert ! cairooverlay name=ov ! {BRAND} ! videoconvert ! {SINK} sync=true"
-ALEVEL = "audioconvert ! level name=lvl post-messages=true interval=50000000 ! audioresample"
+# measure ALL channels at 'level' (so the meters show 5.1), THEN downmix to stereo for playback --
+# WSLg's Pulse output is stereo and autoaudiosink won't take a 6-channel stream.
+ALEVEL = "audioconvert ! level name=lvl post-messages=true interval=50000000"
+APLAY = "audioconvert ! audio/x-raw,channels=2 ! audioresample ! autoaudiosink sync=true"
 
 def ts_pipeline(g, p):   # HEVC video + MP3 audio in a TS (Live TV / Home / Music / Reels)
     return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=d "
             f"d. ! h265parse ! queue ! nvh265dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
-            f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! autoaudiosink sync=true")   # audio/mpeg pins the audio pad; decodebin = AAC (Live TV) or MP3
+            f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! {APLAY}")   # audio/mpeg pins the audio pad; decodebin = AAC (Live TV) or MP3
 
 def build():
     if SRC in ("hevc", "jxs", "music", "reels"):
@@ -57,7 +60,7 @@ def build():
                 f"! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
                 f"udpsrc address={ag} port={ap} multicast-iface={IFACE} auto-multicast=true buffer-size=16777216 "
                 f"caps=\"application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96\" "
-                f"! rtpjitterbuffer latency=500 ! rtpL24depay ! {ALEVEL} ! autoaudiosink sync=true")
+                f"! rtpjitterbuffer latency=500 ! rtpL24depay ! {ALEVEL} ! {APLAY}")
     if SRC == "j2k":   # video only (no audio) -> meters idle
         g, p = grp("J2K")
         return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{J2K_CAPS}\" "

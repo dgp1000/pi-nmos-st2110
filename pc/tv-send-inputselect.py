@@ -82,7 +82,7 @@ def build_source(ch):
     def on_pad(_dec, pad):
         st = pad.query_caps(None).to_string()
         if st.startswith("video/") and src["vpad"] is None:
-            chain = [mk("queue"), mk("videorate"), mk("videoscale"), mk("videoconvert"),
+            chain = [mk("queue"), mk("deinterlace"), mk("videorate"), mk("videoscale"), mk("videoconvert"),
                      mk("capsfilter", caps=VCAPS)]
             for e in chain:
                 pipeline.add(e); src["els"].append(e); e.sync_state_with_parent()

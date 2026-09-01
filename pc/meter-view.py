@@ -43,12 +43,16 @@ VTAIL = f"videoconvert ! cairooverlay name=ov ! {BRAND} ! videoconvert ! {SINK} 
 # measure ALL channels at 'level' (so the meters show 5.1), THEN downmix to stereo for playback --
 # WSLg's Pulse output is stereo and autoaudiosink won't take a 6-channel stream.
 ALEVEL = "audioconvert ! level name=lvl post-messages=true interval=50000000"
-# sync=false + jitter buffer (sync=true stutters on WSLg Pulse). autoaudiosink so a dead Pulse falls
-# back silently instead of killing the video. Downmix to stereo; level upstream keeps 6-ch meters.
-# The named queue 'aq' holds min-threshold-time of audio -> a live-tunable playback delay to line the
-# (early) sync=false audio up with the picture. See ADELAY_FILE below.
+# sync=true so the audio sink presents each sample at its stream PTS -- the SAME clock the sync=true
+# video uses -- giving true lip-sync from the source timestamps (no hand-tuned delay). GStreamer's
+# latency negotiation offsets the two sinks to match. A ~300ms jitter buffer on 'aq' keeps WSLg Pulse
+# fed (that underrun was the old sync=true stutter); it does NOT shift sync (PTS presentation is
+# unchanged by buffering). autoaudiosink so a dead Pulse falls back silently instead of killing the
+# video. Downmix to stereo; level upstream keeps 6-ch meters. Any residual skew is a live TRIM (both
+# directions) via a pad offset from ADELAY_FILE below.
 APLAY = ("audioconvert ! audio/x-raw,channels=2 ! audioresample "
-         "! queue name=aq leaky=downstream max-size-buffers=0 max-size-bytes=0 ! autoaudiosink sync=false")
+         "! queue name=aq max-size-buffers=0 max-size-bytes=0 max-size-time=1000000000 min-threshold-time=300000000 "
+         "! autoaudiosink sync=true")
 
 def ts_pipeline(g, p):   # HEVC video + MP3 audio in a TS (Live TV / Home / Music / Reels)
     return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=d "
@@ -131,23 +135,21 @@ def set_acaps(s):
 caps_probe("vpre", "sink", set_vcaps)
 caps_probe("lvl", "src", set_acaps)
 
-# --- live-tunable audio playback delay (sync=false plays audio early; delay it to match the video) ---
-# echo <milliseconds> > ~/atoll-run/tv-audio-delay-ms  -> applied within ~1s, no restart.
+# --- live A/V TRIM (sync=true already lip-syncs from the source PTS; this only corrects any residual
+# skew, e.g. if WSLg Pulse mis-reports its latency). echo <ms> > ~/atoll-run/tv-audio-delay-ms:
+# POSITIVE delays audio, NEGATIVE advances it. 0 = pure PTS sync. Applied as a pad offset within ~1s.
 aq = pipe.get_by_name("aq")
+_aqpad = aq.get_static_pad("sink") if aq else None
 ADELAY_FILE = os.path.join(RUN, "tv-audio-delay-ms")
 def apply_adelay():
     try:
         ms = int(open(ADELAY_FILE).read().strip())
     except Exception:
-        ms = 250   # tuned by eye to lip-sync single-view Live TV audio
-    if aq:
-        ns = max(0, ms) * 1_000_000
-        # set max just above the threshold so lowering the delay makes the leaky queue drop the
-        # excess (drains down); raising it holds more. -> tunes both directions live.
-        aq.set_property("max-size-time", ns + 400_000_000)
-        aq.set_property("min-threshold-time", ns)
+        ms = 0
+    if _aqpad:
+        _aqpad.set_offset(ms * 1_000_000)   # +delay / -advance audio, both directions
     return True
-if aq:
+if _aqpad:
     GLib.timeout_add_seconds(1, apply_adelay)
     apply_adelay()
 

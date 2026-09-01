@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll Opus source (Opus audio over RTP, RFC 7587) -> 239.10.10.80:5022
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/bin/bash /home/david/pi-nmos-st2110/pc/opus-send.sh
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

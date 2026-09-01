@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll H.264 source (H.264 elementary stream over RTP, RFC 6184) -> 239.10.10.75:5018
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/bin/bash /home/david/pi-nmos-st2110/pc/h264-send.sh
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

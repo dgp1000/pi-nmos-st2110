@@ -21,7 +21,7 @@ NEED = ["ISLAND_IFACE", "VIDEO_SINK", "ATOLL_PLATFORM", "ATOLL_RUN", "HEVC_GRP",
         "MUSIC_GRP", "MUSIC_PORT", "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT",
         "PI_AUDIO_GRP", "PI_AUDIO_PORT", "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT",
         "OPUS_GRP", "OPUS_PORT", "MJPEG_GRP", "MJPEG_PORT", "VP9_GRP", "VP9_PORT",
-        "TSRTP_GRP", "TSRTP_PORT",
+        "TSRTP_GRP", "TSRTP_PORT", "FEC_GRP", "FEC_PORT",
         "GALLIUM_DRIVER", "PULSE_SERVER", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
@@ -43,6 +43,7 @@ OPUS_CAPS = "application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,p
 MJPEG_CAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=JPEG,payload=96"
 VP9_CAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=VP9,payload=96"
 TSRTP_CAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=MP2T,payload=33"
+FECSTREAM_CAPS = "application/x-rtp,payload=96,clock-rate=90000"
 BRAND = ("textoverlay text=ATOLL valignment=top halignment=right ypad=18 xpad=28 "
          "font-desc='Sans Bold 20' color=0x80ffffff shaded-background=false")
 # video ends at a named cairooverlay 'ov'; 'usrc' is tapped for bitrate, 'vpre' for source caps.
@@ -102,21 +103,31 @@ def build():
                 f"! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name=d "
                 f"d. ! h264parse ! queue ! nvh264dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
                 f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! {APLAY}")
+    if SRC == "fec":    # ST 2022-1 protected TS/RTP. Two LIVE knobs (see apply_fec below):
+        g, p = grp("FEC")   # 'lossy' injects packet loss on the media flow; 'fecg0/fecg1' gate the
+        cp, rp = int(p) + 2, int(p) + 4   # FEC flows off, which is how you show the damage FEC hides.
+        return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{TSRTP_CAPS}\" "
+                f"! identity name=lossy ! rtpst2022-1-fecdec name=fd "
+                f"udpsrc address={g} port={cp} multicast-iface={IFACE} auto-multicast=true caps=\"{FECSTREAM_CAPS}\" ! identity name=fecg0 ! queue ! fd.fec_0 "
+                f"udpsrc address={g} port={rp} multicast-iface={IFACE} auto-multicast=true caps=\"{FECSTREAM_CAPS}\" ! identity name=fecg1 ! queue ! fd.fec_1 "
+                f"fd. ! rtpmp2tdepay ! tsdemux name=d "
+                f"d. ! h264parse ! queue ! nvh264dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
+                f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! {APLAY}")
     # jpegxs / unknown -> local test pattern, video only
     return (f"videotestsrc pattern=ball is-live=true ! video/x-raw,width=1920,height=1080,framerate=30/1 "
             f"! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL}")
 
 SRCNAME = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "reels": "Test Reels",
            "raw": "Pi raw 2110-20", "j2k": "JPEG 2000 island", "jpegxs": "JPEG XS codec",
-           "h264": "H.264 over RTP", "mjpeg": "MJPEG over RTP", "vp9": "VP9 over RTP", "tsrtp": "TS over RTP"}
+           "h264": "H.264 over RTP", "mjpeg": "MJPEG over RTP", "vp9": "VP9 over RTP", "tsrtp": "TS over RTP", "fec": "ST 2022-1 FEC"}
 VCODEC = {"hevc": "HEVC / H.265", "jxs": "HEVC / H.265", "music": "HEVC / H.265", "reels": "HEVC / H.265",
           "raw": "Uncompressed RFC 4175", "j2k": "JPEG 2000", "jpegxs": "JPEG XS",
-          "h264": "H.264 / AVC", "mjpeg": "Motion JPEG", "vp9": "VP9", "tsrtp": "H.264 / AVC"}
+          "h264": "H.264 / AVC", "mjpeg": "Motion JPEG", "vp9": "VP9", "tsrtp": "H.264 / AVC", "fec": "H.264 / AVC"}
 ACODEC = {"hevc": "AAC 5.1", "jxs": "MPEG audio (MP3)", "music": "MPEG audio (MP3)",
-          "reels": "MPEG audio (MP3)", "raw": "L24 PCM (2110-30)", "h264": "Opus", "tsrtp": "AAC"}
+          "reels": "MPEG audio (MP3)", "raw": "L24 PCM (2110-30)", "h264": "Opus", "tsrtp": "AAC", "fec": "AAC"}
 TRANSPORT = {"hevc": "MPEG-TS / UDP", "jxs": "MPEG-TS / UDP", "music": "MPEG-TS / UDP",
              "reels": "MPEG-TS / UDP", "raw": "ST 2110-20 RTP", "j2k": "J2K/RTP", "jpegxs": "local",
-             "h264": "RTP (RFC 6184) + Opus RTP", "mjpeg": "RTP (RFC 2435)", "vp9": "RTP (RFC 7741)", "tsrtp": "MPEG-TS / RTP (ST 2022-2)"}
+             "h264": "RTP (RFC 6184) + Opus RTP", "mjpeg": "RTP (RFC 2435)", "vp9": "RTP (RFC 7741)", "tsrtp": "MPEG-TS / RTP (ST 2022-2)", "fec": "TS/RTP + ST 2022-1 FEC"}
 
 pipe = Gst.parse_launch(build())
 ov = pipe.get_by_name("ov")
@@ -183,6 +194,30 @@ def apply_adelay():
 if _aqpad:
     GLib.timeout_add_seconds(1, apply_adelay)
     apply_adelay()
+
+# --- ST 2022-1 FEC demo knobs (source key "fec"), applied live, no restart ---
+#   echo 0.03 > ~/atoll-run/fec-loss    # fraction of MEDIA packets to drop (0 = clean)
+#   echo 0    > ~/atoll-run/fec-enable  # 0 gates the FEC flows off -> the damage becomes visible
+# Gating the FEC streams (rather than rebuilding without the decoder) makes the comparison live: the
+# same pipeline shows protected vs unprotected while the loss rate stays fixed.
+_lossy = pipe.get_by_name("lossy")
+_fecg = [pipe.get_by_name("fecg0"), pipe.get_by_name("fecg1")]
+def _knob(name, default):
+    try:
+        return float(open(os.path.join(RUN, name)).read().strip())
+    except Exception:
+        return default
+def apply_fec():
+    if _lossy:
+        _lossy.set_property("drop-probability", max(0.0, min(1.0, _knob("fec-loss", 0.0))))
+    on = _knob("fec-enable", 1.0) >= 0.5
+    for g in _fecg:
+        if g:
+            g.set_property("drop-probability", 0.0 if on else 1.0)
+    return True
+if _lossy:
+    GLib.timeout_add_seconds(1, apply_fec)
+    apply_fec()
 
 LABELS = ["L", "R", "C", "LFE", "Ls", "Rs", "7", "8"]
 def on_draw(_ov, ctx, _ts, _dur):

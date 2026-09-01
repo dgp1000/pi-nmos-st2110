@@ -43,6 +43,7 @@ SOURCES = {
     "mjpeg": {"label": None},                           # Motion JPEG over RTP (RFC 2435), 239.10.10.85:5024
     "vp9": {"label": None},                             # VP9 over RTP (RFC 7741), 239.10.10.90:5026
     "tsrtp": {"label": None},                           # MPEG-TS over RTP (ST 2022-2), 239.10.10.95:5028
+    "fec": {"label": None},                             # ST 2022-1 FEC protected TS/RTP, 239.10.10.100:5040
     "reels": {"label": None},                           # Test Reels (PC->island 239.10.10.31:5014; NMOS m1 later)
 }
 DEFAULT_SRC = "jxs"
@@ -297,6 +298,8 @@ HDHR_HOST = _c.get('HDHR_HOST', '192.168.7.88')
 _RUN = _c.get('ATOLL_RUN', '/home/david/atoll-run')
 TV_STATE = _RUN + '/tv-channel'
 TV_FAVS = _RUN + '/tv-favorites'   # favorite channel numbers, one per line, in the order added
+FEC_LOSS = _RUN + '/fec-loss'      # ST 2022-1 demo: fraction of media packets to drop
+FEC_ENABLE = _RUN + '/fec-enable'  # ST 2022-1 demo: 1 = FEC flows delivered, 0 = gated off
 
 def _read_favs():
     try:
@@ -337,6 +340,28 @@ def tv_set(ch):
         return json.dumps({"channel": ch}).encode()
     except Exception as e:
         return json.dumps({"error": str(e)}).encode()
+
+def fec_state():
+    """Current ST 2022-1 demo knobs, for the panel controls."""
+    def rd(path, default):
+        try:
+            return float(open(path).read().strip())
+        except Exception:
+            return default
+    return json.dumps({"loss": rd(FEC_LOSS, 0.0), "enable": int(rd(FEC_ENABLE, 1.0) >= 0.5)}).encode()
+
+def fec_set(loss, enable):
+    """Write the knob files meter-view polls (applied live, no restart)."""
+    try:
+        if loss is not None:
+            with open(FEC_LOSS, "w") as f:
+                f.write(f"{max(0.0, min(1.0, float(loss))):.4f}")
+        if enable is not None:
+            with open(FEC_ENABLE, "w") as f:
+                f.write("1" if str(enable) in ("1", "true", "on") else "0")
+    except Exception as e:
+        return json.dumps({"error": str(e)}).encode()
+    return fec_state()
 
 def tv_fav(ch, on):
     """Add (on) or remove (off) a channel from the favorites file; returns the updated list."""
@@ -385,6 +410,12 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #slots{display:grid;grid-template-columns:repeat(2,1fr);gap:.5vh .6vw;width:min(44vw,50vh);margin-top:.5vh}
  #slots .slot{font-size:min(2vw,2.4vh);padding:.7em .3em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
  #slots .slot.sel{background:#093;color:#000;border-color:#0f0;font-weight:bold}
+ #fecwrap{padding:.3vh 0;display:flex;align-items:center;justify-content:center;gap:.6vw;flex-wrap:wrap}
+ #fecwrap label{font-size:min(1.6vw,1.9vh);color:#7a7}
+ #fecloss{width:min(26vw,30vh);vertical-align:middle}
+ #fecval{font-size:min(1.6vw,1.9vh);color:#3c9;min-width:3.2em;display:inline-block;font-variant-numeric:tabular-nums}
+ #fectog{font-size:min(1.7vw,2vh);padding:.4em .9em;border-radius:6px;border:1px solid #1a3a2a;background:#0a1410;color:#9c9;cursor:pointer}
+ #fectog.on{background:#093;color:#000;border-color:#0f0;font-weight:bold}
  #tvwrap{padding:.3vh 0}
  #tvfav{display:flex;flex-wrap:wrap;gap:.4vh .4vw;justify-content:center;margin-bottom:.5vh}
  #tvfav:empty{display:none}
@@ -437,7 +468,9 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="bmjpeg" onclick="take('mjpeg',this)">MJPEG RTP</button>
    <button id="bvp9" onclick="take('vp9',this)">VP9 RTP</button>
    <button id="btsrtp" onclick="take('tsrtp',this)">TS over RTP</button>
+   <button id="bfec" onclick="take('fec',this)">ST 2022-1 FEC</button>
   </div>
+  <div id="fecwrap"><label>ST&nbsp;2022-1 loss</label><input id="fecloss" type="range" min="0" max="10" step="0.5" value="0" oninput="fecLoss(this.value)"><span id="fecval">0.0%</span><button id="fectog" onclick="fecToggle()">FEC</button></div>
   <div id="tvwrap"><div id="tvfav"></div><button id="tvtoggle" onclick="toggleTv()">&#128250; TV Channels</button><div id="tvchan"></div></div>
   <div id="info"></div>
   <div id="lay">
@@ -471,7 +504,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
 const FPS=__FPS__;
 let offset=0, ptp={}, synced=false;
 const BTN={jxs:'bjxs',raw:'braw',hevc:'bhevc',music:'bmusic',reels:'breels'};
-const SRCLABEL={jxs:'Home',raw:'Pi raw',hevc:"Live TV",music:'Music',reels:'Test Reels',jpegxs:'JPEG XS',j2k:'JPEG 2000',h264:'H.264 RTP',mjpeg:'MJPEG RTP',vp9:'VP9 RTP',tsrtp:'TS/RTP'};
+const SRCLABEL={jxs:'Home',raw:'Pi raw',hevc:"Live TV",music:'Music',reels:'Test Reels',jpegxs:'JPEG XS',j2k:'JPEG 2000',h264:'H.264 RTP',mjpeg:'MJPEG RTP',vp9:'VP9 RTP',tsrtp:'TS/RTP',fec:'FEC'};
 let selSlot=null, curSlots=['hevc','raw','jxs','music'];
 function selSlotFn(i){ selSlot=(selSlot===i)?null:i; renderSlots(); }
 function renderSlots(){
@@ -500,6 +533,17 @@ async function music(action){
   try{await fetch('/music/'+action,{cache:'no-store'});}catch(e){}
   setTimeout(musicState,350);
 }
+let fecOn=true;
+async function fecRefresh(){try{const r=await fetch('/fec/state',{cache:'no-store'});const d=await r.json();
+  fecOn=!!d.enable; const pct=(d.loss*100);
+  const sl=document.getElementById('fecloss'); if(sl&&document.activeElement!==sl) sl.value=pct;
+  document.getElementById('fecval').textContent=pct.toFixed(1)+'%';
+  const b=document.getElementById('fectog'); b.classList.toggle('on',fecOn); b.textContent=fecOn?'FEC ON':'FEC OFF';
+}catch(e){}}
+async function fecLoss(v){document.getElementById('fecval').textContent=Number(v).toFixed(1)+'%';
+  try{await fetch('/fec/set?loss='+(v/100),{cache:'no-store'});}catch(e){}}
+async function fecToggle(){fecOn=!fecOn;
+  try{await fetch('/fec/set?enable='+(fecOn?1:0),{cache:'no-store'});}catch(e){}fecRefresh();}
 let tvOpen=false;
 async function loadTv(){try{const r=await fetch('/tv/lineup',{cache:'no-store'});const d=await r.json();
 const fv=document.getElementById('tvfav');
@@ -628,6 +672,7 @@ refreshState(); setInterval(refreshState,5000);
 loadNmos();     setInterval(loadNmos,6000);
 musicState();   setInterval(musicState,4000);
 loadTv();       // populate the favorites row on load (no interval — avoids hammering the HDHR)
+fecRefresh();   setInterval(fecRefresh,4000);
 sync(); setInterval(sync,3000); tick();
 </script></body></html>"""
 
@@ -709,6 +754,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(tv_lineup())
         elif parsed.path == "/tv/set":
             self._send_json(tv_set(parse_qs(parsed.query).get("ch", [""])[0]))
+        elif parsed.path == "/fec/state":
+            self._send_json(fec_state())
+        elif parsed.path == "/fec/set":
+            _q = parse_qs(parsed.query)
+            self._send_json(fec_set(_q.get("loss", [None])[0], _q.get("enable", [None])[0]))
         elif parsed.path == "/tv/fav":
             _q = parse_qs(parsed.query)
             self._send_json(tv_fav(_q.get("ch", [""])[0], _q.get("on", ["1"])[0] in ("1", "true", "on")))

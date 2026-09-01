@@ -19,7 +19,7 @@ SCREEN = sys.argv[2] if len(sys.argv) > 2 else "2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 NEED = ["ISLAND_IFACE", "VIDEO_SINK", "ATOLL_PLATFORM", "ATOLL_RUN", "HEVC_GRP", "HEVC_PORT", "HOME_GRP", "HOME_PORT",
         "MUSIC_GRP", "MUSIC_PORT", "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT",
-        "PI_AUDIO_GRP", "PI_AUDIO_PORT", "J2K_GRP", "J2K_PORT",
+        "PI_AUDIO_GRP", "PI_AUDIO_PORT", "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT",
         "GALLIUM_DRIVER", "PULSE_SERVER", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
@@ -36,6 +36,7 @@ RAW_CAPS = ("application/x-rtp,media=(string)video,clock-rate=(int)90000,encodin
             "sampling=(string)YCbCr-4:2:2,depth=(string)8,width=(string)320,height=(string)240,"
             "colorimetry=(string)BT601-5,payload=(int)96")
 J2K_CAPS = "application/x-rtp,media=video,encoding-name=JPEG2000,clock-rate=90000,sampling=YCbCr-4:2:0"
+H264_CAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96"
 BRAND = ("textoverlay text=ATOLL valignment=top halignment=right ypad=18 xpad=28 "
          "font-desc='Sans Bold 20' color=0x80ffffff shaded-background=false")
 # video ends at a named cairooverlay 'ov'; 'usrc' is tapped for bitrate, 'vpre' for source caps.
@@ -72,12 +73,18 @@ def build():
         g, p = grp("J2K")
         return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{J2K_CAPS}\" "
                 f"! rtpj2kdepay ! avdec_jpeg2000 ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL}")
+    if SRC == "h264":  # H.264 over RTP (RFC 6184), video only -> meters idle
+        g, p = grp("H264")
+        return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{H264_CAPS}\" "
+                f"! rtpjitterbuffer latency=100 ! rtph264depay ! h264parse ! nvh264dec ! cudadownload "
+                f"! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL}")
     # jpegxs / unknown -> local test pattern, video only
     return (f"videotestsrc pattern=ball is-live=true ! video/x-raw,width=1920,height=1080,framerate=30/1 "
             f"! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL}")
 
 SRCNAME = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "reels": "Test Reels",
-           "raw": "Pi raw 2110-20", "j2k": "JPEG 2000 island", "jpegxs": "JPEG XS codec"}
+           "raw": "Pi raw 2110-20", "j2k": "JPEG 2000 island", "jpegxs": "JPEG XS codec",
+           "h264": "H.264 over RTP"}
 VCODEC = {"hevc": "HEVC / H.265", "jxs": "HEVC / H.265", "music": "HEVC / H.265", "reels": "HEVC / H.265",
           "raw": "Uncompressed RFC 4175", "j2k": "JPEG 2000", "jpegxs": "JPEG XS"}
 ACODEC = {"hevc": "AAC 5.1", "jxs": "MPEG audio (MP3)", "music": "MPEG audio (MP3)",

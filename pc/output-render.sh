@@ -109,6 +109,12 @@ while true; do
   # --- self-heal: rebuild only if the render pipeline actually died. Channel changes no longer force
   # a rebuild — the input-selector tv-send keeps 5010 continuous, so the Live TV tile updates in place ---
   if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then pid=""; cur_key="__force_rebuild__"; fi
+  # Same self-heal for the standalone audio follower: a 5010 stream discontinuity (e.g. an atoll-tv
+  # restart / channel self-heal) can throw the tsdemux branch into a "not-linked" error and kill the
+  # audio process while the active source is unchanged. Without this, audio stays dead until the user
+  # switches sources; with it, the loop below relaunches the follower within ~1s. A fresh launch on a
+  # settled stream links cleanly, so a transient blip recovers on its own.
+  if [ -n "$apid" ] && ! kill -0 "$apid" 2>/dev/null; then apid=""; aud_key="__force_audio_rebuild__"; fi
   # --- video: relaunch the pipeline only on layout/source/tile-assignment change ---
   case "$layout" in single) key="single:$active";; multi) key="multi:$slots";; *) key="$layout";; esac
   if [ "$key" != "$cur_key" ]; then

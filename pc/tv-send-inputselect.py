@@ -54,6 +54,12 @@ def mk(factory, **props):
 
 src = {"els": [], "vpad": None, "apad": None, "ch": None, "live": False}
 LASTGOOD = {"ch": DEFCH}   # last channel that actually went live; reverted to if a bad channel errors
+# watchdog: change_at = monotonic time of the last (debounced) retune; tries = rebuild attempts since.
+# If the source doesn't reach "live" within STUCK_S of a retune, it stuck on the black fallback
+# (0.3 MB/s black HEVC). We rebuild the source in place; if that also stalls, exit -> systemd restart.
+WATCH = {"change_at": 0.0, "tries": 0}
+STUCK_S = 12
+MAX_REBUILD = 2
 
 def to_fallback():
     vsel.set_property("active-pad", vfb); asel.set_property("active-pad", afb)
@@ -63,6 +69,7 @@ def to_live():
     if src["apad"]: asel.set_property("active-pad", src["apad"])
     src["live"] = True
     LASTGOOD["ch"] = src["ch"]   # this channel decoded successfully
+    WATCH["change_at"] = 0.0; WATCH["tries"] = 0   # disarm watchdog: source is live
 
 def teardown_source():
     for e in src["els"]:
@@ -111,6 +118,7 @@ def change(ch):
     to_fallback()
     teardown_source()
     build_source(ch)
+    WATCH["change_at"] = time.monotonic(); WATCH["tries"] = 0   # arm watchdog for this retune
 
 # self-heal: a bad channel (undecodable / NextGen) can error the shared pipeline and kill the feed.
 # On any pipeline ERROR, revert the channel file to the last good one and exit -> systemd restarts us
@@ -135,15 +143,53 @@ if not os.path.exists(STATE): open(STATE, "w").write(DEFCH)
 change(open(STATE).read().strip() or DEFCH)
 print(f"tv-send-inputselect: watching {STATE} -> {GRP}:{PORT} on {IFACE}", flush=True)
 
+# Debounce: rapid channel-hopping used to tear down + rebuild the source faster than the HDHR tuner
+# could settle, which is what left the sender stuck on the black fallback. We only actually retune
+# once the requested channel has held steady for DEBOUNCE_S, so a fast burst collapses to one retune
+# on the final channel. Poll is 0.5s for fine granularity.
+PENDING = {"ch": None, "since": 0.0}
+DEBOUNCE_S = 1.2
 def poll():
     try:
         want = open(STATE).read().strip()
     except Exception:
         return True
+    now = time.monotonic()
     if want and want != src["ch"]:
-        change(want)
+        if want != PENDING["ch"]:
+            PENDING["ch"] = want; PENDING["since"] = now          # start/restart the settle timer
+        elif now - PENDING["since"] >= DEBOUNCE_S:
+            PENDING["ch"] = None
+            change(want)
+    else:
+        PENDING["ch"] = None                                       # request matches current; clear
     return True
-GLib.timeout_add_seconds(1, poll)
+GLib.timeout_add(500, poll)
+
+def watchdog():
+    if not src["live"] and WATCH["change_at"] and (time.monotonic() - WATCH["change_at"]) > STUCK_S:
+        WATCH["tries"] += 1
+        if WATCH["tries"] <= MAX_REBUILD:
+            print(f"{time.strftime('%T')} watchdog: {src['ch']} stuck on fallback "
+                  f"({WATCH['tries']}/{MAX_REBUILD}) -> rebuild source", flush=True)
+            ch = src["ch"]
+            to_fallback(); teardown_source(); build_source(ch)
+            WATCH["change_at"] = time.monotonic()
+        else:
+            # in-place rebuilds didn't recover it -> the switch/tuner state is wedged. Fall back to
+            # last known-good channel and exit so systemd relaunches us fresh (what a wsl restart did
+            # by hand). Only rewrite STATE if the stuck channel differs, so a genuinely bad channel
+            # doesn't ping-pong.
+            print(f"{time.strftime('%T')} watchdog: {src['ch']} still stuck after "
+                  f"{MAX_REBUILD} rebuilds -> revert to {LASTGOOD['ch']}, restart", flush=True)
+            try:
+                if LASTGOOD["ch"] and LASTGOOD["ch"] != src["ch"]:
+                    open(STATE, "w").write(LASTGOOD["ch"])
+            except Exception:
+                pass
+            os._exit(1)
+    return True
+GLib.timeout_add_seconds(2, watchdog)
 loop = GLib.MainLoop()
 try:
     loop.run()

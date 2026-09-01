@@ -16,7 +16,7 @@ start_gst() {   # $1 = channel; launches gst in background, sets $pid
     dec. ! queue ! videorate ! videoscale ! videoconvert ! video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 \
       ! cudaupload ! nvh265enc rc-mode=cbr bitrate=6000 preset=p4 tune=low-latency gop-size=30 aud=true ! h265parse config-interval=-1 ! queue ! mux. \
     dec. ! queue ! audioconvert ! audioresample ! lamemp3enc target=bitrate bitrate=192 ! mpegaudioparse ! queue ! mux. \
-    mpegtsmux name=mux ! queue ! udpsink host=$HEVC_GRP port=$HEVC_PORT multicast-iface="$IFACE" auto-multicast=true ttl=$MCAST_TTL \
+    mpegtsmux name=mux alignment=7 ! queue ! udpsink host=$HEVC_GRP port=$HEVC_PORT multicast-iface="$IFACE" auto-multicast=true ttl=$MCAST_TTL \
     >/dev/null 2>&1 &
   pid=$!
 }

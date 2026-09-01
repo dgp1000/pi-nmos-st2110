@@ -50,7 +50,7 @@ pipeline = Gst.parse_launch(
     "preset=p4 tune=low-latency gop-size=30 aud=true ! h265parse config-interval=-1 name=vparse ! queue ! mux. "
     "input-selector name=asel sync-streams=false ! queue ! audioconvert ! audioresample "
     "! audio/x-raw,channels=6,channel-mask=(bitmask)0x3f ! avenc_aac bitrate=384000 ! aacparse ! queue ! mux. "
-    f"mpegtsmux name=mux ! queue ! udpsink host={GRP} port={PORT} multicast-iface={IFACE} auto-multicast=true ttl={TTL} "
+    f"mpegtsmux name=mux alignment=7 ! queue ! udpsink host={GRP} port={PORT} multicast-iface={IFACE} auto-multicast=true ttl={TTL} "
     "videotestsrc pattern=black is-live=true ! video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 ! vsel. "
     "audiotestsrc wave=silence is-live=true ! audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=6,channel-mask=(bitmask)0x3f ! asel.")
 vsel = pipeline.get_by_name("vsel"); asel = pipeline.get_by_name("asel")

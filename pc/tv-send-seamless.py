@@ -46,7 +46,7 @@ tail = Gst.parse_launch(
     "! nvh265enc rc-mode=cbr bitrate=6000 preset=p4 tune=low-latency gop-size=30 aud=true ! h265parse config-interval=-1 ! queue ! mux. "
     "interaudiosrc channel=tva ! " + ACAPS + " ! queue ! audioconvert ! audioresample "
     "! lamemp3enc target=bitrate bitrate=192 ! mpegaudioparse ! queue ! mux. "
-    f"mpegtsmux name=mux ! queue ! udpsink host={GRP} port={PORT} multicast-iface={IFACE} auto-multicast=true ttl={TTL}")
+    f"mpegtsmux name=mux alignment=7 ! queue ! udpsink host={GRP} port={PORT} multicast-iface={IFACE} auto-multicast=true ttl={TTL}")
 
 # ---- source: HDHR channel -> decode -> inter sinks. Restarts on channel change. ----
 # The inter-audio bridge only carries audio when BOTH sides agree on caps, so pin the same

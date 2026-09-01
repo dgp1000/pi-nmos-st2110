@@ -29,7 +29,7 @@ while true; do
       ! cudaupload ! nvh265enc rc-mode=cbr bitrate=6000 preset=p4 tune=low-latency gop-size=30 aud=true \
       ! h265parse config-interval=-1 ! queue ! mux. \
     d. ! aacparse ! avdec_aac ! audioconvert ! audioresample ! lamemp3enc target=bitrate bitrate=192 ! mpegaudioparse ! queue ! mux. \
-    mpegtsmux name=mux ! queue \
+    mpegtsmux name=mux alignment=7 ! queue \
       ! udpsink host=$MUSIC_GRP port=$MUSIC_PORT multicast-iface="$IFACE" auto-multicast=true ttl=$MCAST_TTL
   echo "(stream unavailable/dropped -- retry in 3s)"; sleep 3
 done

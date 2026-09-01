@@ -13,7 +13,7 @@ while true; do
     ! textoverlay text="MUSIC — connecting…" valignment=center halignment=center font-desc="Sans Bold 40" shaded-background=true \
     ! videoconvert ! video/x-raw,format=NV12 ! cudaupload \
     ! nvh265enc rc-mode=cbr bitrate=4000 gop-size=30 aud=true ! h265parse config-interval=-1 ! queue \
-    ! mpegtsmux ! queue \
+    ! mpegtsmux alignment=7 ! queue \
     ! udpsink host=$MUSIC_GRP port=$MUSIC_PORT multicast-iface="$IFACE" auto-multicast=true ttl=$MCAST_TTL
   echo "(placeholder dropped -- restarting)"; sleep 1
 done

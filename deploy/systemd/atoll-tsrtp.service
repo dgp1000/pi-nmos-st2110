@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll MPEG-TS over RTP source (SMPTE ST 2022-2) -> 239.10.10.95:5028
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/bin/bash /home/david/pi-nmos-st2110/pc/tsrtp-send.sh
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

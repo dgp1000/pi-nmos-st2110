@@ -21,6 +21,7 @@ NEED = ["ISLAND_IFACE", "VIDEO_SINK", "ATOLL_PLATFORM", "ATOLL_RUN", "HEVC_GRP",
         "MUSIC_GRP", "MUSIC_PORT", "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT",
         "PI_AUDIO_GRP", "PI_AUDIO_PORT", "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT",
         "OPUS_GRP", "OPUS_PORT", "MJPEG_GRP", "MJPEG_PORT", "VP9_GRP", "VP9_PORT",
+        "TSRTP_GRP", "TSRTP_PORT",
         "GALLIUM_DRIVER", "PULSE_SERVER", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
@@ -41,6 +42,7 @@ H264_CAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,p
 OPUS_CAPS = "application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload=97"
 MJPEG_CAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=JPEG,payload=96"
 VP9_CAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=VP9,payload=96"
+TSRTP_CAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=MP2T,payload=33"
 BRAND = ("textoverlay text=ATOLL valignment=top halignment=right ypad=18 xpad=28 "
          "font-desc='Sans Bold 20' color=0x80ffffff shaded-background=false")
 # video ends at a named cairooverlay 'ov'; 'usrc' is tapped for bitrate, 'vpre' for source caps.
@@ -94,21 +96,27 @@ def build():
         return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{VP9_CAPS}\" "
                 f"! rtpjitterbuffer latency=100 ! rtpvp9depay ! vp9parse ! nvvp9dec "
                 f"! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL}")
+    if SRC == "tsrtp":  # MPEG-TS over RTP (ST 2022-2): a full A/V programme inside the TS.
+        g, p = grp("TSRTP")   # the queue on the audio branch is required or the demuxer stalls
+        return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{TSRTP_CAPS}\" "
+                f"! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name=d "
+                f"d. ! h264parse ! queue ! nvh264dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
+                f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! {APLAY}")
     # jpegxs / unknown -> local test pattern, video only
     return (f"videotestsrc pattern=ball is-live=true ! video/x-raw,width=1920,height=1080,framerate=30/1 "
             f"! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL}")
 
 SRCNAME = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "reels": "Test Reels",
            "raw": "Pi raw 2110-20", "j2k": "JPEG 2000 island", "jpegxs": "JPEG XS codec",
-           "h264": "H.264 over RTP", "mjpeg": "MJPEG over RTP", "vp9": "VP9 over RTP"}
+           "h264": "H.264 over RTP", "mjpeg": "MJPEG over RTP", "vp9": "VP9 over RTP", "tsrtp": "TS over RTP"}
 VCODEC = {"hevc": "HEVC / H.265", "jxs": "HEVC / H.265", "music": "HEVC / H.265", "reels": "HEVC / H.265",
           "raw": "Uncompressed RFC 4175", "j2k": "JPEG 2000", "jpegxs": "JPEG XS",
-          "h264": "H.264 / AVC", "mjpeg": "Motion JPEG", "vp9": "VP9"}
+          "h264": "H.264 / AVC", "mjpeg": "Motion JPEG", "vp9": "VP9", "tsrtp": "H.264 / AVC"}
 ACODEC = {"hevc": "AAC 5.1", "jxs": "MPEG audio (MP3)", "music": "MPEG audio (MP3)",
-          "reels": "MPEG audio (MP3)", "raw": "L24 PCM (2110-30)", "h264": "Opus"}
+          "reels": "MPEG audio (MP3)", "raw": "L24 PCM (2110-30)", "h264": "Opus", "tsrtp": "AAC"}
 TRANSPORT = {"hevc": "MPEG-TS / UDP", "jxs": "MPEG-TS / UDP", "music": "MPEG-TS / UDP",
              "reels": "MPEG-TS / UDP", "raw": "ST 2110-20 RTP", "j2k": "J2K/RTP", "jpegxs": "local",
-             "h264": "RTP (RFC 6184) + Opus RTP", "mjpeg": "RTP (RFC 2435)", "vp9": "RTP (RFC 7741)"}
+             "h264": "RTP (RFC 6184) + Opus RTP", "mjpeg": "RTP (RFC 2435)", "vp9": "RTP (RFC 7741)", "tsrtp": "MPEG-TS / RTP (ST 2022-2)"}
 
 pipe = Gst.parse_launch(build())
 ov = pipe.get_by_name("ov")

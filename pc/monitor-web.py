@@ -290,10 +290,22 @@ def music_action(action):
 
 # --------------------------------- TV channels ---------------------------
 HDHR_HOST = _c.get('HDHR_HOST', '192.168.7.88')
-TV_STATE = _c.get('ATOLL_RUN', '/home/david/atoll-run') + '/tv-channel'
+_RUN = _c.get('ATOLL_RUN', '/home/david/atoll-run')
+TV_STATE = _RUN + '/tv-channel'
+TV_FAVS = _RUN + '/tv-favorites'   # favorite channel numbers, one per line, in the order added
+
+def _read_favs():
+    try:
+        return [l.strip() for l in open(TV_FAVS) if l.strip()]
+    except Exception:
+        return []
+
+def _write_favs(favs):
+    with open(TV_FAVS, "w") as f:
+        f.write("".join(n + "\n" for n in favs))
 
 def tv_lineup():
-    """The HDHomeRun lineup + the currently-tuned channel, for the panel grid."""
+    """The HDHomeRun lineup + the currently-tuned channel + favorites, for the panel grid."""
     try:
         with urllib.request.urlopen(f"http://{HDHR_HOST}/lineup.json", timeout=6) as r:
             d = json.load(r)
@@ -304,7 +316,14 @@ def tv_lineup():
         cur = open(TV_STATE).read().strip()
     except Exception:
         cur = ""
-    return json.dumps({"channels": chans, "current": cur}).encode()
+    favs = _read_favs()
+    favset = set(favs)
+    for c in chans:
+        c["fav"] = c["num"] in favset
+    byn = {c["num"]: c for c in chans}
+    # favorites in saved order, enriched with name/hd from the lineup (blank if no longer listed)
+    favorites = [{"num": n, "name": byn.get(n, {}).get("name", ""), "hd": byn.get(n, {}).get("hd", False)} for n in favs]
+    return json.dumps({"channels": chans, "current": cur, "favorites": favorites}).encode()
 
 def tv_set(ch):
     """Write the tv-channel state file that tv-send.sh watches -> retunes the Live TV tile."""
@@ -312,6 +331,22 @@ def tv_set(ch):
         with open(TV_STATE, "w") as f:
             f.write(ch.strip())
         return json.dumps({"channel": ch}).encode()
+    except Exception as e:
+        return json.dumps({"error": str(e)}).encode()
+
+def tv_fav(ch, on):
+    """Add (on) or remove (off) a channel from the favorites file; returns the updated list."""
+    ch = (ch or "").strip()
+    if not ch:
+        return json.dumps({"error": "no channel"}).encode()
+    favs = _read_favs()
+    if on and ch not in favs:
+        favs.append(ch)
+    elif not on:
+        favs = [f for f in favs if f != ch]
+    try:
+        _write_favs(favs)
+        return json.dumps({"favorites": favs}).encode()
     except Exception as e:
         return json.dumps({"error": str(e)}).encode()
 
@@ -347,10 +382,18 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #slots .slot{font-size:min(2vw,2.4vh);padding:.7em .3em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
  #slots .slot.sel{background:#093;color:#000;border-color:#0f0;font-weight:bold}
  #tvwrap{padding:.3vh 0}
+ #tvfav{display:flex;flex-wrap:wrap;gap:.4vh .4vw;justify-content:center;margin-bottom:.5vh}
+ #tvfav:empty{display:none}
+ .tvfav{font-size:min(1.7vw,2vh);padding:.5em .8em;background:#141006;border:1px solid #3a2e1a;color:#eca85a;border-radius:6px;cursor:pointer;font-weight:bold}
+ .tvfav.sel{background:#093;color:#000;border-color:#0f0}
  #tvtoggle{font-size:min(1.9vw,2.2vh);padding:.5em 1em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
- #tvchan{display:none;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:.4vh .4vw;margin-top:.5vh;max-height:34vh;overflow-y:auto}
- .tvch{font-size:min(1.7vw,2vh);padding:.5em .4em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px;text-align:left;cursor:pointer}
+ #tvchan{display:none;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.4vh .4vw;margin-top:.5vh;max-height:34vh;overflow-y:auto}
+ .tvrow{display:flex;gap:.25vw}
+ .tvrow .tvch{flex:1;min-width:0}
+ .tvch{font-size:min(1.7vw,2vh);padding:.5em .4em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px;text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
  .tvch.sel{background:#093;color:#000;border-color:#0f0;font-weight:bold}
+ .star{flex:none;font-size:min(1.7vw,2vh);padding:.5em .55em;background:#0a1410;border:1px solid #1a3a2a;color:#555;border-radius:6px;cursor:pointer}
+ .star.on{color:#fc0;border-color:#3a2e1a}
  #slothint{margin-top:.5vh;font-size:min(1.7vw,2vh)}
  #nmos{padding:1.4vh 2vw 4vh}
  h2{color:#0a0;font-size:2.1vh;margin:2.2vh 0 .6vh;border-bottom:1px solid #131;padding-bottom:.3vh;
@@ -387,7 +430,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="bjpegxs" onclick="take('jpegxs',this)">JPEG XS</button>
    <button id="bj2k" onclick="take('j2k',this)">JPEG 2000</button>
   </div>
-  <div id="tvwrap"><button id="tvtoggle" onclick="toggleTv()">&#128250; TV Channels</button><div id="tvchan"></div></div>
+  <div id="tvwrap"><div id="tvfav"></div><button id="tvtoggle" onclick="toggleTv()">&#128250; TV Channels</button><div id="tvchan"></div></div>
   <div id="info"></div>
   <div id="lay">
    <span class="l2">OUTPUT &middot; MON 2</span>
@@ -451,12 +494,17 @@ async function music(action){
 }
 let tvOpen=false;
 async function loadTv(){try{const r=await fetch('/tv/lineup',{cache:'no-store'});const d=await r.json();
+const fv=document.getElementById('tvfav');
+fv.innerHTML=(d.favorites||[]).map(c=>'<button class="tvfav'+(c.num===d.current?' sel':'')+'" data-ch="'+c.num+'">'+c.num+(c.name?' '+c.name:'')+'</button>').join('');
+fv.querySelectorAll('.tvfav').forEach(b=>b.onclick=function(){tvPick(b.getAttribute('data-ch'));});
 const g=document.getElementById('tvchan');
-g.innerHTML=(d.channels||[]).map(c=>'<button class="tvch'+(c.num===d.current?' sel':'')+'" data-ch="'+c.num+'">'+c.num+' '+c.name+(c.hd?' HD':'')+'</button>').join('');
+g.innerHTML=(d.channels||[]).map(c=>'<div class="tvrow"><button class="tvch'+(c.num===d.current?' sel':'')+'" data-ch="'+c.num+'">'+c.num+' '+c.name+(c.hd?' HD':'')+'</button><button class="star'+(c.fav?' on':'')+'" data-ch="'+c.num+'" data-on="'+(c.fav?'0':'1')+'">'+(c.fav?'&#9733;':'&#9734;')+'</button></div>').join('');
 g.querySelectorAll('.tvch').forEach(b=>b.onclick=function(){tvPick(b.getAttribute('data-ch'));});
+g.querySelectorAll('.star').forEach(b=>b.onclick=function(){tvFav(b.getAttribute('data-ch'),b.getAttribute('data-on'));});
 }catch(e){}}
-function toggleTv(){tvOpen=!tvOpen;document.getElementById('tvchan').style.display=tvOpen?'grid':'none';if(tvOpen)loadTv();}
+function toggleTv(){tvOpen=!tvOpen;document.getElementById('tvchan').style.display=tvOpen?'grid':'none';loadTv();}
 async function tvPick(ch){try{await fetch('/tv/set?ch='+encodeURIComponent(ch),{cache:'no-store'});}catch(e){}setTimeout(loadTv,400);}
+async function tvFav(ch,on){try{await fetch('/tv/fav?ch='+encodeURIComponent(ch)+'&on='+on,{cache:'no-store'});}catch(e){}loadTv();}
 async function musicState(){
   const np=document.getElementById('mnp');
   try{const r=await fetch('/music/state',{cache:'no-store'});const d=await r.json();
@@ -571,6 +619,7 @@ function tick(){   // per-frame: ONLY the timecode text (cheap); no innerHTML, n
 refreshState(); setInterval(refreshState,5000);
 loadNmos();     setInterval(loadNmos,6000);
 musicState();   setInterval(musicState,4000);
+loadTv();       // populate the favorites row on load (no interval — avoids hammering the HDHR)
 sync(); setInterval(sync,3000); tick();
 </script></body></html>"""
 
@@ -652,6 +701,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(tv_lineup())
         elif parsed.path == "/tv/set":
             self._send_json(tv_set(parse_qs(parsed.query).get("ch", [""])[0]))
+        elif parsed.path == "/tv/fav":
+            _q = parse_qs(parsed.query)
+            self._send_json(tv_fav(_q.get("ch", [""])[0], _q.get("on", ["1"])[0] in ("1", "true", "on")))
         else:
             body = PAGE.encode("utf-8")
             self.send_response(200)

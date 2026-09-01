@@ -47,7 +47,7 @@ ACAPS = Gst.Caps.from_string("audio/x-raw,format=S16LE,rate=48000,channels=6,cha
 # ---- persistent tail + fallback (one pipeline). vsel/asel sink_0 = the black/silence fallback. ----
 pipeline = Gst.parse_launch(
     "input-selector name=vsel sync-streams=false ! queue ! cudaupload ! nvh265enc rc-mode=cbr bitrate=6000 "
-    "preset=p4 tune=low-latency gop-size=30 aud=true ! h265parse config-interval=-1 ! queue ! mux. "
+    "preset=p4 tune=low-latency gop-size=30 aud=true ! h265parse config-interval=-1 name=vparse ! queue ! mux. "
     "input-selector name=asel sync-streams=false ! queue ! audioconvert ! audioresample "
     "! audio/x-raw,channels=6,channel-mask=(bitmask)0x3f ! avenc_aac bitrate=384000 ! aacparse ! queue ! mux. "
     f"mpegtsmux name=mux ! queue ! udpsink host={GRP} port={PORT} multicast-iface={IFACE} auto-multicast=true ttl={TTL} "
@@ -55,6 +55,44 @@ pipeline = Gst.parse_launch(
     "audiotestsrc wave=silence is-live=true ! audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=6,channel-mask=(bitmask)0x3f ! asel.")
 vsel = pipeline.get_by_name("vsel"); asel = pipeline.get_by_name("asel")
 vfb = vsel.get_static_pad("sink_0"); afb = asel.get_static_pad("sink_0")
+
+# Restamp the encoder input onto pipeline running-time. THE bug: a live broadcast's frames carry PCR
+# PTS (~10^5 s) while nvh265enc always stamps DTS from the pipeline clock (~10^3 s of uptime). With no
+# B-frames DTS must equal PTS, but here they sit ~95,000 s apart; in the 33-bit MPEG-TS clock (wraps
+# ~26.5 h) that lands DTS AFTER PTS -- "display before decode" -- so the receiver's nvh265dec stalls
+# and drops frames (Live-TV-only jumping, in single AND multi). Fixing DTS after the encoder doesn't
+# stick (mpegtsmux re-derives it), so we fix the cause: shift each buffer so PTS rides the running-time
+# clock, then DTS==PTS falls out naturally. ONE shared offset for video and audio (video owns it, audio
+# follows) keeps the broadcast's A/V relationship intact. The black fallback already runs on running-
+# time, so its offset is ~0 and it is unaffected.
+FRAME_NS = 33333333
+TOL_NS   = 500 * 1000000
+PTSADJ = {"adj": 0, "vend": None}
+def repair_v(pad, info):
+    b = info.get_buffer()
+    if b is None or b.pts == Gst.CLOCK_TIME_NONE:
+        return Gst.PadProbeReturn.OK
+    dur = b.duration if b.duration != Gst.CLOCK_TIME_NONE and b.duration > 0 else FRAME_NS
+    p = b.pts + PTSADJ["adj"]
+    if PTSADJ["vend"] is not None and (p < PTSADJ["vend"] - TOL_NS or p > PTSADJ["vend"] + TOL_NS):
+        PTSADJ["adj"] = PTSADJ["vend"] - b.pts
+        p = b.pts + PTSADJ["adj"]
+    b.pts = p
+    b.dts = p                              # no B-frames -> DTS must equal PTS
+    PTSADJ["vend"] = p + dur
+    return Gst.PadProbeReturn.OK
+def repair_a(pad, info):
+    b = info.get_buffer()
+    if b is None:
+        return Gst.PadProbeReturn.OK
+    adj = PTSADJ["adj"]                     # follow video's shared offset -> A/V stays locked
+    if b.pts != Gst.CLOCK_TIME_NONE:
+        b.pts = b.pts + adj
+    if b.dts != Gst.CLOCK_TIME_NONE:
+        b.dts = b.dts + adj
+    return Gst.PadProbeReturn.OK
+vsel.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, repair_v)
+asel.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, repair_a)
 
 def mk(factory, **props):
     e = Gst.ElementFactory.make(factory)

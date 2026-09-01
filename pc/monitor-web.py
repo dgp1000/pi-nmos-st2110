@@ -454,7 +454,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
 </style></head>
 <body>
  <div id="top">
-  <div id="brand">ATOLL<span>ST&nbsp;2110 &middot; NMOS island monitor</span></div>
+  <div id="brand">ATOLL<span>ST&nbsp;2110 &middot; NMOS island monitor &middot; <a href="#" id="anlink" style="color:#3c9;text-decoration:none">analyser &#8599;</a></span></div>
   <div id="tc">--:--:--:--</div>
   <div id="ctrl">
    <button id="bjxs" onclick="take('jxs',this)">Home videos</button>
@@ -545,6 +545,8 @@ async function fecLoss(v){document.getElementById('fecval').textContent=Number(v
   try{await fetch('/fec/set?loss='+(v/100),{cache:'no-store'});}catch(e){}}
 async function fecToggle(){fecOn=!fecOn;
   try{await fetch('/fec/set?enable='+(fecOn?1:0),{cache:'no-store'});}catch(e){}fecRefresh();}
+(function(){var a=document.getElementById('anlink');
+ if(a) a.href=location.protocol+'//'+location.hostname+':8101/';})();
 let tvOpen=false;
 async function loadTv(){try{const r=await fetch('/tv/lineup',{cache:'no-store'});const d=await r.json();
 const fv=document.getElementById('tvfav');

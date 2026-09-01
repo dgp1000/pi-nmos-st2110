@@ -73,28 +73,43 @@ src = {"els": [], "vpad": None, "apad": None, "ch": None, "live": False}
 # untouched (so real timing and A/V relationship are preserved within a segment), and any jump beyond
 # TOL is bridged by continuing one step after the last emitted PTS. Video and audio self-correct
 # independently; because the fallback keeps them aligned, they resume aligned after a switch.
-FRAME_NS = 33333333            # ~1/30 s, the default step when a buffer has no duration
+FRAME_NS = 33333333            # ~1/30 s, the default step when a video buffer has no duration
 TOL_NS   = 500 * 1000000       # 0.5 s: bigger deltas are treated as a discontinuity to bridge
+# ONE shared offset drives both streams. The video probe owns it (video is what the compositor cares
+# about): it bridges a discontinuity by setting adj so the timeline continues seamlessly. The audio
+# probe just APPLIES the same adj -- so audio and video are always shifted by the identical amount and
+# the broadcast's own A/V relationship is preserved. (Repairing them independently, as a first cut did,
+# let the two offsets drift apart and pushed audio ~0.5 s out of sync.)
+PTS = {"adj": 0, "vend": None}
 
-def make_repair(defdur):
-    st = {"adj": 0, "end": None}
-    def repair(pad, info):
-        b = info.get_buffer()
-        if b is None or b.pts == Gst.CLOCK_TIME_NONE:
-            return Gst.PadProbeReturn.OK
-        dur = b.duration if b.duration != Gst.CLOCK_TIME_NONE and b.duration > 0 else defdur
-        p = b.pts + st["adj"]
-        if st["end"] is not None and (p < st["end"] - TOL_NS or p > st["end"] + TOL_NS):
-            st["adj"] = st["end"] - b.pts     # discontinuity -> continue from where we left off
-            p = b.pts + st["adj"]
-        b.pts = p
-        if b.dts != Gst.CLOCK_TIME_NONE:
-            b.dts = b.dts + st["adj"]
-        st["end"] = p + dur
+def repair_v(pad, info):
+    b = info.get_buffer()
+    if b is None or b.pts == Gst.CLOCK_TIME_NONE:
         return Gst.PadProbeReturn.OK
-    return repair
-vsel.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, make_repair(FRAME_NS))
-asel.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, make_repair(21333333))  # ~1024/48k audio
+    dur = b.duration if b.duration != Gst.CLOCK_TIME_NONE and b.duration > 0 else FRAME_NS
+    p = b.pts + PTS["adj"]
+    if PTS["vend"] is not None and (p < PTS["vend"] - TOL_NS or p > PTS["vend"] + TOL_NS):
+        PTS["adj"] = PTS["vend"] - b.pts   # discontinuity -> continue from where video left off
+        p = b.pts + PTS["adj"]
+    b.pts = p
+    if b.dts != Gst.CLOCK_TIME_NONE:
+        b.dts = b.dts + PTS["adj"]
+    PTS["vend"] = p + dur
+    return Gst.PadProbeReturn.OK
+
+def repair_a(pad, info):
+    b = info.get_buffer()
+    if b is None:
+        return Gst.PadProbeReturn.OK
+    adj = PTS["adj"]                        # follow video's shared offset -> A/V stays locked
+    if b.pts != Gst.CLOCK_TIME_NONE:
+        b.pts = b.pts + adj
+    if b.dts != Gst.CLOCK_TIME_NONE:
+        b.dts = b.dts + adj
+    return Gst.PadProbeReturn.OK
+
+vsel.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, repair_v)
+asel.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, repair_a)
 LASTGOOD = {"ch": DEFCH}   # last channel that actually went live; reverted to if a bad channel errors
 # watchdog: change_at = monotonic time of the last (debounced) retune; tries = rebuild attempts since.
 # If the source doesn't reach "live" within STUCK_S of a retune, it stuck on the black fallback

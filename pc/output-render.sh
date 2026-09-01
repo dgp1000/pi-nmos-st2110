@@ -48,7 +48,14 @@ tile_full() {
   esac
   local abranch=" $name. ! audio/mpeg ! fakesink sync=false"
   [ "$src" = music ] && abranch=""   # video-only placeholder: no TS audio pad to terminate
-  echo "$(hevc_tile "$grp" "$port" "$w" "$h" "$name") ! textoverlay text='$label' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! queue leaky=downstream max-size-buffers=2 ! mix.sink_$idx$abranch"
+  # Live TV (hevc) is the only tile whose source channel-switches, so its 5010 PTS leaps at a switch
+  # (broadcast epoch <-> black-fallback running-time). The compositor can't re-align the tile across
+  # that jump and drops it to ~1 fps. single-segment restamps this tile onto one continuous local
+  # running-time, eating the discontinuity, so the compositor always sees a clean 30fps timeline. The
+  # non-switching tiles (home/music) don't need it and are left untouched.
+  local ss=""
+  [ "$src" = hevc ] && ss="identity single-segment=true ! "
+  echo "$(hevc_tile "$grp" "$port" "$w" "$h" "$name") ! ${ss}textoverlay text='$label' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! queue leaky=downstream max-size-buffers=2 ! mix.sink_$idx$abranch"
 }
 
 # Audio-only pipeline for the SELECTED source (used in side/multi, and single+raw); the
@@ -72,7 +79,7 @@ build_pipeline() {   # $1=layout  $2=active
       ;;
     side)
       echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=270 sink_1::xpos=960 sink_1::ypos=270 ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! $VIDEO_SINK sync=false \
-        $(hevc_tile "$HEVC_GRP" "$HEVC_PORT" 960 540 hd) ! textoverlay text='Live TV' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_0 \
+        $(hevc_tile "$HEVC_GRP" "$HEVC_PORT" 960 540 hd) ! identity single-segment=true ! textoverlay text='Live TV' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_0 \
         hd. ! audio/mpeg ! fakesink sync=false \
         $(raw_video 960 540) ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_1" ;;
     multi)

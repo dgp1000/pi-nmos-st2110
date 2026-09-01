@@ -63,53 +63,12 @@ def mk(factory, **props):
     return e
 
 src = {"els": [], "vpad": None, "apad": None, "ch": None, "live": False}
-# Continuous-PTS repair. The black/silence fallback is stamped with pipeline running-time (a few
-# thousand seconds of uptime); a live broadcast carries its own PCR-based PTS (tens of thousands of
-# seconds). Passing those straight through makes the muxed output PTS leap ~10^5 s at EVERY switch
-# (both fallback->live and live->fallback). A lone decoder rides it, but the multiview COMPOSITOR
-# can't re-align the Live TV tile across such a jump and drops it to ~1 fps until the stream resets --
-# the "video stepping after a channel change" bug. A probe on each encoder-input (selector output)
-# rewrites PTS/DTS onto a single continuous timeline: normal frame-to-frame deltas pass through
-# untouched (so real timing and A/V relationship are preserved within a segment), and any jump beyond
-# TOL is bridged by continuing one step after the last emitted PTS. Video and audio self-correct
-# independently; because the fallback keeps them aligned, they resume aligned after a switch.
-FRAME_NS = 33333333            # ~1/30 s, the default step when a video buffer has no duration
-TOL_NS   = 500 * 1000000       # 0.5 s: bigger deltas are treated as a discontinuity to bridge
-# ONE shared offset drives both streams. The video probe owns it (video is what the compositor cares
-# about): it bridges a discontinuity by setting adj so the timeline continues seamlessly. The audio
-# probe just APPLIES the same adj -- so audio and video are always shifted by the identical amount and
-# the broadcast's own A/V relationship is preserved. (Repairing them independently, as a first cut did,
-# let the two offsets drift apart and pushed audio ~0.5 s out of sync.)
-PTS = {"adj": 0, "vend": None}
-
-def repair_v(pad, info):
-    b = info.get_buffer()
-    if b is None or b.pts == Gst.CLOCK_TIME_NONE:
-        return Gst.PadProbeReturn.OK
-    dur = b.duration if b.duration != Gst.CLOCK_TIME_NONE and b.duration > 0 else FRAME_NS
-    p = b.pts + PTS["adj"]
-    if PTS["vend"] is not None and (p < PTS["vend"] - TOL_NS or p > PTS["vend"] + TOL_NS):
-        PTS["adj"] = PTS["vend"] - b.pts   # discontinuity -> continue from where video left off
-        p = b.pts + PTS["adj"]
-    b.pts = p
-    if b.dts != Gst.CLOCK_TIME_NONE:
-        b.dts = b.dts + PTS["adj"]
-    PTS["vend"] = p + dur
-    return Gst.PadProbeReturn.OK
-
-def repair_a(pad, info):
-    b = info.get_buffer()
-    if b is None:
-        return Gst.PadProbeReturn.OK
-    adj = PTS["adj"]                        # follow video's shared offset -> A/V stays locked
-    if b.pts != Gst.CLOCK_TIME_NONE:
-        b.pts = b.pts + adj
-    if b.dts != Gst.CLOCK_TIME_NONE:
-        b.dts = b.dts + adj
-    return Gst.PadProbeReturn.OK
-
-vsel.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, repair_v)
-asel.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, repair_a)
+# NOTE: 5010's PTS carries each source's native epoch (live broadcast PCR ~10^5 s, black fallback
+# pipeline running-time), so it leaps at a switch. That's harmless to a lone decoder AND to a receiver
+# that normalises the tile's timeline; the multiview compositor needs that normalisation, which is done
+# receiver-side with `identity single-segment=true` on the Live TV tile (output-render.sh). We do NOT
+# rewrite PTS here -- an earlier sender-side repair-probe pushed the audio ~0.5 s out of sync, and the
+# receiver's tsdemux normalises the epoch anyway.
 LASTGOOD = {"ch": DEFCH}   # last channel that actually went live; reverted to if a bad channel errors
 # watchdog: change_at = monotonic time of the last (debounced) retune; tries = rebuild attempts since.
 # If the source doesn't reach "live" within STUCK_S of a retune, it stuck on the black fallback

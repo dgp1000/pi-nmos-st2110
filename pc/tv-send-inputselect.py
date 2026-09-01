@@ -14,6 +14,16 @@
 # ===========================================================================
 import gi, os, sys, subprocess, time
 gi.require_version("Gst", "1.0")
+# Decode the HDHomeRun input on the CPU, never on the GPU. We only DECODE the source here (a cheap
+# SD/HD MPEG-2 or H.264 ATSC stream) and re-ENCODE on the GPU (nvh265enc). decodebin3 would otherwise
+# auto-plug an NVDEC decoder (nvh264dec for H.264 channels, etc.), and each channel change rebuilds
+# that decoder -- leaking NVDEC sessions that starve the multiview RECEIVER's nvh265dec tiles until
+# they can only show keyframes (~1 fps "stepping"). Demoting the nvcodec DECODERS to rank NONE (this
+# process only, via env before the registry loads) forces avdec_* on the CPU and leaves all of NVDEC
+# for the tiles. nvh265enc is an ENCODER and is unaffected. avdec handles ATSC SD/HD at 30fps easily.
+os.environ.setdefault("GST_PLUGIN_FEATURE_RANK",
+    "nvh264dec:NONE,nvh265dec:NONE,nvmpeg2videodec:NONE,nvmpeg4videodec:NONE,"
+    "nvmpegvideodec:NONE,nvvp8dec:NONE,nvvp9dec:NONE,nvjpegdec:NONE")
 from gi.repository import Gst, GLib
 Gst.init(None)
 
@@ -53,6 +63,38 @@ def mk(factory, **props):
     return e
 
 src = {"els": [], "vpad": None, "apad": None, "ch": None, "live": False}
+# Continuous-PTS repair. The black/silence fallback is stamped with pipeline running-time (a few
+# thousand seconds of uptime); a live broadcast carries its own PCR-based PTS (tens of thousands of
+# seconds). Passing those straight through makes the muxed output PTS leap ~10^5 s at EVERY switch
+# (both fallback->live and live->fallback). A lone decoder rides it, but the multiview COMPOSITOR
+# can't re-align the Live TV tile across such a jump and drops it to ~1 fps until the stream resets --
+# the "video stepping after a channel change" bug. A probe on each encoder-input (selector output)
+# rewrites PTS/DTS onto a single continuous timeline: normal frame-to-frame deltas pass through
+# untouched (so real timing and A/V relationship are preserved within a segment), and any jump beyond
+# TOL is bridged by continuing one step after the last emitted PTS. Video and audio self-correct
+# independently; because the fallback keeps them aligned, they resume aligned after a switch.
+FRAME_NS = 33333333            # ~1/30 s, the default step when a buffer has no duration
+TOL_NS   = 500 * 1000000       # 0.5 s: bigger deltas are treated as a discontinuity to bridge
+
+def make_repair(defdur):
+    st = {"adj": 0, "end": None}
+    def repair(pad, info):
+        b = info.get_buffer()
+        if b is None or b.pts == Gst.CLOCK_TIME_NONE:
+            return Gst.PadProbeReturn.OK
+        dur = b.duration if b.duration != Gst.CLOCK_TIME_NONE and b.duration > 0 else defdur
+        p = b.pts + st["adj"]
+        if st["end"] is not None and (p < st["end"] - TOL_NS or p > st["end"] + TOL_NS):
+            st["adj"] = st["end"] - b.pts     # discontinuity -> continue from where we left off
+            p = b.pts + st["adj"]
+        b.pts = p
+        if b.dts != Gst.CLOCK_TIME_NONE:
+            b.dts = b.dts + st["adj"]
+        st["end"] = p + dur
+        return Gst.PadProbeReturn.OK
+    return repair
+vsel.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, make_repair(FRAME_NS))
+asel.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, make_repair(21333333))  # ~1024/48k audio
 LASTGOOD = {"ch": DEFCH}   # last channel that actually went live; reverted to if a bad channel errors
 # watchdog: change_at = monotonic time of the last (debounced) retune; tries = rebuild attempts since.
 # If the source doesn't reach "live" within STUCK_S of a retune, it stuck on the black fallback
@@ -110,6 +152,8 @@ def build_source(ch):
 
 def _first_buf(pad, info):
     if not src["live"]:
+        # Capture the epoch offset from this first live frame: off = running-time now - buffer PTS.
+        # Applied (same value) to both selector pads in to_live() so the switch is PTS-continuous.
         GLib.idle_add(lambda: (to_live(), print(f"{time.strftime('%T')} -> live {src['ch']}", flush=True), False)[2])
     return Gst.PadProbeReturn.REMOVE
 

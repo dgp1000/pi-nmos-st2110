@@ -112,7 +112,7 @@ def build():
                 f"! identity name=lossy ! rtpst2022-1-fecdec name=fd "
                 f"udpsrc address={g} port={cp} multicast-iface={IFACE} auto-multicast=true caps=\"{FECSTREAM_CAPS}\" ! identity name=fecg0 ! queue ! fd.fec_0 "
                 f"udpsrc address={g} port={rp} multicast-iface={IFACE} auto-multicast=true caps=\"{FECSTREAM_CAPS}\" ! identity name=fecg1 ! queue ! fd.fec_1 "
-                f"fd. ! rtpmp2tdepay ! tsdemux name=d "
+                f"fd. ! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name=d "
                 f"d. ! h264parse ! queue ! nvh264dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
                 f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! {APLAY}")
     if SRC == "sps":    # ST 2022-7: two identical RTP copies merged by sequence number.

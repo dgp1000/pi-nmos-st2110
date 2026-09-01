@@ -111,18 +111,18 @@ def tile(i, src):
             head = udp(g, p, caps=MP2T, name=f"u{i}") + "! rtpjitterbuffer latency=200 ! rtpmp2tdepay "
         else:
             g, p = grp("FEC"); cp, rp = int(p) + 2, int(p) + 4
-            head = (udp(g, p, caps=MP2T, name=f"u{i}") + f"! rtpst2022-1-fecdec name=fd{i} " +
-                    udp(g, cp, caps=FECSTREAM) + f"! queue ! fd{i}.fec_0 " +
-                    udp(g, rp, caps=FECSTREAM) + f"! queue ! fd{i}.fec_1 " +
-                    f"fd{i}. ! rtpmp2tdepay ")
+            head = (udp(g, p, caps=MP2T, name=f"u{i}") + f"! identity name=flossy{i} ! rtpst2022-1-fecdec name=fd{i} " +
+                    udp(g, cp, caps=FECSTREAM) + f"! identity name=fg0_{i} ! queue ! fd{i}.fec_0 " +
+                    udp(g, rp, caps=FECSTREAM) + f"! identity name=fg1_{i} ! queue ! fd{i}.fec_1 " +
+                    f"fd{i}. ! rtpjitterbuffer latency=200 ! rtpmp2tdepay ")
         return (head + f"! tsdemux name={d} "
                 f"{d}. ! h264parse ! queue ! nvh264dec ! cudadownload " + scale(i) +
                 f"{d}. ! audio/mpeg ! queue ! decodebin ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")
     if src == "sps":     # both paths funnelled; the jitterbuffer drops the duplicate copy
         d = f"d{i}"
         return (f"funnel name=fn{i} ! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name={d} " +
-                udp(CFG["SPS_A_GRP"], CFG["SPS_A_PORT"], caps=MP2T, name=f"u{i}") + f"! queue ! fn{i}. " +
-                udp(CFG["SPS_B_GRP"], CFG["SPS_B_PORT"], caps=MP2T) + f"! queue ! fn{i}. " +
+                udp(CFG["SPS_A_GRP"], CFG["SPS_A_PORT"], caps=MP2T, name=f"u{i}") + f"! identity name=spa{i} ! queue ! fn{i}. " +
+                udp(CFG["SPS_B_GRP"], CFG["SPS_B_PORT"], caps=MP2T) + f"! identity name=spb{i} ! queue ! fn{i}. " +
                 f"{d}. ! h264parse ! queue ! nvh264dec ! cudadownload " + scale(i) +
                 f"{d}. ! audio/mpeg ! queue ! decodebin ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")
     # jpegxs / unknown -> local encode->decode demo pattern
@@ -168,6 +168,42 @@ def tick():
             pass
     return True
 GLib.timeout_add_seconds(1, tick)
+
+def _knob(name, default):
+    try:
+        return float(open(os.path.join(RUN, name)).read().strip())
+    except Exception:
+        return default
+
+# The panel's FEC loss / FEC on-off / 2022-7 path buttons write these knob files; meter-view honours
+# them in single view and, without this, the WALL ignored them -- so pulling a path did nothing to
+# the tile you were actually watching. Same files, same live behaviour, applied per tile.
+_gates = {"floss": [], "fgate": [], "spa": [], "spb": []}
+for _i in range(4):
+    for _nm, _key in ((f"flossy{_i}", "floss"), (f"spa{_i}", "spa"), (f"spb{_i}", "spb")):
+        _e = pipe.get_by_name(_nm)
+        if _e:
+            _gates[_key].append(_e)
+    for _nm in (f"fg0_{_i}", f"fg1_{_i}"):
+        _e = pipe.get_by_name(_nm)
+        if _e:
+            _gates["fgate"].append(_e)
+
+def apply_knobs():
+    loss = max(0.0, min(1.0, _knob("fec-loss", 0.0)))
+    for e in _gates["floss"]:
+        e.set_property("drop-probability", loss)
+    fec_on = _knob("fec-enable", 1.0) >= 0.5
+    for e in _gates["fgate"]:
+        e.set_property("drop-probability", 0.0 if fec_on else 1.0)
+    for key, knob in (("spa", "sps-a"), ("spb", "sps-b")):
+        up = _knob(knob, 1.0) >= 0.5
+        for e in _gates[key]:
+            e.set_property("drop-probability", 0.0 if up else 1.0)
+    return True
+if any(_gates.values()):
+    GLib.timeout_add_seconds(1, apply_knobs)
+    apply_knobs()
 
 def poll_active():                       # tally follows IS-05 takes, no rebuild
     try:

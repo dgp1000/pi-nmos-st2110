@@ -30,7 +30,7 @@ NEED = ["ISLAND_IFACE", "VIDEO_SINK", "ATOLL_PLATFORM", "ATOLL_RUN", "PANEL_PORT
         "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT", "PI_AUDIO_GRP", "PI_AUDIO_PORT",
         "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT", "OPUS_GRP", "OPUS_PORT",
         "MJPEG_GRP", "MJPEG_PORT", "VP9_GRP", "VP9_PORT", "TSRTP_GRP", "TSRTP_PORT",
-        "FEC_GRP", "FEC_PORT",
+        "FEC_GRP", "FEC_PORT", "SPS_A_GRP", "SPS_A_PORT", "SPS_B_GRP", "SPS_B_PORT",
         "GALLIUM_DRIVER", "PULSE_SERVER", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
@@ -49,7 +49,7 @@ TW, TH = W // 2, H // 2              # each quadrant
 POS = [(0, 0), (TW, 0), (0, TH), (TW, TH)]
 LABEL = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "reels": "Test Reels",
          "raw": "Pi raw 2110-20", "j2k": "JPEG 2000", "h264": "H.264 RTP", "mjpeg": "MJPEG RTP",
-         "vp9": "VP9 RTP", "tsrtp": "TS over RTP", "fec": "ST 2022-1 FEC", "jpegxs": "JPEG XS"}
+         "vp9": "VP9 RTP", "tsrtp": "TS over RTP", "fec": "ST 2022-1 FEC", "sps": "ST 2022-7 SPS", "jpegxs": "JPEG XS"}
 RAW_CAPS = ("application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)RAW,"
             "sampling=(string)YCbCr-4:2:2,depth=(string)8,width=(string)320,height=(string)240,"
             "colorimetry=(string)BT601-5,payload=(int)96")
@@ -116,6 +116,13 @@ def tile(i, src):
                     udp(g, rp, caps=FECSTREAM) + f"! queue ! fd{i}.fec_1 " +
                     f"fd{i}. ! rtpmp2tdepay ")
         return (head + f"! tsdemux name={d} "
+                f"{d}. ! h264parse ! queue ! nvh264dec ! cudadownload " + scale(i) +
+                f"{d}. ! audio/mpeg ! queue ! decodebin ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")
+    if src == "sps":     # both paths funnelled; the jitterbuffer drops the duplicate copy
+        d = f"d{i}"
+        return (f"funnel name=fn{i} ! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name={d} " +
+                udp(CFG["SPS_A_GRP"], CFG["SPS_A_PORT"], caps=MP2T, name=f"u{i}") + f"! queue ! fn{i}. " +
+                udp(CFG["SPS_B_GRP"], CFG["SPS_B_PORT"], caps=MP2T) + f"! queue ! fn{i}. " +
                 f"{d}. ! h264parse ! queue ! nvh264dec ! cudadownload " + scale(i) +
                 f"{d}. ! audio/mpeg ! queue ! decodebin ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")
     # jpegxs / unknown -> local encode->decode demo pattern

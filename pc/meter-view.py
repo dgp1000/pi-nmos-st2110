@@ -22,6 +22,7 @@ NEED = ["ISLAND_IFACE", "VIDEO_SINK", "ATOLL_PLATFORM", "ATOLL_RUN", "HEVC_GRP",
         "PI_AUDIO_GRP", "PI_AUDIO_PORT", "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT",
         "OPUS_GRP", "OPUS_PORT", "MJPEG_GRP", "MJPEG_PORT", "VP9_GRP", "VP9_PORT",
         "TSRTP_GRP", "TSRTP_PORT", "FEC_GRP", "FEC_PORT",
+        "SPS_A_GRP", "SPS_A_PORT", "SPS_B_GRP", "SPS_B_PORT",
         "GALLIUM_DRIVER", "PULSE_SERVER", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
@@ -44,6 +45,7 @@ MJPEG_CAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=JPEG,
 VP9_CAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=VP9,payload=96"
 TSRTP_CAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=MP2T,payload=33"
 FECSTREAM_CAPS = "application/x-rtp,payload=96,clock-rate=90000"
+SPS_CAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=MP2T,payload=33"
 BRAND = ("textoverlay text=ATOLL valignment=top halignment=right ypad=18 xpad=28 "
          "font-desc='Sans Bold 20' color=0x80ffffff shaded-background=false")
 # video ends at a named cairooverlay 'ov'; 'usrc' is tapped for bitrate, 'vpre' for source caps.
@@ -113,21 +115,31 @@ def build():
                 f"fd. ! rtpmp2tdepay ! tsdemux name=d "
                 f"d. ! h264parse ! queue ! nvh264dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
                 f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! {APLAY}")
+    if SRC == "sps":    # ST 2022-7: two identical RTP copies merged by sequence number.
+        ag, ap = CFG["SPS_A_GRP"], CFG["SPS_A_PORT"]   # funnel interleaves both paths and
+        bg, bp = CFG["SPS_B_GRP"], CFG["SPS_B_PORT"]   # rtpjitterbuffer drops the duplicate copy,
+        # which IS the 2022-7 merge -- first copy of each seq wins, so losing a whole path costs
+        # nothing. 'pa'/'pb' are the live kill switches; 'ua'/'ub' are tapped for per-path rates.
+        return (f"funnel name=fn ! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name=d "
+                f"udpsrc name=ua address={ag} port={ap} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{SPS_CAPS}\" ! identity name=pa ! queue ! fn. "
+                f"udpsrc name=ub address={bg} port={bp} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{SPS_CAPS}\" ! identity name=pb ! queue ! fn. "
+                f"d. ! h264parse ! queue ! nvh264dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
+                f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! {APLAY}")
     # jpegxs / unknown -> local test pattern, video only
     return (f"videotestsrc pattern=ball is-live=true ! video/x-raw,width=1920,height=1080,framerate=30/1 "
             f"! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL}")
 
 SRCNAME = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "reels": "Test Reels",
            "raw": "Pi raw 2110-20", "j2k": "JPEG 2000 island", "jpegxs": "JPEG XS codec",
-           "h264": "H.264 over RTP", "mjpeg": "MJPEG over RTP", "vp9": "VP9 over RTP", "tsrtp": "TS over RTP", "fec": "ST 2022-1 FEC"}
+           "h264": "H.264 over RTP", "mjpeg": "MJPEG over RTP", "vp9": "VP9 over RTP", "tsrtp": "TS over RTP", "fec": "ST 2022-1 FEC", "sps": "ST 2022-7 seamless"}
 VCODEC = {"hevc": "HEVC / H.265", "jxs": "HEVC / H.265", "music": "HEVC / H.265", "reels": "HEVC / H.265",
           "raw": "Uncompressed RFC 4175", "j2k": "JPEG 2000", "jpegxs": "JPEG XS",
-          "h264": "H.264 / AVC", "mjpeg": "Motion JPEG", "vp9": "VP9", "tsrtp": "H.264 / AVC", "fec": "H.264 / AVC"}
+          "h264": "H.264 / AVC", "mjpeg": "Motion JPEG", "vp9": "VP9", "tsrtp": "H.264 / AVC", "fec": "H.264 / AVC", "sps": "H.264 / AVC"}
 ACODEC = {"hevc": "AAC 5.1", "jxs": "MPEG audio (MP3)", "music": "MPEG audio (MP3)",
-          "reels": "MPEG audio (MP3)", "raw": "L24 PCM (2110-30)", "h264": "Opus", "tsrtp": "AAC", "fec": "AAC"}
+          "reels": "MPEG audio (MP3)", "raw": "L24 PCM (2110-30)", "h264": "Opus", "tsrtp": "AAC", "fec": "AAC", "sps": "AAC"}
 TRANSPORT = {"hevc": "MPEG-TS / UDP", "jxs": "MPEG-TS / UDP", "music": "MPEG-TS / UDP",
              "reels": "MPEG-TS / UDP", "raw": "ST 2110-20 RTP", "j2k": "J2K/RTP", "jpegxs": "local",
-             "h264": "RTP (RFC 6184) + Opus RTP", "mjpeg": "RTP (RFC 2435)", "vp9": "RTP (RFC 7741)", "tsrtp": "MPEG-TS / RTP (ST 2022-2)", "fec": "TS/RTP + ST 2022-1 FEC"}
+             "h264": "RTP (RFC 6184) + Opus RTP", "mjpeg": "RTP (RFC 2435)", "vp9": "RTP (RFC 7741)", "tsrtp": "MPEG-TS / RTP (ST 2022-2)", "fec": "TS/RTP + ST 2022-1 FEC", "sps": "TS/RTP x2 (ST 2022-7)"}
 
 pipe = Gst.parse_launch(build())
 ov = pipe.get_by_name("ov")
@@ -219,6 +231,38 @@ if _lossy:
     GLib.timeout_add_seconds(1, apply_fec)
     apply_fec()
 
+# --- ST 2022-7 per-path stats + live kill switches (source key "sps") ---
+#   echo 0 > ~/atoll-run/sps-a    # "pull the cable" on path A; the picture must not flinch
+#   echo 0 > ~/atoll-run/sps-b
+# Counters come from a byte/packet probe on each path's udpsrc, so the overlay can show which path
+# is actually carrying -- the whole point being that the output is unaffected either way.
+st["pa_pps"] = st["pb_pps"] = 0
+st["_pa"] = st["_pb"] = 0
+st["pa_on"] = st["pb_on"] = True
+def _count(key):
+    def cb(_pad, _info):
+        st[key] += 1
+        return Gst.PadProbeReturn.OK
+    return cb
+for _nm, _k in (("ua", "_pa"), ("ub", "_pb")):
+    _e = pipe.get_by_name(_nm)
+    if _e:
+        _e.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _count(_k))
+_pgate = {"a": pipe.get_by_name("pa"), "b": pipe.get_by_name("pb")}
+def apply_sps():
+    st["pa_pps"], st["_pa"] = st["_pa"], 0
+    st["pb_pps"], st["_pb"] = st["_pb"], 0
+    for k in ("a", "b"):
+        on = _knob(f"sps-{k}", 1.0) >= 0.5
+        st[f"p{k}_on"] = on
+        g = _pgate[k]
+        if g:
+            g.set_property("drop-probability", 0.0 if on else 1.0)
+    return True
+if _pgate["a"]:
+    GLib.timeout_add_seconds(1, apply_sps)
+    apply_sps()
+
 LABELS = ["L", "R", "C", "LFE", "Ls", "Rs", "7", "8"]
 def on_draw(_ov, ctx, _ts, _dur):
     h = st["h"]
@@ -233,6 +277,10 @@ def on_draw(_ov, ctx, _ts, _dur):
         lines.append("  ".join(x for x in ("Audio ", ACODEC[SRC], f"{ach} ch" if ach else "", arate) if x))
     if st["mbps"]:
         lines.append(f"Stream   {st['mbps']} Mbps   {TRANSPORT.get(SRC, '')}")
+    if SRC == "sps":   # show which path is carrying; the picture is unaffected either way
+        a = f"A {st['pa_pps']:>4} pkt/s" + ("" if st["pa_on"] else "  DEAD")
+        b = f"B {st['pb_pps']:>4} pkt/s" + ("" if st["pb_on"] else "  DEAD")
+        lines.append(f"Paths    {a}    {b}")
     x0, y0, lh = 34, 34, 30
     ctx.set_source_rgba(0, 0, 0, 0.45); ctx.rectangle(x0 - 14, y0 - 8, 640, lh * len(lines) + 20); ctx.fill()
     ctx.select_font_face("sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)

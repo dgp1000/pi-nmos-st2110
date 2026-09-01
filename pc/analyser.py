@@ -24,7 +24,8 @@ NEED = ["ISLAND_IFACE", "ISLAND_PC_IP", "ISLAND_PI_IP", "ANALYSER_PORT",
         "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT", "PI_AUDIO_GRP", "PI_AUDIO_PORT",
         "ANC_GRP", "ANC_PORT", "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT",
         "OPUS_GRP", "OPUS_PORT", "MJPEG_GRP", "MJPEG_PORT", "VP9_GRP", "VP9_PORT",
-        "TSRTP_GRP", "TSRTP_PORT", "FEC_GRP", "FEC_PORT"]
+        "TSRTP_GRP", "TSRTP_PORT", "FEC_GRP", "FEC_PORT",
+        "SPS_A_GRP", "SPS_A_PORT", "SPS_B_GRP", "SPS_B_PORT"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
 LOCAL = CFG.get("ISLAND_PC_IP") or "0.0.0.0"
@@ -50,6 +51,8 @@ FLOWS = [
     ("VP9",            *g("VP9"),    "VP9 over RTP (RFC 7741)"),
     ("TS over RTP",    *g("TSRTP"),  "MPEG-TS over RTP (ST 2022-2)"),
     ("FEC media",      *g("FEC"),    "ST 2022-1 protected media"),
+    ("2022-7 path A",  CFG.get("SPS_A_GRP",""), CFG.get("SPS_A_PORT",""), "ST 2022-7 seamless, path A"),
+    ("2022-7 path B",  CFG.get("SPS_B_GRP",""), CFG.get("SPS_B_PORT",""), "ST 2022-7 seamless, path B"),
 ]
 _fg, _fp = g("FEC")
 if _fg and _fp:

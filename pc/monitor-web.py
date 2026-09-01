@@ -44,6 +44,7 @@ SOURCES = {
     "vp9": {"label": None},                             # VP9 over RTP (RFC 7741), 239.10.10.90:5026
     "tsrtp": {"label": None},                           # MPEG-TS over RTP (ST 2022-2), 239.10.10.95:5028
     "fec": {"label": None},                             # ST 2022-1 FEC protected TS/RTP, 239.10.10.100:5040
+    "sps": {"label": None},                             # ST 2022-7 seamless dual path, 239.10.10.105/106
     "reels": {"label": None},                           # Test Reels (PC->island 239.10.10.31:5014; NMOS m1 later)
 }
 DEFAULT_SRC = "jxs"
@@ -300,6 +301,8 @@ TV_STATE = _RUN + '/tv-channel'
 TV_FAVS = _RUN + '/tv-favorites'   # favorite channel numbers, one per line, in the order added
 FEC_LOSS = _RUN + '/fec-loss'      # ST 2022-1 demo: fraction of media packets to drop
 FEC_ENABLE = _RUN + '/fec-enable'  # ST 2022-1 demo: 1 = FEC flows delivered, 0 = gated off
+SPS_A = _RUN + '/sps-a'            # ST 2022-7 demo: 1 = path A delivered, 0 = 'cable pulled'
+SPS_B = _RUN + '/sps-b'
 
 def _read_favs():
     try:
@@ -340,6 +343,26 @@ def tv_set(ch):
         return json.dumps({"channel": ch}).encode()
     except Exception as e:
         return json.dumps({"error": str(e)}).encode()
+
+def sps_state():
+    """ST 2022-7 path switches. Both default to up."""
+    def rd(path):
+        try:
+            return int(float(open(path).read().strip()) >= 0.5)
+        except Exception:
+            return 1
+    return json.dumps({"a": rd(SPS_A), "b": rd(SPS_B)}).encode()
+
+def sps_set(path, up):
+    f = SPS_A if path == "a" else SPS_B if path == "b" else None
+    if f is None:
+        return json.dumps({"error": "bad path"}).encode()
+    try:
+        with open(f, "w") as fh:
+            fh.write("1" if str(up) in ("1", "true", "on") else "0")
+    except Exception as e:
+        return json.dumps({"error": str(e)}).encode()
+    return sps_state()
 
 def fec_state():
     """Current ST 2022-1 demo knobs, for the panel controls."""
@@ -412,6 +435,9 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #slots .slot.sel{background:#093;color:#000;border-color:#0f0;font-weight:bold}
  #fecwrap{padding:.3vh 0;display:flex;align-items:center;justify-content:center;gap:.6vw;flex-wrap:wrap}
  #fecwrap label{font-size:min(1.6vw,1.9vh);color:#7a7}
+ .sub2{font-size:min(1.4vw,1.7vh);color:#575}
+ .pathbtn{font-size:min(1.7vw,2vh);padding:.4em 1.1em;border-radius:6px;border:1px solid #1a3a2a;background:#093;color:#000;font-weight:bold;cursor:pointer}
+ .pathbtn.down{background:#3a1010;border-color:#803;color:#f88}
  #fecloss{width:min(26vw,30vh);vertical-align:middle}
  #fecval{font-size:min(1.6vw,1.9vh);color:#3c9;min-width:3.2em;display:inline-block;font-variant-numeric:tabular-nums}
  #fectog{font-size:min(1.7vw,2vh);padding:.4em .9em;border-radius:6px;border:1px solid #1a3a2a;background:#0a1410;color:#9c9;cursor:pointer}
@@ -469,7 +495,9 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="bvp9" onclick="take('vp9',this)">VP9 RTP</button>
    <button id="btsrtp" onclick="take('tsrtp',this)">TS over RTP</button>
    <button id="bfec" onclick="take('fec',this)">ST 2022-1 FEC</button>
+   <button id="bsps" onclick="take('sps',this)">ST 2022-7 SPS</button>
   </div>
+  <div id="fecwrap" style="gap:.6vw"><label>ST&nbsp;2022-7 paths</label><button id="spsa" class="pathbtn" onclick="spsToggle('a')">A</button><button id="spsb" class="pathbtn" onclick="spsToggle('b')">B</button><span class="sub2">pull a path &mdash; the picture must not flinch</span></div>
   <div id="fecwrap"><label>ST&nbsp;2022-1 loss</label><input id="fecloss" type="range" min="0" max="10" step="0.5" value="0" oninput="fecLoss(this.value)"><span id="fecval">0.0%</span><button id="fectog" onclick="fecToggle()">FEC</button></div>
   <div id="tvwrap"><div id="tvfav"></div><button id="tvtoggle" onclick="toggleTv()">&#128250; TV Channels</button><div id="tvchan"></div></div>
   <div id="info"></div>
@@ -505,7 +533,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
 const FPS=__FPS__;
 let offset=0, ptp={}, synced=false;
 const BTN={jxs:'bjxs',raw:'braw',hevc:'bhevc',music:'bmusic',reels:'breels'};
-const SRCLABEL={jxs:'Home',raw:'Pi raw',hevc:"Live TV",music:'Music',reels:'Test Reels',jpegxs:'JPEG XS',j2k:'JPEG 2000',h264:'H.264 RTP',mjpeg:'MJPEG RTP',vp9:'VP9 RTP',tsrtp:'TS/RTP',fec:'FEC'};
+const SRCLABEL={jxs:'Home',raw:'Pi raw',hevc:"Live TV",music:'Music',reels:'Test Reels',jpegxs:'JPEG XS',j2k:'JPEG 2000',h264:'H.264 RTP',mjpeg:'MJPEG RTP',vp9:'VP9 RTP',tsrtp:'TS/RTP',fec:'FEC',sps:'2022-7'};
 let selSlot=null, curSlots=['hevc','raw','jxs','music'];
 function selSlotFn(i){ selSlot=(selSlot===i)?null:i; renderSlots(); }
 function renderSlots(){
@@ -534,6 +562,12 @@ async function music(action){
   try{await fetch('/music/'+action,{cache:'no-store'});}catch(e){}
   setTimeout(musicState,350);
 }
+async function spsRefresh(){try{const d=await(await fetch('/sps/state',{cache:'no-store'})).json();
+  for(const k of ['a','b']){const b=document.getElementById('sps'+k);
+    const up=!!d[k]; b.classList.toggle('down',!up); b.textContent=k.toUpperCase()+(up?'':' DOWN');}
+}catch(e){}}
+async function spsToggle(k){const b=document.getElementById('sps'+k);const up=b.classList.contains('down');
+  try{await fetch('/sps/set?path='+k+'&up='+(up?1:0),{cache:'no-store'});}catch(e){}spsRefresh();}
 let fecOn=true;
 async function fecRefresh(){try{const r=await fetch('/fec/state',{cache:'no-store'});const d=await r.json();
   fecOn=!!d.enable; const pct=(d.loss*100);
@@ -676,6 +710,7 @@ loadNmos();     setInterval(loadNmos,6000);
 musicState();   setInterval(musicState,4000);
 loadTv();       // populate the favorites row on load (no interval — avoids hammering the HDHR)
 fecRefresh();   setInterval(fecRefresh,4000);
+spsRefresh();   setInterval(spsRefresh,4000);
 sync(); setInterval(sync,3000); tick();
 </script></body></html>"""
 
@@ -757,6 +792,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(tv_lineup())
         elif parsed.path == "/tv/set":
             self._send_json(tv_set(parse_qs(parsed.query).get("ch", [""])[0]))
+        elif parsed.path == "/sps/state":
+            self._send_json(sps_state())
+        elif parsed.path == "/sps/set":
+            _q = parse_qs(parsed.query)
+            self._send_json(sps_set(_q.get("path", [""])[0], _q.get("up", ["1"])[0]))
         elif parsed.path == "/fec/state":
             self._send_json(fec_state())
         elif parsed.path == "/fec/set":

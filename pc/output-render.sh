@@ -104,6 +104,12 @@ build_pipeline() {   # $1=layout  $2=active
         $(hevc_tile "$HEVC_GRP" "$HEVC_PORT" 960 540 hd) ! identity single-segment=true ! textoverlay text='Live TV' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_0 \
         hd. ! audio/mpeg ! fakesink sync=false \
         $(raw_video 960 540) ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_1" ;;
+    wall)
+      # Python 2x2 wall: same one-pipeline topology as multi, but with a live tally border on the
+      # on-air tile, per-tile audio meters and per-tile bitrate -- none of which a gst-launch string
+      # can update after it starts. Slot changes still rebuild us; tally follows takes live.
+      echo "python3 \"$DIR/wall-view.py\" \"${3:-hevc,raw,jxs,music}\" \"$SCREEN\""
+      ;;
     multi)
       # $3 = slots "tl,tr,bl,br" (any source -> any of the four 960x540 quadrants).
       IFS=',' read -r m0 m1 m2 m3 <<< "${3:-hevc,raw,jxs,music}"
@@ -145,7 +151,7 @@ while true; do
   # settled stream links cleanly, so a transient blip recovers on its own.
   if [ -n "$apid" ] && ! kill -0 "$apid" 2>/dev/null; then apid=""; aud_key="__force_audio_rebuild__"; fi
   # --- video: relaunch the pipeline only on layout/source/tile-assignment change ---
-  case "$layout" in single) key="single:$active";; multi) key="multi:$slots";; *) key="$layout";; esac
+  case "$layout" in single) key="single:$active";; multi) key="multi:$slots";; wall) key="wall:$slots";; *) key="$layout";; esac
   if [ "$key" != "$cur_key" ]; then
     cmd="$(build_pipeline "$layout" "$active" "$slots")"
     if [ -n "$cmd" ]; then

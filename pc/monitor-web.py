@@ -49,7 +49,7 @@ SOURCES = {
 DEFAULT_SRC = "jxs"
 _active = {"src": DEFAULT_SRC, "ts": 0.0}
 _ACTIVE_TTL = 2.0  # seconds; avoids hammering the NMOS node on every /state poll
-_output = {"layout": "single"}   # native output (monitor 2) layout: single|side|multi
+_output = {"layout": "single"}   # native output (monitor 2) layout: single|side|multi|wall
 # Multiview tile assignment: which source fills each 2x2 slot (TL, TR, BL, BR). Any source -> any slot.
 _slots = ["hevc", "raw", "jxs", "music"]
 
@@ -477,6 +477,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <span class="l2">OUTPUT &middot; MON 2</span>
    <button id="lsingle" onclick="setLayout('single')">Follow take</button>
    <button id="lside" onclick="setLayout('side')">Side &times; 2</button>
+   <button id="lwall" onclick="setLayout('wall')">Wall +tally</button>
    <button id="lmulti" onclick="setLayout('multi')">Multiview</button>
   </div>
   <div id="music">
@@ -566,7 +567,7 @@ async function musicState(){
       const sh=document.getElementById('mshuf'); if(sh) sh.classList.toggle('on',!!d.shuffle);
   }catch(e){np.textContent='(offline)';}
 }
-const LAYBTN={single:'lsingle',side:'lside',multi:'lmulti'};
+const LAYBTN={single:'lsingle',side:'lside',multi:'lmulti',wall:'lwall'};
 function hlLayout(m){ document.querySelectorAll('#lay button').forEach(b=>b.classList.remove('on')); const b=document.getElementById(LAYBTN[m]); if(b) b.classList.add('on'); }
 async function setLayout(m){ hlLayout(m); try{await fetch('/layout?mode='+m,{cache:'no-store'});}catch(e){} }
 async function refreshState(){
@@ -708,7 +709,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif parsed.path == "/layout":
             qs = parse_qs(parsed.query)
             mode = qs.get("mode", ["single"])[0]
-            if mode not in ("single", "side", "multi"):
+            if mode not in ("single", "side", "multi", "wall"):
                 mode = "single"
             _output["layout"] = mode
             self._send_json(json.dumps({"layout": mode}).encode())

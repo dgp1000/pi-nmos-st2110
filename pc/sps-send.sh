@@ -24,7 +24,7 @@ BITRATE="${SPS_BITRATE:-3000}"
 echo "sps-send: ST 2022-7 dual-path -> A $SPS_A_GRP:$SPS_A_PORT  B $SPS_B_GRP:$SPS_B_PORT on $IFACE"
 while true; do
   gst-launch-1.0 -q \
-    videotestsrc pattern=ball is-live=true \
+    videotestsrc pattern=ball motion=sweep is-live=true \
       ! video/x-raw,width=1280,height=720,framerate=30/1 \
       ! textoverlay text="ST 2022-7 - seamless dual path (A + B)" valignment=top halignment=center font-desc="Sans Bold 24" shaded-background=true \
       ! clockoverlay valignment=bottom halignment=right time-format="%H:%M:%S" font-desc="Sans Bold 18" shaded-background=true \

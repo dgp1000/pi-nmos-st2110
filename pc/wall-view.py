@@ -126,7 +126,7 @@ def tile(i, src):
                 f"{d}. ! h264parse ! queue ! nvh264dec ! cudadownload " + scale(i) +
                 f"{d}. ! audio/mpeg ! queue ! decodebin ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")
     # jpegxs / unknown -> local encode->decode demo pattern
-    return (f"videotestsrc pattern=ball is-live=true ! video/x-raw,width={TW},height={TH},framerate=30/1 "
+    return (f"videotestsrc pattern=ball motion=sweep is-live=true ! video/x-raw,width={TW},height={TH},framerate=30/1 "
             f"! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert " + scale(i))
 
 sinkprops = " ".join(f"sink_{i}::xpos={x} sink_{i}::ypos={y}" for i, (x, y) in enumerate(POS))

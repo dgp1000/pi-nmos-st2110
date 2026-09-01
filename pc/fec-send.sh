@@ -27,7 +27,7 @@ ROW_PORT=$((FEC_PORT + 4))
 echo "fec-send: ST 2022-1 protected TS/RTP -> $FEC_GRP media:$FEC_PORT col:$COL_PORT row:$ROW_PORT on $IFACE"
 while true; do
   gst-launch-1.0 -q \
-    videotestsrc pattern=ball is-live=true \
+    videotestsrc pattern=ball motion=sweep is-live=true \
       ! video/x-raw,width=1280,height=720,framerate=30/1 \
       ! textoverlay text="ST 2022-1 FEC - protected TS over RTP" valignment=top halignment=center font-desc="Sans Bold 24" shaded-background=true \
       ! clockoverlay valignment=bottom halignment=right time-format="%H:%M:%S" font-desc="Sans Bold 18" shaded-background=true \

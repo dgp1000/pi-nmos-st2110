@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll Motion JPEG source (MJPEG over RTP, RFC 2435) -> 239.10.10.85:5024
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/bin/bash /home/david/pi-nmos-st2110/pc/mjpeg-send.sh
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

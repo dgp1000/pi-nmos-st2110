@@ -43,6 +43,9 @@ tile_full() {
     # H.264 elementary stream over RTP (RFC 6184) -- not TS like the HEVC tiles, so it depays from RTP
     # directly (jitterbuffer -> rtph264depay) and hardware-decodes on NVDEC.
     h264) echo "udpsrc address=$H264_GRP port=$H264_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=8388608 caps='application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96' ! rtpjitterbuffer latency=100 ! rtph264depay ! h264parse ! nvh264dec ! cudadownload ! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! video/x-raw,width=$w,height=$h ! textoverlay text='H.264 RTP' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! queue leaky=downstream max-size-buffers=2 ! mix.sink_$idx"; return ;;
+    # Motion JPEG over RTP (RFC 2435): all-intra, so no parser and no keyframe wait -- depay straight
+    # to the GPU JPEG decoder. Bigger socket buffer: whole JPEG frames, ~1.4kB packets.
+    mjpeg) echo "udpsrc address=$MJPEG_GRP port=$MJPEG_PORT multicast-iface=$IFACE auto-multicast=true buffer-size=16777216 caps='application/x-rtp,media=video,clock-rate=90000,encoding-name=JPEG,payload=96' ! rtpjitterbuffer latency=100 ! rtpjpegdepay ! nvjpegdec ! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! video/x-raw,width=$w,height=$h ! textoverlay text='MJPEG RTP' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! queue leaky=downstream max-size-buffers=2 ! mix.sink_$idx"; return ;;
     hevc)  grp=$HEVC_GRP;  port=$HEVC_PORT;  label='Live TV' ;;
     jxs)   grp=$HOME_GRP;  port=$HOME_PORT;  label='Home videos' ;;
     music) grp=$MUSIC_GRP; port=$MUSIC_PORT; label='Music' ;;

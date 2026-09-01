@@ -43,15 +43,13 @@ VTAIL = f"videoconvert ! cairooverlay name=ov ! {BRAND} ! videoconvert ! {SINK} 
 # measure ALL channels at 'level' (so the meters show 5.1), THEN downmix to stereo for playback --
 # WSLg's Pulse output is stereo and autoaudiosink won't take a 6-channel stream.
 ALEVEL = "audioconvert ! level name=lvl post-messages=true interval=50000000"
-# sync=true so the audio sink presents each sample at its stream PTS -- the SAME clock the sync=true
-# video uses -- giving true lip-sync from the source timestamps (no hand-tuned delay). GStreamer's
-# latency negotiation offsets the two sinks to match. A ~300ms jitter buffer on 'aq' keeps WSLg Pulse
-# fed (that underrun was the old sync=true stutter); it does NOT shift sync (PTS presentation is
-# unchanged by buffering). autoaudiosink so a dead Pulse falls back silently instead of killing the
-# video. Downmix to stereo; level upstream keeps 6-ch meters. Any residual skew is a live TRIM (both
-# directions) via a pad offset from ADELAY_FILE below.
+# sync=true gives true PTS lip-sync (both sinks on the shared clock). Use a PLAIN queue here: a
+# min-threshold-time hold in front of a sync=true sink releases audio in bursts -> periodic pops, so
+# just let the sink pull a steady flow and schedule by PTS. autoaudiosink so a dead Pulse falls back
+# silently instead of killing the video. Downmix to stereo; level upstream keeps 6-ch meters. Any
+# residual skew is a live TRIM (both directions) via a pad offset from ADELAY_FILE below.
 APLAY = ("audioconvert ! audio/x-raw,channels=2 ! audioresample "
-         "! queue name=aq max-size-buffers=0 max-size-bytes=0 max-size-time=1000000000 min-threshold-time=300000000 "
+         "! queue name=aq max-size-buffers=0 max-size-bytes=0 max-size-time=1000000000 "
          "! autoaudiosink sync=true")
 
 def ts_pipeline(g, p):   # HEVC video + MP3 audio in a TS (Live TV / Home / Music / Reels)

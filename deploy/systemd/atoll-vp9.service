@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll VP9 source (VP9 over RTP, RFC 7741) -> 239.10.10.90:5026
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/bin/bash /home/david/pi-nmos-st2110/pc/vp9-send.sh
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

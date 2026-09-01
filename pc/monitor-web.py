@@ -41,6 +41,7 @@ SOURCES = {
     "j2k": {"label": None},                             # JPEG 2000 island flow (J2K/RTP RFC 5371)
     "h264": {"label": None},                            # H.264 elementary stream over RTP (RFC 6184), 239.10.10.75:5018
     "mjpeg": {"label": None},                           # Motion JPEG over RTP (RFC 2435), 239.10.10.85:5024
+    "vp9": {"label": None},                             # VP9 over RTP (RFC 7741), 239.10.10.90:5026
     "reels": {"label": None},                           # Test Reels (PC->island 239.10.10.31:5014; NMOS m1 later)
 }
 DEFAULT_SRC = "jxs"
@@ -433,6 +434,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="bj2k" onclick="take('j2k',this)">JPEG 2000</button>
    <button id="bh264" onclick="take('h264',this)">H.264 RTP</button>
    <button id="bmjpeg" onclick="take('mjpeg',this)">MJPEG RTP</button>
+   <button id="bvp9" onclick="take('vp9',this)">VP9 RTP</button>
   </div>
   <div id="tvwrap"><div id="tvfav"></div><button id="tvtoggle" onclick="toggleTv()">&#128250; TV Channels</button><div id="tvchan"></div></div>
   <div id="info"></div>
@@ -467,7 +469,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
 const FPS=__FPS__;
 let offset=0, ptp={}, synced=false;
 const BTN={jxs:'bjxs',raw:'braw',hevc:'bhevc',music:'bmusic',reels:'breels'};
-const SRCLABEL={jxs:'Home',raw:'Pi raw',hevc:"Live TV",music:'Music',reels:'Test Reels',jpegxs:'JPEG XS',j2k:'JPEG 2000',h264:'H.264 RTP',mjpeg:'MJPEG RTP'};
+const SRCLABEL={jxs:'Home',raw:'Pi raw',hevc:"Live TV",music:'Music',reels:'Test Reels',jpegxs:'JPEG XS',j2k:'JPEG 2000',h264:'H.264 RTP',mjpeg:'MJPEG RTP',vp9:'VP9 RTP'};
 let selSlot=null, curSlots=['hevc','raw','jxs','music'];
 function selSlotFn(i){ selSlot=(selSlot===i)?null:i; renderSlots(); }
 function renderSlots(){

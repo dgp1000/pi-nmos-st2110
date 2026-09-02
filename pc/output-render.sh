@@ -135,6 +135,17 @@ kill_view()  { [ -n "$pid" ]  && kill -- -"$pid"  2>/dev/null; pid=""; }
 kill_audio() { [ -n "$apid" ] && kill -- -"$apid" 2>/dev/null; apid=""; }
 trap 'kill_view; kill_audio; exit 0' INT TERM EXIT
 
+# Sweep up orphaned renderers before starting. Ctrl-C does not reliably take this script down, and
+# a killed loop leaves its wall-view/meter-view child running and still drawing to the SAME WSLg
+# surface. Two renderers presenting to one surface looks like buffering judder -- video plays in
+# bursts then pauses -- and it has repeatedly been mistaken for a stream or decode fault. Kill by
+# PID, never `pkill -f`, whose pattern matches this script's own command line.
+for _orphan in $(pgrep -f "[w]all-view\.py|[m]eter-view\.py" 2>/dev/null); do
+  echo "$(date +%T) sweeping orphaned renderer pid=$_orphan"
+  kill "$_orphan" 2>/dev/null
+done
+sleep 1
+
 echo "output-render: following $PANEL/state -> monitor $SCREEN (Ctrl+C to stop)"
 while true; do
   resp="$(curl -s --max-time 2 "$PANEL/state" || true)"

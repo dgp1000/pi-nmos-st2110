@@ -194,9 +194,34 @@ for _i in range(4):
     if _e:
         _e.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _fpsn(_i))
 
+st["reord"] = [0] * 4
+st["_hi"] = [None] * 4
 def _tapn(key, idx):
     def cb(_pad, _info):
         st[key][idx] += 1
+        return Gst.PadProbeReturn.OK
+    return cb
+
+def _ordertap(idx):
+    """Count out-of-order RTP arrivals at the depayloader input for this tile."""
+    import struct as _st
+    def cb(_pad, info):
+        b = info.get_buffer()
+        ok, mi = b.map(Gst.MapFlags.READ)
+        if ok:
+            try:
+                d = mi.data
+                if len(d) >= 4:
+                    seq = _st.unpack("!H", d[2:4])[0]
+                    hi = st["_hi"][idx]
+                    if hi is not None:
+                        back = (hi - seq) & 0xFFFF
+                        if 0 < back < 4000:
+                            st["reord"][idx] += 1
+                    if hi is None or ((seq - hi) & 0xFFFF) < 4000:
+                        st["_hi"][idx] = seq
+            finally:
+                b.unmap(mi)
         return Gst.PadProbeReturn.OK
     return cb
 for _i in range(4):
@@ -204,6 +229,8 @@ for _i in range(4):
         _e = pipe.get_by_name(_nm)
         if _e:
             _e.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _tapn(_key, _i))
+            if _nm.startswith("fjb"):
+                _e.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _ordertap(_i))
 
 def tick():
     for i in range(4):
@@ -350,10 +377,10 @@ def _draw_overlay(ctx):
             dropped = max(0, wire - after); recovered = max(0, min(dropped, deliv - after))
             resid = (100.0 * max(0, wire - deliv) / wire) if wire > 0 else 0.0
             ctx.set_source_rgba(0, 0, 0, 0.55); ctx.rectangle(x + 8 * S, y + TH - 74 * S, 330 * S, 30 * S); ctx.fill()
-            ctx.set_source_rgba(1, 0.75, 0.4, 0.95) if resid > 0.01 else ctx.set_source_rgba(0.45, 0.95, 0.55, 0.95)
+            ctx.set_source_rgba(1, 0.75, 0.4, 0.95) if (resid > 0.01 or st["reord"][i]) else ctx.set_source_rgba(0.45, 0.95, 0.55, 0.95)
             ctx.set_font_size(14 * S)
             ctx.move_to(x + 16 * S, y + TH - 54 * S)
-            ctx.show_text(f"dropped {dropped:,}   FEC recovered {recovered:,}   resid {resid:.3f}%")
+            ctx.show_text(f"dropped {dropped:,}  recovered {recovered:,}  resid {resid:.3f}%  reord {st['reord'][i]:,}")
         # --- per-tile audio meters (one slim bar per channel, bottom-right of the tile) ---
         pk = st["peak"][i]
         if pk:

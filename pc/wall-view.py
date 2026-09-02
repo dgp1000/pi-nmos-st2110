@@ -72,7 +72,7 @@ def udp(g, p, buf=8388608, caps=None, name=None):
             f"buffer-size={buf} {c}")
 
 def scale(i):
-    return f"! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! video/x-raw,width={TW},height={TH} ! queue leaky=downstream max-size-buffers=2 ! mix.sink_{i} "
+    return f"! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! video/x-raw,width={TW},height={TH} ! identity name=tap{i} ! queue leaky=downstream max-size-buffers=2 ! mix.sink_{i} "
 
 def ts_tile(i, g, p, vparse, vdec):
     """MPEG-TS over plain UDP: video decoded, audio decoded only to feed this tile's level meter."""
@@ -176,6 +176,18 @@ for i in range(4):                       # per-tile bitrate tap
 for _k in ("fw", "fa", "fo"):
     st[_k] = [0] * 4
     st["_" + _k] = [0] * 4
+st["fps"] = [0.0] * 4
+st["_fc"] = [0] * 4
+def _fpsn(idx):
+    def cb(_pad, _info):
+        st["_fc"][idx] += 1
+        return Gst.PadProbeReturn.OK
+    return cb
+for _i in range(4):
+    _e = pipe.get_by_name(f"tap{_i}")
+    if _e:
+        _e.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _fpsn(_i))
+
 def _tapn(key, idx):
     def cb(_pad, _info):
         st[key][idx] += 1
@@ -191,8 +203,9 @@ def tick():
     for i in range(4):
         st["mbps"][i] = round(st["bytes"][i] * 8 / 1e6, 1)
         st["bytes"][i] = 0
-        for k in ("fw", "fa", "fo"):          # CUMULATIVE totals: the taps straddle the fecdec's
-            st[k][i] = st["_" + k][i]        # 4s buffer, so per-second differencing is meaningless
+        st["fps"][i] = st["_fc"][i]; st["_fc"][i] = 0
+        for k in ("fw", "fa", "fo"):          # CUMULATIVE totals: the taps straddle the fecdec
+            st[k][i] = st["_" + k][i]        # buffer, so per-second differencing is meaningless
     if RUN:
         try:
             st["chan"] = open(os.path.join(RUN, "tv-channel")).read().strip()
@@ -240,14 +253,64 @@ if any(_gates.values()):
 def poll_active():                       # tally follows IS-05 takes, no rebuild
     try:
         with urllib.request.urlopen(f"{PANEL}/state", timeout=2) as r:
-            st["active"] = json.load(r).get("active", "")
+            _a = json.load(r).get("active", "")
+        st["active"] = _a
     except Exception:
         pass
     return True
 GLib.timeout_add_seconds(1, poll_active)
 poll_active()
 
+# Double-buffered overlay. The DRAWING (~30-60ms of Python+cairo text) happens on the GLib main
+# loop, never on the streaming thread: on_draw only ever blits an already-rendered surface, so the
+# frame budget is not hostage to how long the overlay takes to compose. Two surfaces are alternated
+# so a blit can never read the one being drawn into.
+_ovbufs = [None, None]
+_ovidx = 0
+_ovsurf = None
+_ovsize = (0, 0)
+
+def _render_overlay():
+    """Compose the overlay on the MAIN LOOP into the spare buffer, then publish it."""
+    global _ovidx, _ovsurf, _ovsize, _ovbufs
+    w, h = int(st["w"]), int(st["h"])
+    if w <= 0 or h <= 0:
+        return True
+    if _ovsize != (w, h):
+        _ovbufs = [cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h) for _ in range(2)]
+        _ovsize = (w, h)
+    spare = 1 - _ovidx
+    surf = _ovbufs[spare]
+    c = cairo.Context(surf)
+    c.set_operator(cairo.OPERATOR_CLEAR); c.paint()
+    c.set_operator(cairo.OPERATOR_OVER)
+    _draw_overlay(c)
+    surf.flush()
+    _ovidx = spare
+    _ovsurf = surf          # publish; rebinding a name is atomic under the GIL
+    return True
+
 def on_draw(_ov, ctx, _ts, _dur):
+    surf = _ovsurf
+    if surf is None:
+        return
+    # Blit ONLY the regions that carry overlay. Painting a full-screen ARGB surface every frame was
+    # itself ~20ms (8MB of alpha compositing in cairo's software renderer).
+    sx, sy = st["w"] / W, st["h"] / H
+    ctx.set_source_surface(surf, 0, 0)
+    b = 8 * S
+    for i in range(4):
+        x, y = POS[i]
+        ctx.rectangle(x * sx, (y + TH - 95 * S) * sy, TW * sx, 95 * S * sy)   # UMD / fps / FEC / meters
+        ctx.rectangle(x * sx, y * sy, 130 * S * sx, 46 * S * sy)              # ON AIR flag
+        ctx.rectangle(x * sx, y * sy, TW * sx, b * sy)                        # tally border: top
+        ctx.rectangle(x * sx, (y + TH - b) * sy, TW * sx, b * sy)             #               bottom
+        ctx.rectangle(x * sx, y * sy, b * sx, TH * sy)                        #               left
+        ctx.rectangle((x + TW - b) * sx, y * sy, b * sx, TH * sy)             #               right
+    ctx.rectangle((W - 130 * S) * sx, 0, 130 * S * sx, 46 * S * sy)           # ATOLL bug
+    ctx.fill()
+
+def _draw_overlay(ctx):
     sx, sy = st["w"] / W, st["h"] / H
     ctx.save(); ctx.scale(sx, sy)
     ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
@@ -271,6 +334,10 @@ def on_draw(_ov, ctx, _ts, _dur):
         ctx.move_to(x + 16 * S, y + TH - 19 * S); ctx.show_text(name)
         ctx.set_source_rgba(0.35, 0.85, 0.7, 0.95); ctx.set_font_size(14 * S)
         ctx.move_to(x + 240 * S, y + TH - 19 * S); ctx.show_text(f"{st['mbps'][i]:.1f} Mb/s")
+        f = st["fps"][i]
+        if f:                                  # a tile short of 30fps is dropping frames
+            ctx.set_source_rgba(1, 0.45, 0.35, 0.98) if f < 28 else ctx.set_source_rgba(0.35, 0.85, 0.7, 0.95)
+            ctx.move_to(x + 360 * S, y + TH - 19 * S); ctx.show_text(f"{f:.0f} fps")
         if src == "fec" and st["fw"][i]:      # numeric proof of ST 2022-1 recovery
             wire, after, out = st["fw"][i], st["fa"][i], st["fo"][i]
             dropped = max(0, wire - after); recovered = max(0, min(dropped, out - after))
@@ -301,6 +368,8 @@ def on_draw(_ov, ctx, _ts, _dur):
     ctx.move_to(W - 108 * S, 34 * S); ctx.show_text("ATOLL")
     ctx.restore()
 ov.connect("draw", on_draw)
+_render_overlay()                        # compose once up front so the first frames have an overlay
+GLib.timeout_add(100, _render_overlay)   # thereafter 10Hz, on the main loop, off the streaming thread
 
 bus = pipe.get_bus(); bus.add_signal_watch()
 def on_msg(_b, msg):

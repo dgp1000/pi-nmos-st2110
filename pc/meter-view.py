@@ -109,7 +109,7 @@ def build():
         g, p = grp("FEC")   # 'lossy' injects packet loss on the media flow; 'fecg0/fecg1' gate the
         cp, rp = int(p) + 2, int(p) + 4   # FEC flows off, which is how you show the damage FEC hides.
         return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{TSRTP_CAPS}\" "
-                f"! identity name=lossy ! rtpst2022-1-fecdec name=fd "
+                f"! identity name=lossy ! rtpst2022-1-fecdec name=fd size-time=4000000000 "
                 f"udpsrc address={g} port={cp} multicast-iface={IFACE} auto-multicast=true caps=\"{FECSTREAM_CAPS}\" ! identity name=fecg0 ! queue ! fd.fec_0 "
                 f"udpsrc address={g} port={rp} multicast-iface={IFACE} auto-multicast=true caps=\"{FECSTREAM_CAPS}\" ! identity name=fecg1 ! queue ! fd.fec_1 "
                 f"fd. ! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name=d "

@@ -16,7 +16,7 @@ BITRATE="${VP9_BITRATE:-4000000}"   # bits/s
 THREADS="${VP9_THREADS:-8}"
 echo "vp9-send: VP9 over RTP (RFC 7741, libvpx realtime) -> $VP9_GRP:$VP9_PORT on $IFACE  (Ctrl+C to stop)"
 while true; do
-  gst-launch-1.0 -q videotestsrc pattern=bar is-live=true \
+  gst-launch-1.0 -q videotestsrc pattern=ball motion=sweep is-live=true foreground-color=0xffffc020 background-color=0xff10284a \
     ! video/x-raw,width=1280,height=720,framerate=30/1 \
     ! textoverlay text="VP9 over RTP - RFC 7741 (libvpx, CPU encode)" valignment=top halignment=center font-desc="Sans Bold 24" shaded-background=true \
     ! clockoverlay valignment=bottom halignment=right time-format="%H:%M:%S" font-desc="Sans Bold 18" shaded-background=true \

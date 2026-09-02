@@ -157,10 +157,30 @@ for i in range(4):                       # per-tile bitrate tap
             return cb
         u.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, mk(i))
 
+# --- ST 2022-1 recovery counters for whichever tile holds the fec source. Same three taps as the
+# single view: wire -> after the loss injector -> out of the decoder. Showing recovery as NUMBERS
+# is the reliable demo; the picture alone cannot distinguish "FEC repaired it" from "the decoder
+# concealed it", which is why the visual version was so unconvincing.
+for _k in ("fw", "fa", "fo"):
+    st[_k] = [0] * 4
+    st["_" + _k] = [0] * 4
+def _tapn(key, idx):
+    def cb(_pad, _info):
+        st[key][idx] += 1
+        return Gst.PadProbeReturn.OK
+    return cb
+for _i in range(4):
+    for _nm, _key in ((f"u{_i}", "_fw"), (f"flossy{_i}", "_fa"), (f"fd{_i}", "_fo")):
+        _e = pipe.get_by_name(_nm)
+        if _e:
+            _e.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _tapn(_key, _i))
+
 def tick():
     for i in range(4):
         st["mbps"][i] = round(st["bytes"][i] * 8 / 1e6, 1)
         st["bytes"][i] = 0
+        for k in ("fw", "fa", "fo"):          # CUMULATIVE totals: the taps straddle the fecdec's
+            st[k][i] = st["_" + k][i]        # 4s buffer, so per-second differencing is meaningless
     if RUN:
         try:
             st["chan"] = open(os.path.join(RUN, "tv-channel")).read().strip()
@@ -239,6 +259,15 @@ def on_draw(_ov, ctx, _ts, _dur):
         ctx.move_to(x + 16, y + TH - 19); ctx.show_text(name)
         ctx.set_source_rgba(0.35, 0.85, 0.7, 0.95); ctx.set_font_size(14)
         ctx.move_to(x + 240, y + TH - 19); ctx.show_text(f"{st['mbps'][i]:.1f} Mb/s")
+        if src == "fec" and st["fw"][i]:      # numeric proof of ST 2022-1 recovery
+            wire, after, out = st["fw"][i], st["fa"][i], st["fo"][i]
+            dropped = max(0, wire - after); recovered = max(0, min(dropped, out - after))
+            resid = (100.0 * max(0, wire - out) / wire) if wire > 0 else 0.0
+            ctx.set_source_rgba(0, 0, 0, 0.55); ctx.rectangle(x + 8, y + TH - 74, 330, 30); ctx.fill()
+            ctx.set_source_rgba(1, 0.75, 0.4, 0.95) if resid > 0.01 else ctx.set_source_rgba(0.45, 0.95, 0.55, 0.95)
+            ctx.set_font_size(14)
+            ctx.move_to(x + 16, y + TH - 54)
+            ctx.show_text(f"dropped {dropped:,}   FEC recovered {recovered:,}   resid {resid:.3f}%")
         # --- per-tile audio meters (one slim bar per channel, bottom-right of the tile) ---
         pk = st["peak"][i]
         if pk:

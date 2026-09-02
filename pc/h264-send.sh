@@ -15,7 +15,6 @@ echo "h264-send: H.264 over RTP (RFC 6184, NVENC) -> $H264_GRP:$H264_PORT on $IF
 while true; do
   gst-launch-1.0 -q videotestsrc pattern=smpte75 is-live=true \
     ! video/x-raw,width=1280,height=720,framerate=30/1 \
-    ! textoverlay text="H.264 over RTP - RFC 6184 (NVENC)" valignment=top halignment=center font-desc="Sans Bold 24" shaded-background=true \
     ! clockoverlay valignment=bottom halignment=right time-format="%H:%M:%S" font-desc="Sans Bold 18" shaded-background=true \
     ! videoconvert ! video/x-raw,format=NV12 \
     ! cudaupload ! nvh264enc rc-mode=cbr bitrate=$BITRATE preset=p4 tune=low-latency gop-size=30 aud=true \

@@ -263,6 +263,23 @@ if _pgate["a"]:
     GLib.timeout_add_seconds(1, apply_sps)
     apply_sps()
 
+# --- ST 2022-1 recovery counters (source key "fec"). Three taps tell the whole story:
+#   usrc  = packets on the wire         (what the sender emitted)
+#   lossy = packets after the injector  (what "the network" delivered)
+#   fd    = packets out of the decoder  (what FEC handed downstream)
+# recovered = fd - lossy, residual = wire - fd. This is the honest measure of what FEC is doing:
+# unlike a picture it cannot be confounded by decoder concealment, display timing or GOP length,
+# which is exactly why the visual version of this demo proved so unreliable.
+st["fw_pps"] = st["fa_pps"] = st["fo_pps"] = 0
+st["_fw"] = st["_fa"] = st["_fo"] = 0
+for _nm, _k in (("usrc", "_fw"), ("lossy", "_fa"), ("fd", "_fo")):
+    _e = pipe.get_by_name(_nm)
+    if _e:
+        _e.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _count(_k))
+# NB: counters are CUMULATIVE, never reset. The taps sit either side of a 4s buffer, so per-second
+# differencing compares output against input from 4s earlier and yields nonsense (negative residual).
+# Over a run the fixed offset becomes negligible and the totals read true.
+
 LABELS = ["L", "R", "C", "LFE", "Ls", "Rs", "7", "8"]
 def on_draw(_ov, ctx, _ts, _dur):
     h = st["h"]
@@ -277,6 +294,13 @@ def on_draw(_ov, ctx, _ts, _dur):
         lines.append("  ".join(x for x in ("Audio ", ACODEC[SRC], f"{ach} ch" if ach else "", arate) if x))
     if st["mbps"]:
         lines.append(f"Stream   {st['mbps']} Mbps   {TRANSPORT.get(SRC, '')}")
+    if SRC == "fec":   # numeric proof of recovery, independent of how the picture happens to look
+        wire, after, out = st["_fw"], st["_fa"], st["_fo"]
+        dropped = max(0, wire - after)
+        recovered = max(0, min(dropped, out - after))
+        resid = (100.0 * max(0, wire - out) / wire) if wire > 0 else 0.0
+        lines.append(f"Network  {wire:,} pkts    {dropped:,} dropped")
+        lines.append(f"FEC      {recovered:,} recovered    residual {resid:.3f}%")
     if SRC == "sps":   # show which path is carrying; the picture is unaffected either way
         a = f"A {st['pa_pps']:>4} pkt/s" + ("" if st["pa_on"] else "  DEAD")
         b = f"B {st['pb_pps']:>4} pkt/s" + ("" if st["pb_on"] else "  DEAD")

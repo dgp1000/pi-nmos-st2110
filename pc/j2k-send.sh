@@ -10,7 +10,6 @@ echo "j2k-send: JPEG 2000 (J2K/RTP RFC 5371) -> $J2K_GRP:$J2K_PORT on $IFACE  (C
 while true; do
   gst-launch-1.0 -q videotestsrc pattern=smpte is-live=true \
     ! video/x-raw,width=1280,height=720,framerate=30/1 \
-    ! textoverlay text="JPEG 2000 - J2K over RTP (RFC 5371, OpenJPEG)" valignment=top halignment=center font-desc="Sans Bold 24" shaded-background=true \
     ! clockoverlay valignment=bottom halignment=right time-format="%H:%M:%S" font-desc="Sans Bold 18" shaded-background=true \
     ! videoconvert ! video/x-raw,format=I420 \
     ! avenc_jpeg2000 ! jpeg2000parse ! rtpj2kpay \

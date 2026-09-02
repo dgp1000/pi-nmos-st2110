@@ -29,7 +29,6 @@ while true; do
   gst-launch-1.0 -q \
     videotestsrc pattern=ball motion=sweep is-live=true \
       ! video/x-raw,width=1280,height=720,framerate=30/1 \
-      ! textoverlay text="ST 2022-1 FEC - protected TS over RTP" valignment=top halignment=center font-desc="Sans Bold 24" shaded-background=true \
       ! clockoverlay valignment=bottom halignment=right time-format="%H:%M:%S" font-desc="Sans Bold 18" shaded-background=true \
       ! videoconvert ! video/x-raw,format=I420 \
       ! x264enc bitrate=$BITRATE speed-preset=veryfast tune=zerolatency key-int-max=10 \

@@ -26,6 +26,7 @@ SLOTS = (SLOTS + ["hevc"] * 4)[:4]
 SCREEN = sys.argv[2] if len(sys.argv) > 2 else "2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 NEED = ["ISLAND_IFACE", "VIDEO_SINK", "ATOLL_PLATFORM", "ATOLL_RUN", "PANEL_PORT",
+        "WALL_W", "WALL_H",
         "HEVC_GRP", "HEVC_PORT", "HOME_GRP", "HOME_PORT", "MUSIC_GRP", "MUSIC_PORT",
         "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT", "PI_AUDIO_GRP", "PI_AUDIO_PORT",
         "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT", "OPUS_GRP", "OPUS_PORT",
@@ -44,8 +45,10 @@ RUN = CFG.get("ATOLL_RUN", "")
 PANEL = f"http://localhost:{CFG.get('PANEL_PORT', '8096')}"
 def grp(k): return CFG[f"{k}_GRP"], CFG[f"{k}_PORT"]
 
-W, H = 1920, 1080
+W = int(CFG.get("WALL_W") or 1920)
+H = int(CFG.get("WALL_H") or 1080)
 TW, TH = W // 2, H // 2              # each quadrant
+S = W / 1920.0                       # overlay scale, so the UI keeps its proportions at any size
 POS = [(0, 0), (TW, 0), (0, TH), (TW, TH)]
 LABEL = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "reels": "Test Reels",
          "raw": "Pi raw 2110-20", "j2k": "JPEG 2000", "h264": "H.264 RTP", "mjpeg": "MJPEG RTP",
@@ -246,35 +249,35 @@ def on_draw(_ov, ctx, _ts, _dur):
             name += f"  ch {st['chan']}"
         # --- tally: red border + ON AIR flag on the tile that is currently taken ---
         if src and src == st["active"]:
-            ctx.set_source_rgba(1, 0.1, 0.1, 0.95); ctx.set_line_width(6)
-            ctx.rectangle(x + 3, y + 3, TW - 6, TH - 6); ctx.stroke()
+            ctx.set_source_rgba(1, 0.1, 0.1, 0.95); ctx.set_line_width(6 * S)
+            ctx.rectangle(x + 3 * S, y + 3 * S, TW - 6 * S, TH - 6 * S); ctx.stroke()
             # top-LEFT of the tile: the wall's ATOLL bug sits top-right and would collide there
             ctx.set_source_rgba(0.85, 0.05, 0.05, 0.92)
-            ctx.rectangle(x + 10, y + 10, 96, 26); ctx.fill()
-            ctx.set_source_rgba(1, 1, 1, 1); ctx.set_font_size(15)
-            ctx.move_to(x + 22, y + 29); ctx.show_text("ON AIR")
+            ctx.rectangle(x + 10 * S, y + 10 * S, 96 * S, 26 * S); ctx.fill()
+            ctx.set_source_rgba(1, 1, 1, 1); ctx.set_font_size(15 * S)
+            ctx.move_to(x + 22 * S, y + 29 * S); ctx.show_text("ON AIR")
         # --- UMD label + live bitrate ---
-        ctx.set_source_rgba(0, 0, 0, 0.55); ctx.rectangle(x + 8, y + TH - 40, 320, 30); ctx.fill()
-        ctx.set_source_rgba(1, 1, 1, 0.95); ctx.set_font_size(17)
-        ctx.move_to(x + 16, y + TH - 19); ctx.show_text(name)
-        ctx.set_source_rgba(0.35, 0.85, 0.7, 0.95); ctx.set_font_size(14)
-        ctx.move_to(x + 240, y + TH - 19); ctx.show_text(f"{st['mbps'][i]:.1f} Mb/s")
+        ctx.set_source_rgba(0, 0, 0, 0.55); ctx.rectangle(x + 8 * S, y + TH - 40 * S, 320 * S, 30 * S); ctx.fill()
+        ctx.set_source_rgba(1, 1, 1, 0.95); ctx.set_font_size(17 * S)
+        ctx.move_to(x + 16 * S, y + TH - 19 * S); ctx.show_text(name)
+        ctx.set_source_rgba(0.35, 0.85, 0.7, 0.95); ctx.set_font_size(14 * S)
+        ctx.move_to(x + 240 * S, y + TH - 19 * S); ctx.show_text(f"{st['mbps'][i]:.1f} Mb/s")
         if src == "fec" and st["fw"][i]:      # numeric proof of ST 2022-1 recovery
             wire, after, out = st["fw"][i], st["fa"][i], st["fo"][i]
             dropped = max(0, wire - after); recovered = max(0, min(dropped, out - after))
             resid = (100.0 * max(0, wire - out) / wire) if wire > 0 else 0.0
-            ctx.set_source_rgba(0, 0, 0, 0.55); ctx.rectangle(x + 8, y + TH - 74, 330, 30); ctx.fill()
+            ctx.set_source_rgba(0, 0, 0, 0.55); ctx.rectangle(x + 8 * S, y + TH - 74 * S, 330 * S, 30 * S); ctx.fill()
             ctx.set_source_rgba(1, 0.75, 0.4, 0.95) if resid > 0.01 else ctx.set_source_rgba(0.45, 0.95, 0.55, 0.95)
-            ctx.set_font_size(14)
-            ctx.move_to(x + 16, y + TH - 54)
+            ctx.set_font_size(14 * S)
+            ctx.move_to(x + 16 * S, y + TH - 54 * S)
             ctx.show_text(f"dropped {dropped:,}   FEC recovered {recovered:,}   resid {resid:.3f}%")
         # --- per-tile audio meters (one slim bar per channel, bottom-right of the tile) ---
         pk = st["peak"][i]
         if pk:
-            n = min(len(pk), 6); bw, gap, maxh = 7, 4, 54
-            mx = x + TW - (n * (bw + gap)) - 14; base = y + TH - 14
+            n = min(len(pk), 6); bw, gap, maxh = 7 * S, 4 * S, 54 * S
+            mx = x + TW - (n * (bw + gap)) - 14 * S; base = y + TH - 14 * S
             ctx.set_source_rgba(0, 0, 0, 0.4)
-            ctx.rectangle(mx - 8, base - maxh - 8, n * (bw + gap) + 12, maxh + 14); ctx.fill()
+            ctx.rectangle(mx - 8 * S, base - maxh - 8 * S, n * (bw + gap) + 12 * S, maxh + 14 * S); ctx.fill()
             for c in range(n):
                 db = max(-60.0, min(0.0, pk[c]))
                 frac = (db + 60.0) / 60.0
@@ -285,8 +288,8 @@ def on_draw(_ov, ctx, _ts, _dur):
                 ctx.set_source_rgba(0.15 + 0.8 * r, 0.8 - 0.45 * r, 0.15, 0.92)
                 ctx.rectangle(bx, base - bh, bw, bh); ctx.fill()
     # --- ATOLL bug ---
-    ctx.set_source_rgba(1, 1, 1, 0.5); ctx.set_font_size(20)
-    ctx.move_to(W - 108, 34); ctx.show_text("ATOLL")
+    ctx.set_source_rgba(1, 1, 1, 0.5); ctx.set_font_size(20 * S)
+    ctx.move_to(W - 108 * S, 34 * S); ctx.show_text("ATOLL")
     ctx.restore()
 ov.connect("draw", on_draw)
 

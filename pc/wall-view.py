@@ -26,7 +26,7 @@ SLOTS = (SLOTS + ["hevc"] * 4)[:4]
 SCREEN = sys.argv[2] if len(sys.argv) > 2 else "2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 NEED = ["ISLAND_IFACE", "VIDEO_SINK", "ATOLL_PLATFORM", "ATOLL_RUN", "PANEL_PORT",
-        "WALL_W", "WALL_H", "WALL_SYNC", "WALL_SW_DECODE",
+        "WALL_W", "WALL_H", "WALL_SYNC", "WALL_SW_DECODE", "IS07_PORT",
         "HEVC_GRP", "HEVC_PORT", "HOME_GRP", "HOME_PORT", "MUSIC_GRP", "MUSIC_PORT",
         "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT", "PI_AUDIO_GRP", "PI_AUDIO_PORT",
         "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT", "OPUS_GRP", "OPUS_PORT",
@@ -283,13 +283,39 @@ if any(_gates.values()):
     GLib.timeout_add_seconds(1, apply_knobs)
     apply_knobs()
 
-def poll_active():                       # tally follows IS-05 takes, no rebuild
-    try:
-        with urllib.request.urlopen(f"{PANEL}/state", timeout=2) as r:
-            _a = json.load(r).get("active", "")
-        st["active"] = _a
-    except Exception:
-        pass
+# --- NMOS IS-07 tally receiver -------------------------------------------------------------
+# Tally used to be read from the panel's own /state, which is an internal shortcut: correct on
+# screen, but nothing another device could consume. Each tile now follows the IS-07 boolean event
+# source for ITS source key, so the wall is a real IS-07 receiver rather than a program reading its
+# own variable. Source ids are UUID5-derived from the key exactly as the emitter derives them --
+# equivalent to a receiver being configured with the source_id it should follow.
+import uuid as _uuid
+IS07 = f"http://localhost:{CFG.get('IS07_PORT') or 8102}"
+_NS = _uuid.UUID("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
+def _src_id(key):
+    return str(_uuid.uuid5(_NS, f"atoll:is07:tally:{key}"))
+st["tally"] = [False] * 4
+st["is07"] = False                       # whether the emitter is answering
+
+def poll_active():                       # tally per tile, straight from IS-07 state
+    ok = False
+    for i, key in enumerate(SLOTS):
+        try:
+            with urllib.request.urlopen(f"{IS07}/x-nmos/events/v1.0/sources/{_src_id(key)}/state", timeout=2) as r:
+                msg = json.load(r)
+            st["tally"][i] = bool(msg.get("payload", {}).get("value"))
+            ok = True
+        except Exception:
+            pass
+    st["is07"] = ok
+    if not ok:                           # emitter down -> fall back to the panel so tally still works
+        try:
+            with urllib.request.urlopen(f"{PANEL}/state", timeout=2) as r:
+                a = json.load(r).get("active", "")
+            for i, key in enumerate(SLOTS):
+                st["tally"][i] = (key == a)
+        except Exception:
+            pass
     return True
 GLib.timeout_add_seconds(1, poll_active)
 poll_active()
@@ -353,7 +379,7 @@ def _draw_overlay(ctx):
         if src == "hevc" and st["chan"]:
             name += f"  ch {st['chan']}"
         # --- tally: red border + ON AIR flag on the tile that is currently taken ---
-        if src and src == st["active"]:
+        if st["tally"][i]:
             ctx.set_source_rgba(1, 0.1, 0.1, 0.95); ctx.set_line_width(6 * S)
             ctx.rectangle(x + 3 * S, y + 3 * S, TW - 6 * S, TH - 6 * S); ctx.stroke()
             # top-LEFT of the tile: the wall's ATOLL bug sits top-right and would collide there
@@ -400,6 +426,9 @@ def _draw_overlay(ctx):
     # --- ATOLL bug ---
     ctx.set_source_rgba(1, 1, 1, 0.5); ctx.set_font_size(20 * S)
     ctx.move_to(W - 108 * S, 34 * S); ctx.show_text("ATOLL")
+    if st.get("is07"):
+        ctx.set_source_rgba(0.45, 0.95, 0.55, 0.75); ctx.set_font_size(12 * S)
+        ctx.move_to(W - 190 * S, 50 * S); ctx.show_text("IS-07 tally")
     ctx.restore()
 ov.connect("draw", on_draw)
 _render_overlay()                        # compose once up front so the first frames have an overlay

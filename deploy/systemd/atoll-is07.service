@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll NMOS IS-07 Event & Tally emitter (boolean per source) -> :8102
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/usr/bin/python3 /home/david/pi-nmos-st2110/pc/is07-tally.py
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

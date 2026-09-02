@@ -134,6 +134,9 @@ def tile(i, src):
 
 sinkprops = " ".join(f"sink_{i}::xpos={x} sink_{i}::ypos={y}" for i, (x, y) in enumerate(POS))
 desc = (f"compositor name=mix ignore-inactive-pads=true background=black {sinkprops} "
+        # NOTE: do NOT ask the compositor for BGRA to "save" the pre-overlay conversion. Measured, that
+        # is WORSE (296% vs 238% CPU at 2560x1440): compositing in 4-byte BGRA moves 2.67x more
+        # data per pixel than YUV, which costs more than the conversion it avoids.
         f"! video/x-raw,width={W},height={H} ! videoconvert ! cairooverlay name=ov ! videoconvert ! {SINK} sync=false "
         + "".join(tile(i, s) for i, s in enumerate(SLOTS)))
 pipe = Gst.parse_launch(desc)

@@ -26,7 +26,7 @@ SLOTS = (SLOTS + ["hevc"] * 4)[:4]
 SCREEN = sys.argv[2] if len(sys.argv) > 2 else "2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 NEED = ["ISLAND_IFACE", "VIDEO_SINK", "ATOLL_PLATFORM", "ATOLL_RUN", "PANEL_PORT",
-        "WALL_W", "WALL_H", "WALL_SYNC",
+        "WALL_W", "WALL_H", "WALL_SYNC", "WALL_SW_DECODE",
         "HEVC_GRP", "HEVC_PORT", "HOME_GRP", "HOME_PORT", "MUSIC_GRP", "MUSIC_PORT",
         "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT", "PI_AUDIO_GRP", "PI_AUDIO_PORT",
         "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT", "OPUS_GRP", "OPUS_PORT",
@@ -46,6 +46,12 @@ SINK = CFG["VIDEO_SINK"] or "waylandsink fullscreen=true"
 # byte-perfect. sync=true paces presentation from each frame's PTS instead. WALL_SYNC=false restores
 # the old behaviour if clock-syncing ever stalls on this WSLg path.
 SYNC = "true" if (CFG.get("WALL_SYNC", "").lower() == "true") else "false"
+# H.264 decode path for the tiles: GPU by default, software when WALL_SW_DECODE=true (diagnostic --
+# isolates whether partial/black frame regions come from nvh264dec/cudadownload rather than the feed)
+if CFG.get("WALL_SW_DECODE", "").lower() == "true":
+    H264DEC = "avdec_h264 ! videoconvert"
+else:
+    H264DEC = "nvh264dec ! cudadownload"
 IS_WSL = CFG["ATOLL_PLATFORM"] == "wsl"
 RUN = CFG.get("ATOLL_RUN", "")
 PANEL = f"http://localhost:{CFG.get('PANEL_PORT', '8096')}"
@@ -125,14 +131,14 @@ def tile(i, src):
                     udp(g, rp, caps=FECSTREAM) + f"! identity name=fg1_{i} ! queue ! fd{i}.fec_1 " +
                     f"fd{i}. ! rtpjitterbuffer latency=500 max-misorder-time=5000 max-dropout-time=5000 ! identity name=fjb{i} ! rtpmp2tdepay ")
         return (head + f"! tsdemux name={d} "
-                f"{d}. ! h264parse ! queue ! nvh264dec ! cudadownload " + scale(i) +
+                f"{d}. ! h264parse ! queue ! {H264DEC} " + scale(i) +
                 f"{d}. ! audio/mpeg ! queue ! decodebin ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")
     if src == "sps":     # both paths funnelled; the jitterbuffer drops the duplicate copy
         d = f"d{i}"
         return (f"funnel name=fn{i} ! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name={d} " +
                 udp(CFG["SPS_A_GRP"], CFG["SPS_A_PORT"], caps=MP2T, name=f"u{i}") + f"! identity name=spa{i} ! queue ! fn{i}. " +
                 udp(CFG["SPS_B_GRP"], CFG["SPS_B_PORT"], caps=MP2T) + f"! identity name=spb{i} ! queue ! fn{i}. " +
-                f"{d}. ! h264parse ! queue ! nvh264dec ! cudadownload " + scale(i) +
+                f"{d}. ! h264parse ! queue ! {H264DEC} " + scale(i) +
                 f"{d}. ! audio/mpeg ! queue ! decodebin ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")
     # jpegxs / unknown -> local encode->decode demo pattern
     return (f"videotestsrc pattern=ball motion=sweep is-live=true ! video/x-raw,width={TW},height={TH},framerate=30/1 "

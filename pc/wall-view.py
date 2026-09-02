@@ -45,7 +45,7 @@ SINK = CFG["VIDEO_SINK"] or "waylandsink fullscreen=true"
 # That is a DISPLAY artifact, nothing to do with the stream: it appears even when the transport is
 # byte-perfect. sync=true paces presentation from each frame's PTS instead. WALL_SYNC=false restores
 # the old behaviour if clock-syncing ever stalls on this WSLg path.
-SYNC = "false" if (CFG.get("WALL_SYNC", "").lower() == "false") else "true"
+SYNC = "true" if (CFG.get("WALL_SYNC", "").lower() == "true") else "false"
 IS_WSL = CFG["ATOLL_PLATFORM"] == "wsl"
 RUN = CFG.get("ATOLL_RUN", "")
 PANEL = f"http://localhost:{CFG.get('PANEL_PORT', '8096')}"
@@ -120,7 +120,7 @@ def tile(i, src):
             head = udp(g, p, caps=MP2T, name=f"u{i}") + "! rtpjitterbuffer latency=200 ! rtpmp2tdepay "
         else:
             g, p = grp("FEC"); cp, rp = int(p) + 2, int(p) + 4
-            head = (udp(g, p, caps=MP2T, name=f"u{i}") + f"! identity name=flossy{i} ! rtpst2022-1-fecdec name=fd{i} size-time=4000000000 " +
+            head = (udp(g, p, caps=MP2T, name=f"u{i}") + f"! identity name=flossy{i} ! rtpst2022-1-fecdec name=fd{i} " +
                     udp(g, cp, caps=FECSTREAM) + f"! identity name=fg0_{i} ! queue ! fd{i}.fec_0 " +
                     udp(g, rp, caps=FECSTREAM) + f"! identity name=fg1_{i} ! queue ! fd{i}.fec_1 " +
                     f"fd{i}. ! rtpjitterbuffer latency=500 max-misorder-time=5000 max-dropout-time=5000 ! rtpmp2tdepay ")

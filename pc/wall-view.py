@@ -117,7 +117,7 @@ def tile(i, src):
             head = (udp(g, p, caps=MP2T, name=f"u{i}") + f"! identity name=flossy{i} ! rtpst2022-1-fecdec name=fd{i} size-time=4000000000 " +
                     udp(g, cp, caps=FECSTREAM) + f"! identity name=fg0_{i} ! queue ! fd{i}.fec_0 " +
                     udp(g, rp, caps=FECSTREAM) + f"! identity name=fg1_{i} ! queue ! fd{i}.fec_1 " +
-                    f"fd{i}. ! rtpjitterbuffer latency=200 ! rtpmp2tdepay ")
+                    f"fd{i}. ! rtpjitterbuffer latency=500 max-misorder-time=5000 max-dropout-time=5000 ! rtpmp2tdepay ")
         return (head + f"! tsdemux name={d} "
                 f"{d}. ! h264parse ! queue ! nvh264dec ! cudadownload " + scale(i) +
                 f"{d}. ! audio/mpeg ! queue ! decodebin ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")

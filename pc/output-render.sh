@@ -186,7 +186,11 @@ while true; do
   adelay="$(cat "$ADELAY_FILE" 2>/dev/null)"; [[ "$adelay" =~ ^[0-9]+$ ]] || adelay=0
   if [ "$akey" != "$aud_key" ] || [ "$adelay" != "$last_adelay" ]; then
     kill_audio
-    if [ "$adelay" -gt 0 ]; then ASINK="queue min-threshold-time=$((adelay*1000000)) max-size-time=$(( (adelay+3000)*1000000 )) max-size-bytes=0 max-size-buffers=0 ! pulsesink sync=false buffer-time=200000"; else ASINK="pulsesink sync=false buffer-time=200000"; fi
+    # sync=true: present audio at its stream PTS, the same clock the wall's video sink now uses
+  # (WALL_SYNC). Free-running audio (sync=false) against PTS-paced video is what leaves the picture
+  # running ahead of the sound. This mirrors single view, which is lip-synced with autoaudiosink
+  # sync=true. audio-delay-ms remains available as a fine trim on top.
+  if [ "$adelay" -gt 0 ]; then ASINK="queue min-threshold-time=$((adelay*1000000)) max-size-time=$(( (adelay+3000)*1000000 )) max-size-bytes=0 max-size-buffers=0 ! autoaudiosink sync=true"; else ASINK="autoaudiosink sync=true"; fi
     if [ -n "$akey" ]; then
       acmd="$(audio_cmd "$akey")"
       [ -n "$acmd" ] && { setsid bash -c "$acmd" >/tmp/output-audio.log 2>&1 & apid=$!; }

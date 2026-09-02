@@ -117,7 +117,7 @@ build_pipeline() {   # $1=layout  $2=active
     multi)
       # $3 = slots "tl,tr,bl,br" (any source -> any of the four 960x540 quadrants).
       IFS=',' read -r m0 m1 m2 m3 <<< "${3:-hevc,raw,jxs,music}"
-      echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=960 sink_1::ypos=0 sink_2::xpos=0 sink_2::ypos=540 sink_3::xpos=960 sink_3::ypos=540 ! video/x-raw,width=1920,height=1080 ! videoconvert ! clockoverlay halignment=center valignment=position ypos=0.35 time-format='%H:%M:%S' font-desc='Sans Bold 24' shaded-background=true ! textoverlay text='Pi5 PTP GM' halignment=center valignment=position ypos=0.405 font-desc='Sans Bold 12' color=0xc8ffffff shaded-background=false ! $BRAND ! $VIDEO_SINK sync=false \
+      echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=960 sink_1::ypos=0 sink_2::xpos=0 sink_2::ypos=540 sink_3::xpos=960 sink_3::ypos=540 ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! $VIDEO_SINK sync=false \
         $(tile_full "$m0" 0 960 540) \
         $(tile_full "$m1" 1 960 540) \
         $(tile_full "$m2" 2 960 540) \

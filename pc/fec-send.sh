@@ -32,7 +32,7 @@ while true; do
       ! textoverlay text="ST 2022-1 FEC - protected TS over RTP" valignment=top halignment=center font-desc="Sans Bold 24" shaded-background=true \
       ! clockoverlay valignment=bottom halignment=right time-format="%H:%M:%S" font-desc="Sans Bold 18" shaded-background=true \
       ! videoconvert ! video/x-raw,format=I420 \
-      ! x264enc bitrate=$BITRATE speed-preset=veryfast tune=zerolatency key-int-max=30 \
+      ! x264enc bitrate=$BITRATE speed-preset=veryfast tune=zerolatency key-int-max=10 \
       ! h264parse config-interval=-1 ! queue ! mux. \
     audiotestsrc wave=ticks freq=800 volume=0.2 tick-interval=1000000000 is-live=true \
       ! audio/x-raw,format=S16LE,rate=48000,channels=2 \

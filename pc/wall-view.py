@@ -255,12 +255,6 @@ def on_draw(_ov, ctx, _ts, _dur):
                 r = frac
                 ctx.set_source_rgba(0.15 + 0.8 * r, 0.8 - 0.45 * r, 0.15, 0.92)
                 ctx.rectangle(bx, base - bh, bw, bh); ctx.fill()
-    # --- centre clock (kept from the gst-launch wall) ---
-    ctx.set_source_rgba(0, 0, 0, 0.45); ctx.rectangle(W / 2 - 118, H * 0.33, 236, 54); ctx.fill()
-    ctx.set_source_rgba(1, 1, 1, 0.96); ctx.set_font_size(34)
-    ctx.move_to(W / 2 - 98, H * 0.33 + 38); ctx.show_text(time.strftime("%H:%M:%S"))
-    ctx.set_source_rgba(0.8, 0.8, 0.8, 0.8); ctx.set_font_size(13)
-    ctx.move_to(W / 2 - 44, H * 0.33 + 54 + 16); ctx.show_text("Pi5 PTP GM")
     # --- ATOLL bug ---
     ctx.set_source_rgba(1, 1, 1, 0.5); ctx.set_font_size(20)
     ctx.move_to(W - 108, 34); ctx.show_text("ATOLL")

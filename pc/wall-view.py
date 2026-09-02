@@ -26,7 +26,7 @@ SLOTS = (SLOTS + ["hevc"] * 4)[:4]
 SCREEN = sys.argv[2] if len(sys.argv) > 2 else "2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 NEED = ["ISLAND_IFACE", "VIDEO_SINK", "ATOLL_PLATFORM", "ATOLL_RUN", "PANEL_PORT",
-        "WALL_W", "WALL_H",
+        "WALL_W", "WALL_H", "WALL_SYNC",
         "HEVC_GRP", "HEVC_PORT", "HOME_GRP", "HOME_PORT", "MUSIC_GRP", "MUSIC_PORT",
         "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT", "PI_AUDIO_GRP", "PI_AUDIO_PORT",
         "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT", "OPUS_GRP", "OPUS_PORT",
@@ -40,6 +40,12 @@ for k in ("GALLIUM_DRIVER", "PULSE_SERVER", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"
         os.environ[k] = CFG[k]
 IFACE = CFG["ISLAND_IFACE"] or "eth0"
 SINK = CFG["VIDEO_SINK"] or "waylandsink fullscreen=true"
+# sync=false presents each frame the moment it arrives -- unpaced and unaligned to the display
+# refresh, which tears moving objects (a horizontal split showing halves of two different frames).
+# That is a DISPLAY artifact, nothing to do with the stream: it appears even when the transport is
+# byte-perfect. sync=true paces presentation from each frame's PTS instead. WALL_SYNC=false restores
+# the old behaviour if clock-syncing ever stalls on this WSLg path.
+SYNC = "false" if (CFG.get("WALL_SYNC", "").lower() == "false") else "true"
 IS_WSL = CFG["ATOLL_PLATFORM"] == "wsl"
 RUN = CFG.get("ATOLL_RUN", "")
 PANEL = f"http://localhost:{CFG.get('PANEL_PORT', '8096')}"
@@ -137,7 +143,7 @@ desc = (f"compositor name=mix ignore-inactive-pads=true background=black {sinkpr
         # NOTE: do NOT ask the compositor for BGRA to "save" the pre-overlay conversion. Measured, that
         # is WORSE (296% vs 238% CPU at 2560x1440): compositing in 4-byte BGRA moves 2.67x more
         # data per pixel than YUV, which costs more than the conversion it avoids.
-        f"! video/x-raw,width={W},height={H} ! videoconvert ! cairooverlay name=ov ! videoconvert ! {SINK} sync=false "
+        f"! video/x-raw,width={W},height={H} ! videoconvert ! cairooverlay name=ov ! videoconvert ! {SINK} sync={SYNC} "
         + "".join(tile(i, s) for i, s in enumerate(SLOTS)))
 pipe = Gst.parse_launch(desc)
 ov = pipe.get_by_name("ov")

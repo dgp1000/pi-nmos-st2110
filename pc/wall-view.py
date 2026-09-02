@@ -123,7 +123,7 @@ def tile(i, src):
             head = (udp(g, p, caps=MP2T, name=f"u{i}") + f"! identity name=flossy{i} ! rtpst2022-1-fecdec name=fd{i} " +
                     udp(g, cp, caps=FECSTREAM) + f"! identity name=fg0_{i} ! queue ! fd{i}.fec_0 " +
                     udp(g, rp, caps=FECSTREAM) + f"! identity name=fg1_{i} ! queue ! fd{i}.fec_1 " +
-                    f"fd{i}. ! rtpjitterbuffer latency=500 max-misorder-time=5000 max-dropout-time=5000 ! rtpmp2tdepay ")
+                    f"fd{i}. ! rtpjitterbuffer latency=500 max-misorder-time=5000 max-dropout-time=5000 ! identity name=fjb{i} ! rtpmp2tdepay ")
         return (head + f"! tsdemux name={d} "
                 f"{d}. ! h264parse ! queue ! nvh264dec ! cudadownload " + scale(i) +
                 f"{d}. ! audio/mpeg ! queue ! decodebin ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")
@@ -173,7 +173,7 @@ for i in range(4):                       # per-tile bitrate tap
 # single view: wire -> after the loss injector -> out of the decoder. Showing recovery as NUMBERS
 # is the reliable demo; the picture alone cannot distinguish "FEC repaired it" from "the decoder
 # concealed it", which is why the visual version was so unconvincing.
-for _k in ("fw", "fa", "fo"):
+for _k in ("fw", "fa", "fo", "fj"):
     st[_k] = [0] * 4
     st["_" + _k] = [0] * 4
 st["fps"] = [0.0] * 4
@@ -194,7 +194,7 @@ def _tapn(key, idx):
         return Gst.PadProbeReturn.OK
     return cb
 for _i in range(4):
-    for _nm, _key in ((f"u{_i}", "_fw"), (f"flossy{_i}", "_fa"), (f"fd{_i}", "_fo")):
+    for _nm, _key in ((f"u{_i}", "_fw"), (f"flossy{_i}", "_fa"), (f"fd{_i}", "_fo"), (f"fjb{_i}", "_fj")):
         _e = pipe.get_by_name(_nm)
         if _e:
             _e.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _tapn(_key, _i))
@@ -204,7 +204,7 @@ def tick():
         st["mbps"][i] = round(st["bytes"][i] * 8 / 1e6, 1)
         st["bytes"][i] = 0
         st["fps"][i] = st["_fc"][i]; st["_fc"][i] = 0
-        for k in ("fw", "fa", "fo"):          # CUMULATIVE totals: the taps straddle the fecdec
+        for k in ("fw", "fa", "fo", "fj"):          # CUMULATIVE totals: the taps straddle the fecdec
             st[k][i] = st["_" + k][i]        # buffer, so per-second differencing is meaningless
     if RUN:
         try:
@@ -340,8 +340,9 @@ def _draw_overlay(ctx):
             ctx.move_to(x + 360 * S, y + TH - 19 * S); ctx.show_text(f"{f:.0f} fps")
         if src == "fec" and st["fw"][i]:      # numeric proof of ST 2022-1 recovery
             wire, after, out = st["fw"][i], st["fa"][i], st["fo"][i]
-            dropped = max(0, wire - after); recovered = max(0, min(dropped, out - after))
-            resid = (100.0 * max(0, wire - out) / wire) if wire > 0 else 0.0
+            deliv = st["fj"][i] or out          # after the jitterbuffer = what the decoder really got
+            dropped = max(0, wire - after); recovered = max(0, min(dropped, deliv - after))
+            resid = (100.0 * max(0, wire - deliv) / wire) if wire > 0 else 0.0
             ctx.set_source_rgba(0, 0, 0, 0.55); ctx.rectangle(x + 8 * S, y + TH - 74 * S, 330 * S, 30 * S); ctx.fill()
             ctx.set_source_rgba(1, 0.75, 0.4, 0.95) if resid > 0.01 else ctx.set_source_rgba(0.45, 0.95, 0.55, 0.95)
             ctx.set_font_size(14 * S)

@@ -26,7 +26,7 @@ SLOTS = (SLOTS + ["hevc"] * 4)[:4]
 SCREEN = sys.argv[2] if len(sys.argv) > 2 else "2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 NEED = ["ISLAND_IFACE", "VIDEO_SINK", "ATOLL_PLATFORM", "ATOLL_RUN", "PANEL_PORT",
-        "WALL_W", "WALL_H", "WALL_SYNC", "WALL_SW_DECODE", "IS07_PORT",
+        "WALL_W", "WALL_H", "WALL_SYNC", "WALL_SW_DECODE", "IS07_PORT", "IS07_WS_PORT",
         "HEVC_GRP", "HEVC_PORT", "HOME_GRP", "HOME_PORT", "MUSIC_GRP", "MUSIC_PORT",
         "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT", "PI_AUDIO_GRP", "PI_AUDIO_PORT",
         "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT", "OPUS_GRP", "OPUS_PORT",
@@ -289,7 +289,8 @@ if any(_gates.values()):
 # source for ITS source key, so the wall is a real IS-07 receiver rather than a program reading its
 # own variable. Source ids are UUID5-derived from the key exactly as the emitter derives them --
 # equivalent to a receiver being configured with the source_id it should follow.
-import uuid as _uuid
+import uuid as _uuid, socket as _socket, base64 as _b64, hashlib as _hashlib
+import struct as _struct, threading as _threading, os as _os
 IS07 = f"http://localhost:{CFG.get('IS07_PORT') or 8102}"
 _NS = _uuid.UUID("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
 def _src_id(key):
@@ -297,28 +298,153 @@ def _src_id(key):
 st["tally"] = [False] * 4
 st["is07"] = False                       # whether the emitter is answering
 
-def poll_active():                       # tally per tile, straight from IS-07 state
-    ok = False
-    for i, key in enumerate(SLOTS):
+# The subscription is fixed at startup because SLOTS is. Two tiles showing the same source is
+# legitimate, so one source id maps to a LIST of tile indices.
+_sub = {}
+for _i, _key in enumerate(SLOTS):
+    _sub.setdefault(_src_id(_key), []).append(_i)
+
+WS_PORT = int(CFG.get("IS07_WS_PORT") or 8103)
+_DEVICE_ID = str(_uuid.uuid5(_NS, "atoll:is07:device"))
+_WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+def _ws_connect():
+    """Open the device endpoint and verify the handshake. Returns a connected socket."""
+    c = _socket.create_connection(("localhost", WS_PORT), timeout=5)
+    key = _b64.b64encode(_os.urandom(16)).decode()
+    c.sendall((f"GET /x-nmos/events/v1.0/devices/{_DEVICE_ID} HTTP/1.1\r\n"
+               f"Host: localhost:{WS_PORT}\r\n"
+               "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+               f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+    resp = b""
+    while b"\r\n\r\n" not in resp:
+        chunk = c.recv(1024)
+        if not chunk:
+            raise IOError("handshake closed")
+        resp += chunk
+        if len(resp) > 65536:
+            raise IOError("handshake too large")
+    if b"101" not in resp.split(b"\r\n")[0]:
+        raise IOError("handshake refused")
+    # Verifying Accept is what distinguishes a real websocket peer from anything else on the port.
+    want = _b64.b64encode(_hashlib.sha1((key + _WS_GUID).encode()).digest()).decode()
+    if want.encode() not in resp:
+        raise IOError("bad Sec-WebSocket-Accept")
+    return c
+
+def _ws_send(c, obj):
+    """Client->server frame. Clients MUST mask, per RFC 6455."""
+    payload = json.dumps(obj).encode()
+    mask = _os.urandom(4)
+    n = len(payload)
+    head = bytes([0x81])
+    if n < 126:
+        head += bytes([0x80 | n])
+    elif n < (1 << 16):
+        head += bytes([0x80 | 126]) + _struct.pack("!H", n)
+    else:
+        head += bytes([0x80 | 127]) + _struct.pack("!Q", n)
+    c.sendall(head + mask + bytes(b ^ mask[k % 4] for k, b in enumerate(payload)))
+
+def _ws_read(c):
+    """Read one frame. Returns (opcode, payload) or None when the peer goes away."""
+    def recvn(n):
+        buf = b""
+        while len(buf) < n:
+            part = c.recv(n - len(buf))
+            if not part:
+                return None
+            buf += part
+        return buf
+    h = recvn(2)
+    if not h:
+        return None
+    opcode = h[0] & 0x0F
+    masked = h[1] & 0x80
+    ln = h[1] & 0x7F
+    if ln == 126:
+        e = recvn(2)
+        if not e:
+            return None
+        ln = _struct.unpack("!H", e)[0]
+    elif ln == 127:
+        e = recvn(8)
+        if not e:
+            return None
+        ln = _struct.unpack("!Q", e)[0]
+    mask = recvn(4) if masked else b""
+    if masked and mask is None:
+        return None
+    data = recvn(ln) if ln else b""
+    if data is None:
+        return None
+    if masked:
+        data = bytes(b ^ mask[k % 4] for k, b in enumerate(data))
+    return opcode, data
+
+def _ws_thread():
+    backoff = 1
+    while True:
         try:
-            with urllib.request.urlopen(f"{IS07}/x-nmos/events/v1.0/sources/{_src_id(key)}/state", timeout=2) as r:
-                msg = json.load(r)
-            st["tally"][i] = bool(msg.get("payload", {}).get("value"))
-            ok = True
+            c = _ws_connect()
+            _ws_send(c, {"command": "subscription", "sources": sorted(_sub)})
+            # The emitter replies with every subscribed source's CURRENT state, so the wall is
+            # correct immediately on connect rather than dark until the next cut.
+            st["is07"] = True
+            backoff = 1
+            # health arrives every 5s; 20s of silence means the link is dead even though the socket
+            # has not said so -- the usual half-open TCP case after a suspend or a killed emitter.
+            c.settimeout(20)
+            while True:
+                r = _ws_read(c)
+                if r is None:
+                    break
+                opcode, data = r
+                if opcode == 0x8:                       # close
+                    break
+                if opcode == 0x9:                       # ping -> pong, unmasked payload echoed back
+                    m = _os.urandom(4)
+                    c.sendall(bytes([0x8A, 0x80 | len(data)]) + m
+                              + bytes(b ^ m[k % 4] for k, b in enumerate(data)))
+                    continue
+                if opcode != 0x1:
+                    continue
+                try:
+                    msg = json.loads(data.decode())
+                except Exception:
+                    continue
+                if msg.get("message_type") == "state":
+                    sid = (msg.get("identity") or {}).get("source_id")
+                    val = bool((msg.get("payload") or {}).get("value"))
+                    for idx in _sub.get(sid, ()):       # GIL makes the item store atomic
+                        st["tally"][idx] = val
         except Exception:
             pass
-    st["is07"] = ok
-    if not ok:                           # emitter down -> fall back to the panel so tally still works
         try:
-            with urllib.request.urlopen(f"{PANEL}/state", timeout=2) as r:
-                a = json.load(r).get("active", "")
-            for i, key in enumerate(SLOTS):
-                st["tally"][i] = (key == a)
+            c.close()
         except Exception:
             pass
+        st["is07"] = False                              # flag drops to plain ON AIR, visibly
+        time.sleep(backoff)
+        backoff = min(backoff * 2, 10)
+
+def poll_panel():
+    """Fallback only. Runs while the subscription is down so tally still follows the panel, then
+    goes quiet again on reconnect -- no HTTP at all in the normal case."""
+    if st["is07"]:
+        return True
+    try:
+        with urllib.request.urlopen(f"{PANEL}/state", timeout=2) as r:
+            a = json.load(r).get("active", "")
+        for i, key in enumerate(SLOTS):
+            st["tally"][i] = (key == a)
+    except Exception:
+        pass
     return True
-GLib.timeout_add_seconds(1, poll_active)
-poll_active()
+
+poll_panel()                                  # prime before the socket is up
+GLib.timeout_add_seconds(1, poll_panel)
+_threading.Thread(target=_ws_thread, daemon=True).start()
 
 # Double-buffered overlay. The DRAWING (~30-60ms of Python+cairo text) happens on the GLib main
 # loop, never on the streaming thread: on_draw only ever blits an already-rendered surface, so the

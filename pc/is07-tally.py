@@ -29,7 +29,7 @@ import http.server, socketserver, json, time, uuid, threading, urllib.request, o
 from urllib.parse import urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-NEED = ["PANEL_PORT", "IS07_PORT", "NMOS_REGISTRY", "NMOS_ADVERTISE_HOST"]
+NEED = ["PANEL_PORT", "IS07_PORT", "IS07_WS_PORT", "NMOS_REGISTRY", "NMOS_ADVERTISE_HOST"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
 PANEL = f"http://localhost:{CFG.get('PANEL_PORT') or 8096}"
@@ -79,9 +79,13 @@ def poller():
                 if on != _state[k]:
                     _state[k] = on
                     _changed[k] = now      # timestamp marks the transition, not the poll
+                    ws_push(k)             # push immediately: IS-07's whole point is not polling
         except Exception:
             pass
-        time.sleep(0.5)
+        # 100ms: with the websocket transport the push itself is instant, so this poll of the
+        # panel is the ONLY thing standing between a cut and the tally lighting. Tally is supposed
+        # to be immediate, and 10 req/s against a local HTTP endpoint is nothing.
+        time.sleep(0.1)
 
 # ---------------------------------------------------------------------------
 #  IS-04 registration
@@ -93,6 +97,7 @@ ADVERTISE_HOST = CFG.get("NMOS_ADVERTISE_HOST") or ""
 NODE_ID = str(uuid.uuid5(NS, "atoll:is07:node"))
 DEVICE_ID = str(uuid.uuid5(NS, "atoll:is07:device"))
 FLOW_ID = {k: str(uuid.uuid5(NS, f"atoll:is07:flow:{k}")) for k in SOURCES}
+SENDER_ID = {k: str(uuid.uuid5(NS, f"atoll:is07:sender:{k}")) for k in SOURCES}
 
 def _ver():
     return _ts(time.time())
@@ -119,7 +124,7 @@ def _resources():
         "id": DEVICE_ID, "version": _ver(), "label": "atoll-is07-tally",
         "description": "Per-source on-air tally as IS-07 boolean events", "tags": {},
         "type": "urn:x-nmos:device:generic", "node_id": NODE_ID,
-        "senders": [], "receivers": [],
+        "senders": [SENDER_ID[k] for k in SOURCES], "receivers": [],
         # How a controller finds the events API. No sender is advertised because we do not implement
         # the websocket/mqtt transports a sender would have to declare.
         "controls": [{"href": f"http://{host}:{PORT}/x-nmos/events/v1.0",
@@ -140,6 +145,18 @@ def _resources():
             "source_id": SRC_ID[k], "device_id": DEVICE_ID, "parents": [],
             "format": "urn:x-nmos:format:data", "media_type": "application/json",
             "event_type": "boolean",
+        }))
+    # With a working websocket transport we can honestly advertise senders. Each carries the
+    # connection_uri a receiver needs, and IS-07's ext_is_07_* hints naming the source and its REST
+    # endpoint -- the same shape the nmos-cpp reference node publishes.
+    for k in SOURCES:
+        out.append(("sender", {
+            "id": SENDER_ID[k], "version": _ver(), "label": f"atoll tally {k}",
+            "description": f"On-air tally for {LABEL.get(k, k)}", "tags": {},
+            "flow_id": FLOW_ID[k], "device_id": DEVICE_ID,
+            "transport": "urn:x-nmos:transport:websocket",
+            "interface_bindings": [], "manifest_href": None,
+            "subscription": {"receiver_id": None, "active": False},
         }))
     return out
 
@@ -174,6 +191,173 @@ def heartbeat():
                 _registered["ok"] = False
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+#  IS-07 WebSocket transport (RFC 6455, hand-rolled -- no library installable here)
+# ---------------------------------------------------------------------------
+import socket, base64, hashlib, struct as _struct, select as _select
+
+WS_PORT = int(CFG.get("IS07_WS_PORT") or 8103)
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+_clients = []                       # [(conn, {subscribed source_ids})]
+_clients_lock = threading.Lock()
+
+def _ws_frame(payload: bytes, opcode=0x1) -> bytes:
+    """Server->client frame. Never masked, per RFC 6455."""
+    head = bytes([0x80 | opcode])
+    n = len(payload)
+    if n < 126:
+        head += bytes([n])
+    elif n < (1 << 16):
+        head += bytes([126]) + _struct.pack("!H", n)
+    else:
+        head += bytes([127]) + _struct.pack("!Q", n)
+    return head + payload
+
+def _ws_read(conn):
+    """Read one client frame. Returns (opcode, payload) or None if the peer went away."""
+    def recvn(n):
+        buf = b""
+        while len(buf) < n:
+            c = conn.recv(n - len(buf))
+            if not c:
+                return None
+            buf += c
+        return buf
+    h = recvn(2)
+    if not h:
+        return None
+    opcode = h[0] & 0x0F
+    masked = h[1] & 0x80
+    ln = h[1] & 0x7F
+    if ln == 126:
+        e = recvn(2)
+        if not e: return None
+        ln = _struct.unpack("!H", e)[0]
+    elif ln == 127:
+        e = recvn(8)
+        if not e: return None
+        ln = _struct.unpack("!Q", e)[0]
+    mask = recvn(4) if masked else b""
+    if masked and mask is None:
+        return None
+    data = recvn(ln) if ln else b""
+    if data is None:
+        return None
+    if masked:
+        data = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+    return opcode, data
+
+def _ws_send(conn, obj):
+    try:
+        conn.sendall(_ws_frame(json.dumps(obj).encode()))
+        return True
+    except Exception:
+        return False
+
+def ws_push(key):
+    """Push one source's state to every client subscribed to it."""
+    msg = state_message(key)
+    sid = SRC_ID[key]
+    with _clients_lock:
+        dead = []
+        for entry in _clients:
+            conn, subs = entry
+            if sid in subs and not _ws_send(conn, msg):
+                dead.append(entry)
+        for d in dead:
+            _clients.remove(d)
+
+def _ws_client(conn, addr):
+    try:
+        req = b""
+        while b"\r\n\r\n" not in req:
+            c = conn.recv(1024)
+            if not c:
+                return
+            req += c
+            if len(req) > 65536:
+                return
+        lines = req.decode("latin-1").split("\r\n")
+        path = lines[0].split(" ")[1] if len(lines[0].split(" ")) > 1 else "/"
+        hdrs = {}
+        for l in lines[1:]:
+            if ":" in l:
+                k, v = l.split(":", 1)
+                hdrs[k.strip().lower()] = v.strip()
+        key = hdrs.get("sec-websocket-key")
+        # The endpoint is per-device, as IS-07 specifies.
+        if not key or DEVICE_ID not in path:
+            conn.sendall(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
+            return
+        accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+        conn.sendall(("HTTP/1.1 101 Switching Protocols\r\n"
+                      "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                      f"Sec-WebSocket-Accept: {accept}\r\n\r\n").encode())
+        entry = (conn, set())
+        with _clients_lock:
+            _clients.append(entry)
+        print(f"  IS-07 ws client connected: {addr[0]}", flush=True)
+        while True:
+            r = _ws_read(conn)
+            if r is None:
+                break
+            opcode, data = r
+            if opcode == 0x8:                      # close
+                break
+            if opcode == 0x9:                      # ping -> pong
+                conn.sendall(_ws_frame(data, 0xA))
+                continue
+            if opcode != 0x1:
+                continue
+            try:
+                msg = json.loads(data.decode() or "{}")
+            except Exception:
+                continue
+            if msg.get("command") == "subscription":
+                want = set(msg.get("sources") or [])
+                entry[1].clear(); entry[1].update(want)
+                _ws_send(conn, {"command": "subscription", "sources": sorted(want)})
+                # send current state at once so the receiver starts correct
+                for sid in want:
+                    k = ID_SRC.get(sid)
+                    if k:
+                        _ws_send(conn, state_message(k))
+            elif msg.get("message_type") == "health":
+                _ws_send(conn, {"message_type": "health",
+                                "timing": {"creation_timestamp": _ts(time.time())}})
+    except Exception:
+        pass
+    finally:
+        with _clients_lock:
+            _clients[:] = [e for e in _clients if e[0] is not conn]
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+def ws_server():
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(("", WS_PORT))
+    srv.listen(16)
+    print(f"  IS-07 websocket: ws://0.0.0.0:{WS_PORT}/x-nmos/events/v1.0/devices/{DEVICE_ID}", flush=True)
+    while True:
+        try:
+            conn, addr = srv.accept()
+            threading.Thread(target=_ws_client, args=(conn, addr), daemon=True).start()
+        except Exception:
+            time.sleep(0.2)
+
+def ws_health():
+    """IS-07 keepalive so a receiver can tell a silent source from a dead one."""
+    while True:
+        time.sleep(5)
+        msg = {"message_type": "health", "timing": {"creation_timestamp": _ts(time.time())}}
+        with _clients_lock:
+            for conn, _ in list(_clients):
+                _ws_send(conn, msg)
 
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
@@ -219,6 +403,8 @@ class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
 
+threading.Thread(target=ws_server, daemon=True).start()
+threading.Thread(target=ws_health, daemon=True).start()
 threading.Thread(target=poller, daemon=True).start()
 register_all()
 threading.Thread(target=heartbeat, daemon=True).start()

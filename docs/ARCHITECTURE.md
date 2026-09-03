@@ -371,6 +371,7 @@ sequenceDiagram
   Note over G: encoder + mux never stopped: 5010 is continuous
   V-->>V: tile shows black for ~2 s, then the new channel, no decoder error
   Note over S: watchdog: not live 12 s after retune → rebuild source in place (x2) → revert to LASTGOOD and exit 1 → systemd restarts
+  Note over S: hang guard (own thread): main loop silent 20 s, e.g. a teardown state change that never returns → log the element → exit 1 → systemd restarts on the requested channel
 ```
 
 The whole point of `tv-send-inputselect.py` is that the encoder tail never stops. Its pipeline
@@ -753,3 +754,8 @@ These are the constraints that recur across modules. Each one was learned by bre
 - **Instrument the running pipeline, not a standalone harness**, when a symptom is visible on the
   wall. Three harnesses in a row measured the wrong property; the wall showed ~4000 reorders
   where each harness showed zero.
+- **Tear a dynamic branch down downstream → upstream** (`teardown_source` in the TV sender). An
+  element going to NULL flushes the pushes blocked *into* it, which frees the element above to stop
+  its task. Source-first waited forever on `souphttpsrc`'s task, blocked into a full queue below it,
+  and that wait ran on the main loop, so the watchdog that should have caught it was frozen too
+  (Live TV black, deaf to channel changes, 3 Sep 2026). The thread-based hang guard is the backstop.

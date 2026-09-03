@@ -114,8 +114,10 @@ The wall's slots default to `hevc,raw,jxs,music` and can be passed as the third 
   where souphttpsrc→decodebin3 feeds input-selectors (video+audio kept TOGETHER) → one encoder each →
   mpegtsmux → 5010, with a black/silence fallback the selectors switch to during a retune so the
   encoder never stops. It restamps onto running-time so DTS==PTS, which is what stopped the Live TV
-  tile stepping on hardware decode. It also has a debounce (1.2 s) and a watchdog (12 s → rebuild,
-  twice, then revert to the last good channel). Fallbacks kept in the repo:
+  tile stepping on hardware decode. It also has a debounce (1.2 s), a watchdog (12 s → rebuild,
+  twice, then revert to the last good channel) and a hang guard on its own thread (main loop silent
+  20 s → exit 1 → systemd restarts it on the requested channel; the journal line names the
+  GStreamer call it stuck in). Fallbacks kept in the repo:
   `tv-send-seamless.py` (older inter-bridge design — ~0.7 s A/V skew + green frames) and
   `tv-send.sh` (restart-the-whole-pipeline — perfect single view, rebuilds the multiview on every
   channel change).

@@ -12,7 +12,7 @@
 #
 #  Usage: tv-send-inputselect.py [GROUP] [PORT] [STATE_FILE]   (defaults from atoll.conf -> 5010)
 # ===========================================================================
-import gi, os, sys, subprocess, time
+import gi, os, sys, subprocess, threading, time
 gi.require_version("Gst", "1.0")
 # Decode the HDHomeRun input on the CPU, never on the GPU. We only DECODE the source here (a cheap
 # SD/HD MPEG-2 or H.264 ATSC stream) and re-ENCODE on the GPU (nvh265enc). decodebin3 would otherwise
@@ -125,13 +125,25 @@ def to_live():
     LASTGOOD["ch"] = src["ch"]   # this channel decoded successfully
     WATCH["change_at"] = 0.0; WATCH["tries"] = 0   # disarm watchdog: source is live
 
+# BUSY names the blocking call the main loop is inside (for the hang guard's log line).
+BUSY = {"what": None}
+
 def teardown_source():
-    for e in src["els"]:
+    # Downstream -> upstream. Each element going to NULL deactivates its own pads, which flushes
+    # any push blocked INTO it, so the element above can then stop its task. The old order (source
+    # first) could wait forever on souphttpsrc's task while that task sat blocked pushing into a
+    # full decodebin3/queue below it -- and that wait ran on the main loop, so the channel poller,
+    # the GLib watchdog and the bus handler all froze with it: Live TV black and deaf to channel
+    # changes until WSL was restarted (3 Sep 2026). The hang guard below is the backstop.
+    for e in reversed(src["els"]):
+        BUSY["what"] = f"teardown {e.get_name()} -> NULL"
         e.set_state(Gst.State.NULL)
+    BUSY["what"] = "release selector pads"
     if src["vpad"]: vsel.release_request_pad(src["vpad"])
     if src["apad"]: asel.release_request_pad(src["apad"])
     for e in src["els"]:
         pipeline.remove(e)
+    BUSY["what"] = None
     src["els"] = []; src["vpad"] = None; src["apad"] = None; src["live"] = False
 
 def build_source(ch):
@@ -139,6 +151,7 @@ def build_source(ch):
     dec = mk("decodebin3")
     pipeline.add(s); pipeline.add(dec); s.link(dec)
     src["els"] = [s, dec]; src["ch"] = ch
+    BUSY["what"] = f"build source {ch}"
 
     def on_pad(_dec, pad):
         st = pad.query_caps(None).to_string()
@@ -161,6 +174,7 @@ def build_source(ch):
             sp = asel.get_request_pad("sink_%u"); chain[-1].get_static_pad("src").link(sp); src["apad"] = sp
     dec.connect("pad-added", on_pad)
     for e in [s, dec]: e.sync_state_with_parent()
+    BUSY["what"] = None
 
 def _first_buf(pad, info):
     if not src["live"]:
@@ -246,6 +260,28 @@ def watchdog():
             os._exit(1)
     return True
 GLib.timeout_add_seconds(2, watchdog)
+
+# Main-loop hang guard. The GLib watchdog above cannot fire if the main loop itself is stuck inside
+# a GStreamer call that never returns (a state change during teardown, 3 Sep 2026). A plain thread
+# checks the loop is still ticking; after HANG_S of silence it logs where the loop stuck and exits 1
+# so systemd relaunches us on the requested channel: black for ~HANG_S + RestartSec instead of until
+# someone restarts WSL. Live TV is a demo feed; a 25 s outage beats an indefinite one.
+HANG_S = 20
+TICK = {"t": time.monotonic()}
+def tick():
+    TICK["t"] = time.monotonic()
+    return True
+GLib.timeout_add(1000, tick)
+def hang_guard():
+    while True:
+        time.sleep(2)
+        stale = time.monotonic() - TICK["t"]
+        if stale > HANG_S:
+            print(f"{time.strftime('%T')} HANG: main loop silent {stale:.0f}s (channel {src['ch']}, "
+                  f"stuck in: {BUSY['what'] or 'unknown'}) -> exit 1, systemd restarts", flush=True)
+            os._exit(1)
+threading.Thread(target=hang_guard, name="hang-guard", daemon=True).start()
+
 loop = GLib.MainLoop()
 try:
     loop.run()

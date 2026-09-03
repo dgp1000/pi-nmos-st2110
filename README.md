@@ -98,6 +98,10 @@ streams separately, as the analyser does. Everything below is live at once, and 
 
 ## Architecture
 
+> **Want the detail?** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) walks through every module —
+> what each program does, which ports, groups and state files connect them, and sequence diagrams
+> for a take, a channel change and a demo knob.
+
 ```
                 iPad / browser  ─── http :8096 ────┐
                 panel · inspector · TV remote      │
@@ -303,7 +307,9 @@ pi/
   launch-all.sh       Pi ST 2110-20/-30 generators + PTP grandmaster + web clock
   master-clock-web.py PTP web clock (:8000)
 deploy/nmos/          the NMOS stack: docker-compose + registry.json + node.json
-docs/                 design notes / project state
+docs/
+  ARCHITECTURE.md     module-by-module system diagram: what each program does and how they connect
+  superpowers/        design notes / project state
 ```
 
 ---

@@ -29,7 +29,7 @@ import http.server, socketserver, json, time, uuid, threading, urllib.request, o
 from urllib.parse import urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-NEED = ["PANEL_PORT", "IS07_PORT"]
+NEED = ["PANEL_PORT", "IS07_PORT", "NMOS_REGISTRY", "NMOS_ADVERTISE_HOST"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
 PANEL = f"http://localhost:{CFG.get('PANEL_PORT') or 8096}"
@@ -83,6 +83,98 @@ def poller():
             pass
         time.sleep(0.5)
 
+# ---------------------------------------------------------------------------
+#  IS-04 registration
+# ---------------------------------------------------------------------------
+REGISTRY = CFG.get("NMOS_REGISTRY") or "http://localhost:8080"
+REG = f"{REGISTRY}/x-nmos/registration/v1.3"
+ADVERTISE_HOST = CFG.get("NMOS_ADVERTISE_HOST") or ""
+
+NODE_ID = str(uuid.uuid5(NS, "atoll:is07:node"))
+DEVICE_ID = str(uuid.uuid5(NS, "atoll:is07:device"))
+FLOW_ID = {k: str(uuid.uuid5(NS, f"atoll:is07:flow:{k}")) for k in SOURCES}
+
+def _ver():
+    return _ts(time.time())
+
+def _post(kind, data):
+    body = json.dumps({"type": kind, "data": data}).encode()
+    req = urllib.request.Request(f"{REG}/resource", data=body, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        return r.status
+
+def _resources():
+    host = ADVERTISE_HOST or "localhost"
+    node = {
+        "id": NODE_ID, "version": _ver(), "label": "atoll-is07-tally",
+        "description": "Atoll IS-07 Event & Tally emitter", "tags": {},
+        "href": f"http://{host}:{PORT}/", "hostname": "atoll-is07",
+        "caps": {}, "services": [],
+        "api": {"versions": ["v1.3"],
+                "endpoints": [{"host": host, "port": PORT, "protocol": "http"}]},
+        "clocks": [], "interfaces": [],
+    }
+    device = {
+        "id": DEVICE_ID, "version": _ver(), "label": "atoll-is07-tally",
+        "description": "Per-source on-air tally as IS-07 boolean events", "tags": {},
+        "type": "urn:x-nmos:device:generic", "node_id": NODE_ID,
+        "senders": [], "receivers": [],
+        # How a controller finds the events API. No sender is advertised because we do not implement
+        # the websocket/mqtt transports a sender would have to declare.
+        "controls": [{"href": f"http://{host}:{PORT}/x-nmos/events/v1.0",
+                      "type": "urn:x-nmos:control:events/v1.0", "authorization": False}],
+    }
+    out = [("node", node), ("device", device)]
+    for k in SOURCES:
+        out.append(("source", {
+            "id": SRC_ID[k], "version": _ver(), "label": f"atoll tally {k}",
+            "description": f"On-air tally for {LABEL.get(k, k)}", "tags": {},
+            "caps": {}, "device_id": DEVICE_ID, "parents": [], "clock_name": None,
+            "format": "urn:x-nmos:format:data", "event_type": "boolean",
+        }))
+    for k in SOURCES:
+        out.append(("flow", {
+            "id": FLOW_ID[k], "version": _ver(), "label": f"atoll tally {k}",
+            "description": f"On-air tally for {LABEL.get(k, k)}", "tags": {},
+            "source_id": SRC_ID[k], "device_id": DEVICE_ID, "parents": [],
+            "format": "urn:x-nmos:format:data", "media_type": "application/json",
+            "event_type": "boolean",
+        }))
+    return out
+
+_registered = {"ok": False}
+
+def register_all():
+    try:
+        for kind, data in _resources():
+            _post(kind, data)
+        _registered["ok"] = True
+        print(f"  registered with IS-04 at {REG} ({len(SOURCES)} sources + flows)", flush=True)
+        return True
+    except Exception as e:
+        _registered["ok"] = False
+        print(f"  IS-04 registration failed ({e}) -- events API still serves locally", flush=True)
+        return False
+
+def heartbeat():
+    """Registries garbage-collect a node that stops sending health. Re-register on 404, which is
+    what a registry restart looks like from here."""
+    while True:
+        time.sleep(5)
+        if not _registered["ok"]:
+            register_all()
+            continue
+        try:
+            req = urllib.request.Request(f"{REG}/health/nodes/{NODE_ID}", data=b"", method="POST")
+            urllib.request.urlopen(req, timeout=5).read()
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                print("  registry lost our node (404) -- re-registering", flush=True)
+                _registered["ok"] = False
+        except Exception:
+            pass
+
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -128,6 +220,8 @@ class Server(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
 threading.Thread(target=poller, daemon=True).start()
+register_all()
+threading.Thread(target=heartbeat, daemon=True).start()
 print(f"is07-tally: {len(SOURCES)} boolean tally sources -> http://0.0.0.0:{PORT}/x-nmos/events/v1.0/", flush=True)
 for k in SOURCES:
     print(f"  {LABEL.get(k, k):<20} {SRC_ID[k]}", flush=True)

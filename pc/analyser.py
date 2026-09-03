@@ -15,17 +15,19 @@
 #
 #  Serves http://<host>:8101/  (HTML dashboard) and /flows (JSON).
 # ===========================================================================
-import socket, struct, threading, time, json, subprocess, os, select
+import socket, struct, threading, time, json, subprocess, os, select, sys, collections
 import http.server, socketserver, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import is07client
 NEED = ["ISLAND_IFACE", "ISLAND_PC_IP", "ISLAND_PI_IP", "ANALYSER_PORT",
         "HEVC_GRP", "HEVC_PORT", "HOME_GRP", "HOME_PORT", "MUSIC_GRP", "MUSIC_PORT",
         "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT", "PI_AUDIO_GRP", "PI_AUDIO_PORT",
         "ANC_GRP", "ANC_PORT", "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT",
         "OPUS_GRP", "OPUS_PORT", "MJPEG_GRP", "MJPEG_PORT", "VP9_GRP", "VP9_PORT",
         "TSRTP_GRP", "TSRTP_PORT", "FEC_GRP", "FEC_PORT",
-        "SPS_A_GRP", "SPS_A_PORT", "SPS_B_GRP", "SPS_B_PORT"]
+        "SPS_A_GRP", "SPS_A_PORT", "SPS_B_GRP", "SPS_B_PORT", "IS07_WS_PORT"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
 LOCAL = CFG.get("ISLAND_PC_IP") or "0.0.0.0"
@@ -155,6 +157,66 @@ def sampler():
             f.avg = (db / dp) if dp else 0.0
             f.loss_pct = (100.0 * dl / (dp + dl)) if (dp + dl) else 0.0
 
+# --- NMOS IS-07 tally receiver -------------------------------------------------------------
+# Which analyser row maps to which tally source. Explicit rather than matched on label: the two
+# name-sets were written for different audiences and only half of them happen to agree. Several
+# rows share a key on purpose -- both 2022-7 paths carry the same on-air source, and the FEC media
+# and its column/row parity streams are one flow as far as tally is concerned.
+IS07_KEY = {
+    "Live TV": "hevc", "Home videos": "jxs", "Music": "music", "Test Reels": "reels",
+    "Pi raw video": "raw", "JPEG 2000": "j2k", "H.264": "h264", "MJPEG": "mjpeg",
+    "VP9": "vp9", "TS over RTP": "tsrtp",
+    "FEC media": "fec", "FEC column": "fec", "FEC row": "fec",
+    "2022-7 path A": "sps", "2022-7 path B": "sps",
+}
+# Pi audio, Ancillary and Opus have no tally source and show a dash, not a false "off".
+
+IS07_LABEL = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "reels": "Test Reels",
+              "raw": "Pi raw 2110-20", "j2k": "JPEG 2000", "h264": "H.264 RTP",
+              "mjpeg": "MJPEG RTP", "vp9": "VP9 RTP", "tsrtp": "TS over RTP",
+              "fec": "ST 2022-1 FEC", "sps": "ST 2022-7 SPS"}
+
+_is07_keys = sorted(set(IS07_KEY.values()))
+_is07_id = {is07client.source_id(k): k for k in _is07_keys}
+_is07_state = {k: False for k in _is07_keys}
+_is07_events = collections.deque(maxlen=14)
+_is07_lock = threading.Lock()
+
+def _on_state(sid, value, tai):
+    key = _is07_id.get(sid)
+    if key is None:
+        return
+    with _is07_lock:
+        changed = _is07_state.get(key) != value
+        _is07_state[key] = value
+        # Log transitions only. The emitter sends current state for every source on connect, and
+        # logging those 13 would bury the one event you actually care about.
+        if changed:
+            _is07_events.appendleft({"t": time.strftime("%H:%M:%S"), "tai": tai or "",
+                                     "key": key, "label": IS07_LABEL.get(key, key),
+                                     "value": value})
+
+def _on_status(up):
+    with _is07_lock:
+        _is07_events.appendleft({"t": time.strftime("%H:%M:%S"), "tai": "", "key": "",
+                                 "label": "subscription " + ("established" if up else "lost"),
+                                 "value": up, "meta": True})
+        if not up:
+            # Clear tally on disconnect rather than freezing it: a stale ON AIR flag that happens to
+            # be wrong is worse than no flag, and the header says why it went dark.
+            for k in _is07_state:
+                _is07_state[k] = False
+
+is07 = is07client.Is07Client([is07client.source_id(k) for k in _is07_keys],
+                             port=int(CFG.get("IS07_WS_PORT") or 8103),
+                             on_state=_on_state, on_status=_on_status)
+
+def is07_status():
+    with _is07_lock:
+        return {"connected": is07.connected, "sources": len(_is07_keys),
+                "messages": is07.messages, "state": dict(_is07_state),
+                "events": list(_is07_events)}
+
 def ptp_status():
     try:
         with urllib.request.urlopen(f"http://{PI}:8000/time", timeout=1.5) as r:
@@ -172,8 +234,13 @@ def snapshot():
                     "avg": round(f.avg), "rtp": f.is_rtp, "pt": f.pt,
                     "ssrc": (f"{f.ssrc:08x}" if f.ssrc is not None else None),
                     "lost": f.total_lost, "loss_pct": round(f.loss_pct, 3), "reorder": f.reorder})
+    tally = is07_status()
+    for x in out:
+        k = IS07_KEY.get(x["label"])
+        # None (no tally source) is meaningfully different from False (has one, not on air).
+        x["tally"] = tally["state"].get(k) if k else None
     tot_p = sum(x["pps"] for x in out)
-    return {"flows": out, "total_pps": tot_p,
+    return {"flows": out, "total_pps": tot_p, "is07": tally,
             "total_mbps": round(sum(x["mbps"] for x in out), 2),
             "ptp": ptp_status(), "ts": time.strftime("%H:%M:%S")}
 
@@ -203,13 +270,31 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  .pill{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;border:1px solid #1a3a2a;color:#7a9}
  .hi{background:#3a1010;border-color:#803;color:#f88}
  footer{padding:10px 18px;color:#476;font-size:12px;border-top:1px solid #0c1a0c}
+ .air{background:#3a1010;border-color:#803;color:#f88;font-weight:700;letter-spacing:.06em}
+ .off{color:#3d5a48;border-color:#12281c}
+ .evs{padding:4px 18px 20px}
+ .evs h2{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:#5a5;
+   font-weight:400;margin:0 0 8px}
+ .evlist{border:1px solid #0f2412;border-radius:6px;overflow:hidden;max-width:760px}
+ .evrow{display:flex;gap:14px;padding:5px 11px;border-bottom:1px solid #0c1a0c;
+   font-variant-numeric:tabular-nums;align-items:baseline}
+ .evrow:last-child{border-bottom:none}
+ .evrow.meta{color:#476}
+ .evt{color:#5a7;width:66px;flex:none}
+ .evtai{color:#39a;width:206px;flex:none;font-size:12px;white-space:nowrap}
+ .evk{flex:1;color:#dfe}
+ .evv{width:46px;flex:none;text-align:right;font-weight:700}
+ .evv.offv{color:#5d7a68;font-weight:400}
+ .evempty{padding:9px 11px;color:#476}
 </style></head><body>
 <header><h1>ATOLL</h1><span class="sub">island flow analyser &middot; 10.10.10.0/24</span>
- <span id="ptp" class="sub"></span><span class="tot" id="tot"></span></header>
+ <span id="ptp" class="sub"></span><span id="is07" class="sub"></span><span class="tot" id="tot"></span></header>
 <div class="wrap"><table><thead><tr>
- <th>flow</th><th>group : port</th><th class="n">pps</th><th class="n">Mbit/s</th>
+ <th>flow</th><th>tally</th><th>group : port</th><th class="n">pps</th><th class="n">Mbit/s</th>
  <th class="n">avg pkt</th><th>transport</th><th class="n">lost</th><th class="n">loss %</th><th>standard</th>
 </tr></thead><tbody id="rows"></tbody></table></div>
+<section class="evs"><h2>IS-07 event stream</h2>
+ <div id="ev" class="evlist"><div class="evempty">waiting for events\u2026</div></div></section>
 <footer id="ft">&nbsp;</footer>
 <script>
 function esc(s){return String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
@@ -221,11 +306,14 @@ async function load(){
  document.getElementById('rows').innerHTML=d.flows.map(f=>{
   const dead=!f.alive;
   const lossCls=f.loss_pct>1?'bad':(f.loss_pct>0?'warn':'ok');
+  const tly=(f.tally==null)?'<span class="std">&ndash;</span>'
+        :(f.tally?'<span class="pill air">ON AIR</span>':'<span class="pill off">off</span>');
   const tp=f.rtp?('<span class="pill">RTP pt '+f.pt+'</span> <span class="std">ssrc '+esc(f.ssrc)+'</span>')
                 :'<span class="pill">raw UDP</span>';
   const hi=(f.avg>0&&f.avg<400)?' class="pill hi" title="one TS packet per datagram - see mpegtsmux alignment"':'class="n"';
   return '<tr>'+
    '<td class="lbl'+(dead?' dead':'')+'">'+esc(f.label)+(dead?' &middot; no signal':'')+'</td>'+
+   '<td>'+tly+'</td>'+
    '<td class="grp">'+esc(f.grp)+' : '+f.port+'</td>'+
    '<td class="n">'+(dead?'&ndash;':f.pps.toLocaleString())+'</td>'+
    '<td class="n">'+(dead?'&ndash;':f.mbps.toFixed(2))+'</td>'+
@@ -235,6 +323,19 @@ async function load(){
    '<td class="n '+lossCls+'">'+(f.rtp?f.loss_pct.toFixed(2):'&ndash;')+'</td>'+
    '<td class="std">'+esc(f.std)+'</td></tr>';
  }).join('');
+ const s7=d.is07;
+ document.getElementById('is07').innerHTML='IS-07 '+(s7.connected
+   ?'<span class="ok">subscribed</span> <span class="std">'+s7.sources+' sources \u00b7 '
+     +s7.messages.toLocaleString()+' msgs</span>'
+   :'<span class="bad">no events</span>');
+ document.getElementById('ev').innerHTML = s7.events.length
+   ? s7.events.map(e=>'<div class="evrow'+(e.meta?' meta':'')+'">'+
+       '<span class="evt">'+esc(e.t)+'</span>'+
+       '<span class="evtai">'+(e.tai?'TAI '+esc(e.tai):'')+'</span>'+
+       '<span class="evk">'+esc(e.label)+'</span>'+
+       '<span class="evv '+(e.meta?'':(e.value?'bad':'offv'))+'">'+
+         (e.meta?'':(e.value?'ON':'off'))+'</span></div>').join('')
+   : '<div class="evempty">waiting for events\u2026</div>';
  document.getElementById('ft').textContent='updated '+d.ts+
    '  \\u00b7  avg pkt under ~400 B is highlighted: that is one 188-byte TS packet per datagram, which burns packet rate (the island\\u2019s real ceiling) for no bandwidth gain.';
 }
@@ -262,6 +363,7 @@ class TCPServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
 
+is07.start()
 threading.Thread(target=reader, daemon=True).start()
 threading.Thread(target=sampler, daemon=True).start()
 print(f"analyser: watching {len(flows)} island flows -> http://0.0.0.0:{PORT}/", flush=True)

@@ -125,8 +125,8 @@ def _resources():
         "description": "Per-source on-air tally as IS-07 boolean events", "tags": {},
         "type": "urn:x-nmos:device:generic", "node_id": NODE_ID,
         "senders": [SENDER_ID[k] for k in SOURCES], "receivers": [],
-        # How a controller finds the events API. No sender is advertised because we do not implement
-        # the websocket/mqtt transports a sender would have to declare.
+        # How a controller finds the events API, alongside the senders advertised below -- this is
+        # how the nmos-cpp reference node advertises its own.
         "controls": [{"href": f"http://{host}:{PORT}/x-nmos/events/v1.0",
                       "type": "urn:x-nmos:control:events/v1.0", "authorization": False}],
     }

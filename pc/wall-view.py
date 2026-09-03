@@ -361,7 +361,7 @@ def on_draw(_ov, ctx, _ts, _dur):
     for i in range(4):
         x, y = POS[i]
         ctx.rectangle(x * sx, (y + TH - 95 * S) * sy, TW * sx, 95 * S * sy)   # UMD / fps / FEC / meters
-        ctx.rectangle(x * sx, y * sy, 130 * S * sx, 46 * S * sy)              # ON AIR flag
+        ctx.rectangle(x * sx, y * sy, 150 * S * sx, 62 * S * sy)              # ON AIR + IS-07 flag
         ctx.rectangle(x * sx, y * sy, TW * sx, b * sy)                        # tally border: top
         ctx.rectangle(x * sx, (y + TH - b) * sy, TW * sx, b * sy)             #               bottom
         ctx.rectangle(x * sx, y * sy, b * sx, TH * sy)                        #               left
@@ -383,10 +383,14 @@ def _draw_overlay(ctx):
             ctx.set_source_rgba(1, 0.1, 0.1, 0.95); ctx.set_line_width(6 * S)
             ctx.rectangle(x + 3 * S, y + 3 * S, TW - 6 * S, TH - 6 * S); ctx.stroke()
             # top-LEFT of the tile: the wall's ATOLL bug sits top-right and would collide there
+            tag = st.get("is07")
             ctx.set_source_rgba(0.85, 0.05, 0.05, 0.92)
-            ctx.rectangle(x + 10 * S, y + 10 * S, 96 * S, 26 * S); ctx.fill()
+            ctx.rectangle(x + 10 * S, y + 10 * S, 118 * S, (42 if tag else 26) * S); ctx.fill()
             ctx.set_source_rgba(1, 1, 1, 1); ctx.set_font_size(15 * S)
             ctx.move_to(x + 22 * S, y + 29 * S); ctx.show_text("ON AIR")
+            if tag:   # the border is lit by an IS-07 boolean, not by panel state -- say so
+                ctx.set_source_rgba(1, 1, 1, 0.85); ctx.set_font_size(11 * S)
+                ctx.move_to(x + 22 * S, y + 45 * S); ctx.show_text("NMOS IS-07")
         # --- UMD label + live bitrate ---
         ctx.set_source_rgba(0, 0, 0, 0.55); ctx.rectangle(x + 8 * S, y + TH - 40 * S, 320 * S, 30 * S); ctx.fill()
         ctx.set_source_rgba(1, 1, 1, 0.95); ctx.set_font_size(17 * S)
@@ -426,9 +430,6 @@ def _draw_overlay(ctx):
     # --- ATOLL bug ---
     ctx.set_source_rgba(1, 1, 1, 0.5); ctx.set_font_size(20 * S)
     ctx.move_to(W - 108 * S, 34 * S); ctx.show_text("ATOLL")
-    if st.get("is07"):
-        ctx.set_source_rgba(0.45, 0.95, 0.55, 0.75); ctx.set_font_size(12 * S)
-        ctx.move_to(W - 190 * S, 50 * S); ctx.show_text("IS-07 tally")
     ctx.restore()
 ov.connect("draw", on_draw)
 _render_overlay()                        # compose once up front so the first frames have an overlay

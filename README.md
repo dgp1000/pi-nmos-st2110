@@ -16,11 +16,11 @@ Every source is discoverable over NMOS and carries **IS-07 tally**.
 It started as a home lab for learning ST 2110 / NMOS end to end. Everything is config-driven, so with
 the right hardware you can re-home it to your own network by editing two files.
 
-![The Atoll multiview output: a 2x2 wall — PC HEVC, Pi raw ST 2110-20 (bars), home videos, and the Music "Now Playing" card](docs/img/multiview.png)
+![The Atoll wall on monitor 2: a 2x2 multiview — Live TV carrying a red ON AIR / NMOS IS-07 tally flag, the Pi's uncompressed ST 2110-20 colour bars, home videos, and the Music "Now Playing" card with its spectrum analyser — every tile showing its measured bitrate and frame rate](docs/img/multiview.png)
 
-*The monitor-2 output — the assignable 2×2 multiview. This shot is of the plain `multi` layout and
-predates two changes: the centre clock overlay it shows has since been removed, and the newer `wall`
-layout adds per-tile bitrate, frame rate, audio meters and IS-07 tally flags.*
+*The `wall` layout on monitor 2. Every tile carries the bitrate and frame rate measured off the wire,
+plus audio meters; the red flag on Live TV is real **NMOS IS-07 tally**, pushed from the emitter over
+WebSocket rather than read out of the panel's own state.*
 
 ---
 

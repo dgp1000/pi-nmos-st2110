@@ -108,7 +108,7 @@ flowchart LR
   subgraph HOME["Home network (WiFi / management)"]
     ipad2["iPad<br/>192.168.4.x"]
     mac["Mac<br/>192.168.6.159:8008<br/>Now-Playing server"]
-    hdhr["HDHomeRun FLEX 4K<br/>192.168.7.88:5004"]
+    hdhr["HDHomeRun FLEX 4K<br/>DHCP; found by DeviceID<br/>:5004"]
   end
 
   subgraph PC["PC — Windows 11 + WSL2 (mirrored networking), RTX 2080 Ti"]
@@ -240,6 +240,11 @@ it shape everything else:
 - **Python does not re-parse shell.** The Python programs shell out once, `source` the file, and
   echo the keys they need. That is why a new config key has to be added to a program's `NEED`
   list (or `atoll_config._VARS`) before it can read it.
+- **The HDHomeRun is found by DeviceID, not IP.** It is on DHCP and its address drifts (a reboot
+  moved it `192.168.7.88` → `192.168.4.32`, 4 Sep 2026). `pc/hdhr.py` resolves `HDHR_DEVICE_ID`
+  to the current IP over the HDHomeRun UDP discovery broadcast; the sender and the panel call it at
+  startup and re-call it when a tune or lineup fetch fails, so a DHCP move self-heals. `HDHR_HOST`
+  is only the fallback used when discovery gets no answer.
 
 ---
 

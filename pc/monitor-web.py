@@ -295,7 +295,19 @@ def music_action(action):
         return json.dumps({"error": str(e)}).encode()
 
 # --------------------------------- TV channels ---------------------------
-HDHR_HOST = _c.get('HDHR_HOST', '192.168.7.88')
+import hdhr as _hdhr
+# Find the tuner by DeviceID (HDHR_DEVICE_ID) so a DHCP move self-heals; HDHR_HOST is the fallback.
+HDHR_DEVICE_ID = _c.get('HDHR_DEVICE_ID', '').strip()
+_HDHR_FALLBACK = _c.get('HDHR_HOST', '192.168.7.88')
+HDHR_HOST = _hdhr.resolve(HDHR_DEVICE_ID, _HDHR_FALLBACK) or _HDHR_FALLBACK
+def _hdhr_rediscover():
+    global HDHR_HOST
+    if not HDHR_DEVICE_ID:
+        return
+    ip = _hdhr.resolve(HDHR_DEVICE_ID, HDHR_HOST)
+    if ip and ip != HDHR_HOST:
+        print(f"HDHomeRun {HDHR_DEVICE_ID} moved {HDHR_HOST} -> {ip}", flush=True)
+        HDHR_HOST = ip
 _RUN = _c.get('ATOLL_RUN', '/home/david/atoll-run')
 TV_STATE = _RUN + '/tv-channel'
 TV_FAVS = _RUN + '/tv-favorites'   # favorite channel numbers, one per line, in the order added
@@ -316,12 +328,18 @@ def _write_favs(favs):
 
 def tv_lineup():
     """The HDHomeRun lineup + the currently-tuned channel + favorites, for the panel grid."""
-    try:
+    def _fetch():
         with urllib.request.urlopen(f"http://{HDHR_HOST}/lineup.json", timeout=6) as r:
-            d = json.load(r)
-        chans = [{"num": c.get("GuideNumber", ""), "name": c.get("GuideName", ""), "hd": bool(c.get("HD"))} for c in d]
+            return json.load(r)
+    try:
+        d = _fetch()
     except Exception:
-        chans = []
+        _hdhr_rediscover()          # tuner may have moved; re-find it by DeviceID and retry once
+        try:
+            d = _fetch()
+        except Exception:
+            d = []
+    chans = [{"num": c.get("GuideNumber", ""), "name": c.get("GuideName", ""), "hd": bool(c.get("HD"))} for c in d]
     try:
         cur = open(TV_STATE).read().strip()
     except Exception:

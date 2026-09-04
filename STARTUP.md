@@ -102,8 +102,11 @@ The wall's slots default to `hevc,raw,jxs,music` and can be passed as the third 
   flow whose average datagram is under ~400 B, which means someone lost that setting.
 - Rapid multicast join/leave can wedge a group's Windows-side membership; if a tile goes dark on a
   specific group, move it to a nearby free port (a port collision with Windows is why J2K is on 5016).
-- **Live TV** needs the HDHomeRun reachable at `192.168.7.88`; some ATSC 3.0 channels are DRM and
-  come up black — pick a plain HD channel.
+- **Live TV** needs the HDHomeRun reachable on the LAN. It is found by its DeviceID
+  (`HDHR_DEVICE_ID` in `atoll.conf`) over discovery, so a DHCP address change self-heals; `HDHR_HOST`
+  is just the fallback. Check it with `python3 pc/hdhr.py` (lists DeviceID → IP) or
+  `python3 pc/hdhr.py <DeviceID>`. Some ATSC 3.0 channels are DRM and come up black — pick a plain
+  HD channel.
 
 ### Sync
 - **Live TV A/V sync**: single / follow-take view is lip-synced — `meter-view.py` runs the audio sink

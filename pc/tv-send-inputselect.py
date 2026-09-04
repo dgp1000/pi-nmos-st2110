@@ -33,11 +33,33 @@ from gi.repository import Gst, GLib
 Gst.init(None)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-NEED = ["ISLAND_IFACE", "HDHR_HOST", "HEVC_GRP", "HEVC_PORT", "ATOLL_RUN", "MCAST_TTL", "TV_CHANNEL"]
+NEED = ["ISLAND_IFACE", "HDHR_HOST", "HDHR_DEVICE_ID", "HEVC_GRP", "HEVC_PORT", "ATOLL_RUN", "MCAST_TTL", "TV_CHANNEL"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
 IFACE = CFG["ISLAND_IFACE"] or "eth0"
-HDHR = CFG["HDHR_HOST"]
+import hdhr as _hdhr
+# HDHR is the tuner's current IP. If HDHR_DEVICE_ID is set we find the box by that DeviceID over the
+# HDHomeRun discovery broadcast, so a DHCP address change self-heals (a reboot moved it 192.168.7.88
+# -> 192.168.4.32, 4 Sep 2026); HDHR_HOST is the fallback used when discovery gets no answer.
+DEVICE_ID = CFG.get("HDHR_DEVICE_ID", "").strip()
+HDHR = _hdhr.resolve(DEVICE_ID, CFG["HDHR_HOST"]) or CFG["HDHR_HOST"]
+if DEVICE_ID:
+    print(f"{time.strftime('%T')} HDHomeRun {DEVICE_ID} resolved to {HDHR}", flush=True)
+_REDISCOVER = {"t": 0.0}
+def rediscover(reason=""):
+    """Re-find the tuner by DeviceID after a tune fails, so an IP change fixes itself. Rate-limited
+    so the ~2 s retry loop cannot become a discovery-broadcast storm."""
+    global HDHR
+    if not DEVICE_ID:
+        return
+    now = time.monotonic()
+    if now - _REDISCOVER["t"] < 15:
+        return
+    _REDISCOVER["t"] = now
+    ip = _hdhr.resolve(DEVICE_ID, HDHR)
+    if ip and ip != HDHR:
+        print(f"{time.strftime('%T')} HDHomeRun {DEVICE_ID} moved {HDHR} -> {ip} ({reason})", flush=True)
+        HDHR = ip
 GRP = sys.argv[1] if len(sys.argv) > 1 else CFG["HEVC_GRP"]
 PORT = sys.argv[2] if len(sys.argv) > 2 else CFG["HEVC_PORT"]
 STATE = sys.argv[3] if len(sys.argv) > 3 else os.path.join(CFG["ATOLL_RUN"], "tv-channel")
@@ -317,6 +339,7 @@ def on_bus(_bus, msg):
         print(f"{time.strftime('%T')} ERROR tuning {bad}: {e.message} -> dropped, {air_ch() or 'black'} stays on air", flush=True)
         teardown(BR["standby"]); BR["standby"] = None
         WATCH["change_at"] = 0.0
+        rediscover(f"tune {bad} failed")   # maybe the tuner changed IP; next retry uses the new one
         revert_state(air_ch())
         return
     bad = air_ch() or requested()

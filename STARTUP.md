@@ -110,11 +110,15 @@ The wall's slots default to `hevc,raw,jxs,music` and can be passed as the third 
   at `sync=true` off the stream's own PTS, not a hand-tuned delay. `~/atoll-run/tv-audio-delay-ms`
   remains as a two-way trim if a source needs nudging.
 - The wall paces its sinks from PTS (`WALL_SYNC=true`). Without it playback bursts then pauses.
-- **Seamless channel changes**: the `atoll-tv` service runs `tv-send-inputselect.py` — one pipeline
-  where souphttpsrc→decodebin3 feeds input-selectors (video+audio kept TOGETHER) → one encoder each →
-  mpegtsmux → 5010, with a black/silence fallback the selectors switch to during a retune so the
-  encoder never stops. It restamps onto running-time so DTS==PTS, which is what stopped the Live TV
-  tile stepping on hardware decode. It also has a debounce (1.2 s), a watchdog (12 s → rebuild,
+- **Make-before-break channel changes**: the `atoll-tv` service runs `tv-send-inputselect.py` — one
+  pipeline where souphttpsrc→decodebin3 feeds input-selectors (video+audio kept TOGETHER) → one
+  encoder each → mpegtsmux → 5010. On a change the new channel is opened on a SECOND HDHomeRun tuner
+  while the old one stays on air; the selectors cut once the new branch has decoded a video and an
+  audio frame, then the old branch and its tuner are released — no black frame (the black/silence
+  fallback is on air only at start-up or if the on-air branch dies). Each branch gets its own libsoup
+  session, and the pipeline latency is pinned ~2.5 s (mux/sink queues sized above it) so the synced
+  udpsink never throttles a live source; the trade is ~1.7 s more Live TV delay. It restamps onto
+  running-time so DTS==PTS, which is what stopped the Live TV tile stepping on hardware decode. It also has a debounce (1.2 s), a watchdog (12 s → rebuild,
   twice, then revert to the last good channel) and a hang guard on its own thread (main loop silent
   20 s → exit 1 → systemd restarts it on the requested channel; the journal line names the
   GStreamer call it stuck in). Fallbacks kept in the repo:

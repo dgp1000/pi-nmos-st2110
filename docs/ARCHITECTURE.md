@@ -362,20 +362,31 @@ sequenceDiagram
     S->>F: read
   end
   Note over S: value differs from current → start 1.2 s debounce
-  Note over S: still 19.1 after 1.2 s → change()
-  S->>S: input-selectors → black / silence fallback pads
-  S->>S: tear down old souphttpsrc + decodebin3
-  S->>H: GET /auto/v19.1
-  H-->>S: MPEG-2 / AC-3 transport stream
-  Note over S: first decoded video buffer → to_live(), LASTGOOD = 19.1
+  Note over S: still 19.1 after 1.2 s → change(): the OLD channel stays on air
+  S->>H: GET /auto/v19.1 — a second HTTP stream, so the HDHomeRun opens a second tuner
+  H-->>S: MPEG-2 / AC-3 transport stream (standby branch: souphttpsrc + decodebin3 + scaler chain, its own libsoup session)
+  Note over S: standby's first video AND audio frame decoded → cut_to(): selectors switch old → new, LASTGOOD = 19.1
+  S->>S: tear down the old branch (downstream → upstream) → its tuner is released
   Note over G: encoder + mux never stopped: 5010 is continuous
-  V-->>V: tile shows black for ~2 s, then the new channel, no decoder error
-  Note over S: watchdog: not live 12 s after retune → rebuild source in place (x2) → revert to LASTGOOD and exit 1 → systemd restarts
-  Note over S: hang guard (own thread): main loop silent 20 s, e.g. a teardown state change that never returns → log the element → exit 1 → systemd restarts on the requested channel
+  V-->>V: old channel until the cut, then the new one — no black frame
+  Note over S: bad standby (503 no free tuner, undecodable, not live after 12 s ×3) → dropped, old channel stays on air, channel file reverted
+  Note over S: error on the on-air branch or the encoder tail → revert to LASTGOOD and exit 1 → systemd restarts
+  Note over S: hang guard (own thread): main loop silent 20 s → log the element → exit 1 → systemd restarts on the requested channel
 ```
 
-The whole point of `tv-send-inputselect.py` is that the encoder tail never stops. Its pipeline
-is built once:
+The whole point of `tv-send-inputselect.py` is that the encoder tail never stops. Channel changes
+are make-before-break: the sender keeps an *on-air* branch and, during a change, a *standby* branch
+(each `souphttpsrc → decodebin3 → scaler chain → selector request pad`), so two of the HDHomeRun's
+four tuners are busy for the second or two the change takes. Three things make the cut clean rather
+than a hole on 5010: the standby is cut in only once it has decoded both a video and an audio frame
+(the mux stalls the whole output if it is switched to a pad that has not produced yet); each source
+gets its own libsoup session (a `gst.soup.session` context per branch — otherwise both channels
+share one I/O thread and the new one is starved until the old is released); and the pipeline
+latency is pinned (~2.5 s) with the mux and sink queues sized above it, so the clock-synced udpsink
+is never throttling a live source. The cost is ~1.7 s more end-to-end Live TV delay than the old
+build, which nothing on the island depends on; a sub-second residual gap at the instant of the cut
+is absorbed by the receivers' jitter buffers. The black / silence fallback on `sink_0` is only ever
+on air at start-up or if the on-air branch itself dies. Its pipeline is built once:
 
 ```mermaid
 flowchart LR

@@ -39,7 +39,7 @@ WebSocket rather than read out of the panel's own state.*
   registered in IS-04 and **pushed over WebSocket**; the wall and the analyser are both receivers.
 - **Island flow analyser** (`:8101`) — per-flow **packet rate**, bitrate, average datagram size, RTP
   payload type / SSRC, packets actually lost, plus the IS-07 tally and event stream.
-- **Live TV** — an HDHomeRun tuner re-encoded onto the island, with seamless channel changes,
+- **Live TV** — an HDHomeRun tuner re-encoded onto the island, with make-before-break channel changes (the next channel opens on a second tuner, then the cut),
   favourites and a remote on the panel.
 - **ST 2022-1 FEC break-and-repair** — a loss injector you drive from the panel, with column/row FEC
   you can switch off to watch the picture fall apart and back.

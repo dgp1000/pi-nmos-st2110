@@ -112,7 +112,7 @@ build_pipeline() {   # $1=layout  $2=active
       # Python 2x2 wall: same one-pipeline topology as multi, but with a live tally border on the
       # on-air tile, per-tile audio meters and per-tile bitrate -- none of which a gst-launch string
       # can update after it starts. Slot changes still rebuild us; tally follows takes live.
-      echo "python3 \"$DIR/wall-view.py\" \"${3:-hevc,raw,jxs,music}\" \"$SCREEN\""
+      echo "python3 \"$DIR/wall-view.py\" \"${3:-hevc,jxs,music,tsrtp}\" \"$SCREEN\""
       ;;
     multi)
       # $3 = slots "tl,tr,bl,br" (any source -> any of the four 960x540 quadrants).

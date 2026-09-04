@@ -21,7 +21,10 @@ from gi.repository import Gst, GLib
 import cairo
 Gst.init(None)
 
-SLOTS = (sys.argv[1] if len(sys.argv) > 1 else "hevc,raw,jxs,music").split(",")
+# Default 4-up is compressed tiles only. The raw Pi tile (ST 2110-20) is decoded + upscaled on
+# the CPU and, with three GPU-decoded tiles, oversubscribes the WSLg compositor/display so the
+# Live TV tile steps to keyframes (4 Sep 2026). raw is still selectable -- best in single/2-up.
+SLOTS = (sys.argv[1] if len(sys.argv) > 1 else "hevc,jxs,music,tsrtp").split(",")
 SLOTS = (SLOTS + ["hevc"] * 4)[:4]
 SCREEN = sys.argv[2] if len(sys.argv) > 2 else "2"
 HERE = os.path.dirname(os.path.abspath(__file__))

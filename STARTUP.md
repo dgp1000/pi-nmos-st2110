@@ -87,8 +87,14 @@ next WSL boot.
 | `multi` | gst-launch | plain 2×2 compositor |
 | `wall` | `wall-view.py` | 2×2 **plus** per-tile bitrate, fps, audio meters, IS-07 tally, FEC counters |
 
-The wall's slots default to `hevc,raw,jxs,music` and can be passed as the third argument:
-`bash output-render.sh 2 wall hevc,raw,jxs,fec`.
+The wall's slots default to `hevc,jxs,music,tsrtp` (all compressed) and can be passed as the third
+argument: `bash output-render.sh 2 wall hevc,jxs,fec,sps`.
+
+**Keep the `raw` tile out of the busy 4-up.** The Pi `raw` feed (ST 2110-20, UYVY 320x240 59.94)
+is depayloaded and upscaled on the CPU. On its own or in a 2-up it is fine, but in a four-tile wall
+alongside three GPU-decoded tiles it oversubscribes the WSLg compositor/display, and the Live TV
+(`hevc`) tile drops to keyframes only (~1 fps stepping) while audio stays fine (4 Sep 2026). It is
+still selectable — put it in `single`/`side`, not the default wall.
 
 ## Notes / gotchas
 

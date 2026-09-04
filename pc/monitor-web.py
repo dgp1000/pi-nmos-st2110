@@ -52,7 +52,7 @@ _active = {"src": DEFAULT_SRC, "ts": 0.0}
 _ACTIVE_TTL = 2.0  # seconds; avoids hammering the NMOS node on every /state poll
 _output = {"layout": "single"}   # native output (monitor 2) layout: single|side|multi|wall
 # Multiview tile assignment: which source fills each 2x2 slot (TL, TR, BL, BR). Any source -> any slot.
-_slots = ["hevc", "raw", "jxs", "music"]
+_slots = ["hevc", "jxs", "music", "tsrtp"]   # raw kept out of the default 4-up (oversubscribes WSLg -> Live TV steps)
 
 def http_json(url, timeout=5):
     with urllib.request.urlopen(url, timeout=timeout) as r:

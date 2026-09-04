@@ -133,8 +133,14 @@ def tile(i, src):
                     udp(g, cp, caps=FECSTREAM) + f"! identity name=fg0_{i} ! queue ! fd{i}.fec_0 " +
                     udp(g, rp, caps=FECSTREAM) + f"! identity name=fg1_{i} ! queue ! fd{i}.fec_1 " +
                     f"fd{i}. ! rtpjitterbuffer latency=500 max-misorder-time=5000 max-dropout-time=5000 ! identity name=fjb{i} ! rtpmp2tdepay ")
+        # The 2022-1-recovered FEC stream tears on nvh264dec in the live wall (hardware decode of the
+        # recovered/reordered H.264 shows torn frames -- clean in isolation, clean on avdec; David
+        # confirmed 4 Sep 2026). Decode the FEC tile in software; it is one 720p 3 Mbps tile, ~25% of
+        # a core, so it does not re-oversubscribe the way WALL_SW_DECODE=true (all H.264 tiles) did.
+        # tsrtp and the other H.264 tiles decode fine on the GPU via H264DEC.
+        vdec = "avdec_h264 ! videoconvert" if src == "fec" else H264DEC
         return (head + f"! tsdemux name={d} "
-                f"{d}. ! h264parse ! queue ! {H264DEC} " + scale(i) +
+                f"{d}. ! h264parse ! queue ! {vdec} " + scale(i) +
                 f"{d}. ! audio/mpeg ! queue ! decodebin ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")
     if src == "sps":     # both paths funnelled; the jitterbuffer drops the duplicate copy
         d = f"d{i}"

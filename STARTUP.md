@@ -92,7 +92,7 @@ next WSL boot.
 The wall's slots default to `hevc,jxs,music,tsrtp` (all compressed) and can be passed as the third
 argument: `bash output-render.sh 2 wall hevc,jxs,fec,sps`.
 
-**Guided demo.** The panel's **Guided demo** button runs a hands-off, captioned tour: the wall + IS-07 tally, taking sources, Program Out routing over IS-05, a seamless Live TV channel change, the ST 2022-1 FEC loss A/B, and the ST 2022-7 path-pull. It drives the real controls (so the output on monitor 2 follows) and, on finish or Stop, resets loss/FEC/paths and returns to the wall. Captions show on the panel; the video is on monitor 2.
+**Guided demo.** The panel's **Guided demo** button runs a hands-off, captioned tour: the wall + IS-07 tally, taking sources, Program Out routing over IS-05, a seamless Live TV channel change, the ST 2022-1 FEC loss A/B, and the ST 2022-7 path-pull. It drives the real controls (so the output on monitor 2 follows) and, on finish or Stop, resets loss/FEC/paths and returns to the wall. Captions show on the panel AND are burned onto the monitor-2 output itself (single/program via meter-view, the wall via wall-view), so it runs standalone. The demo writes ~/atoll-run/demo-caption, which the on-screen renderers read; restart output-render once after updating so the caption-capable views are loaded.
 
 **Keep the `raw` tile out of the busy 4-up.** The Pi `raw` feed (ST 2110-20, UYVY 320x240 59.94)
 is depayloaded and upscaled on the CPU. On its own or in a 2-up it is fine, but in a four-tile wall

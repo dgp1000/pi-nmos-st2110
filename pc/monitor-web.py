@@ -790,7 +790,7 @@ sync(); setInterval(sync,3000); tick();
 
 // ---- Guided demo: a scripted tour that drives the existing controls with on-screen captions.
 let demoOn=false, demoAbort=false;
-function cap(t){ const e=document.getElementById("democap"); if(e){ e.textContent=t||""; e.style.display=t?"block":"none"; } }
+function cap(t){ const e=document.getElementById("democap"); if(e){ e.textContent=t||""; e.style.display=t?"block":"none"; } fetch("/demo/caption?text="+encodeURIComponent(t||""),{cache:"no-store"}).catch(function(){}); }
 function go(path){ return fetch(path,{cache:"no-store"}).catch(function(){}); }
 function nap(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
 async function step(caption, action, dwell){
@@ -883,6 +883,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_json(json.dumps({"routed": ess}).encode())
             except Exception as e:
                 self._send_json(json.dumps({"error": str(e)}).encode(), 502)
+        elif parsed.path == "/demo/caption":
+            txt = parse_qs(parsed.query).get("text", [""])[0]
+            try:
+                with open(_RUN + "/demo-caption", "w") as _f:
+                    _f.write(txt)
+                self._send_json(json.dumps({"ok": True}).encode())
+            except Exception as e:
+                self._send_json(json.dumps({"error": str(e)}).encode(), 500)
         elif parsed.path == "/slot":
             qs = parse_qs(parsed.query)
             try:

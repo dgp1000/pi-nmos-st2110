@@ -161,7 +161,7 @@ TRANSPORT = {"hevc": "MPEG-TS / UDP", "jxs": "MPEG-TS / UDP", "music": "MPEG-TS 
 
 pipe = Gst.parse_launch(build())
 ov = pipe.get_by_name("ov")
-st = {"peak": [], "decay": [], "w": 1920, "h": 1080,
+st = {"peak": [], "decay": [], "w": 1920, "h": 1080, "cap": "",
       "vw": 0, "vh": 0, "vfps": 0.0, "vfmt": "", "mbps": 0.0, "_bytes": 0, "arate": 0, "chan": ""}
 
 def on_caps(_ov, caps):
@@ -299,8 +299,34 @@ for _nm, _k in (("usrc", "_fw"), ("lossy", "_fa"), ("fd", "_fo")):
 # Over a run the fixed offset becomes negligible and the totals read true.
 
 LABELS = ["L", "R", "C", "LFE", "Ls", "Rs", "7", "8"]
+def _draw_caption(ctx, text, w, h):
+    """Guided-demo narration, burned onto the output as a bottom band (word-wrapped, centred)."""
+    if not text:
+        return
+    ctx.save()
+    ctx.select_font_face("sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+    fs = max(22, int(h * 0.032)); ctx.set_font_size(fs)
+    maxw = w * 0.9; lines = []; cur = ""
+    for wd in text.split():
+        t = (cur + " " + wd).strip()
+        if cur and ctx.text_extents(t).width > maxw:
+            lines.append(cur); cur = wd
+        else:
+            cur = t
+    if cur:
+        lines.append(cur)
+    lh = fs * 1.35; pad = fs * 0.6; bh = lh * len(lines) + pad * 2
+    y0 = h - bh - int(h * 0.03)
+    ctx.set_source_rgba(0, 0, 0, 0.75); ctx.rectangle(0, y0, w, bh); ctx.fill()
+    ctx.set_source_rgba(1, 1, 1, 0.98)
+    for i, ln in enumerate(lines):
+        tw = ctx.text_extents(ln).width
+        ctx.move_to((w - tw) / 2, y0 + pad + lh * (i + 1) - fs * 0.35); ctx.show_text(ln)
+    ctx.restore()
+
 def on_draw(_ov, ctx, _ts, _dur):
     h = st["h"]
+    _draw_caption(ctx, st.get("cap") or "", st.get("w") or 1920, h)
     # --- stream-info panel (top-left) ---
     lines = [SRCNAME.get(SRC, SRC) + (f"     ch {st['chan']}" if st["chan"] else "")]
     res = f"{st['vw']}x{st['vh']}" if st["vw"] else ""
@@ -346,6 +372,13 @@ def on_draw(_ov, ctx, _ts, _dur):
         ctx.set_source_rgba(1, 1, 1, 0.9)
         ctx.move_to(x + bw / 2 - 6, baseY + 20); ctx.show_text(LABELS[i] if i < len(LABELS) else str(i + 1))
 ov.connect("draw", on_draw)
+def _cap_tick():
+    try:
+        st["cap"] = open(os.path.join(RUN, "demo-caption")).read().strip()
+    except Exception:
+        st["cap"] = ""
+    return True
+_cap_tick(); GLib.timeout_add(400, _cap_tick)
 
 bus = pipe.get_bus(); bus.add_signal_watch()
 def on_msg(_b, msg):

@@ -180,7 +180,7 @@ ov = pipe.get_by_name("ov")
 
 # ---- live state the overlay draws from ----
 st = {"active": "", "peak": [[] for _ in range(4)], "bytes": [0] * 4, "mbps": [0.0] * 4,
-      "w": W, "h": H, "chan": ""}
+      "w": W, "h": H, "chan": "", "cap": "", "cap_rect": None}
 
 def on_caps(_ov, caps):
     s = caps.get_structure(0)
@@ -365,6 +365,33 @@ _ovidx = 0
 _ovsurf = None
 _ovsize = (0, 0)
 
+def _draw_caption(ctx, text, w, h):
+    """Guided-demo narration burned onto the wall as a bottom band. Returns (y0, height) so on_draw
+    can blit exactly that region. Drawn in screen coords (after the overlay's scale is restored)."""
+    if not text:
+        return None
+    ctx.save()
+    ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+    fs = max(22, int(h * 0.032)); ctx.set_font_size(fs)
+    maxw = w * 0.9; lines = []; cur = ""
+    for wd in text.split():
+        t = (cur + " " + wd).strip()
+        if cur and ctx.text_extents(t).width > maxw:
+            lines.append(cur); cur = wd
+        else:
+            cur = t
+    if cur:
+        lines.append(cur)
+    lh = fs * 1.35; pad = fs * 0.6; bh = int(lh * len(lines) + pad * 2)
+    y0 = int(h - bh - h * 0.03)
+    ctx.set_source_rgba(0, 0, 0, 0.75); ctx.rectangle(0, y0, w, bh); ctx.fill()
+    ctx.set_source_rgba(1, 1, 1, 0.98)
+    for i, ln in enumerate(lines):
+        tw = ctx.text_extents(ln).width
+        ctx.move_to((w - tw) / 2, y0 + pad + lh * (i + 1) - fs * 0.35); ctx.show_text(ln)
+    ctx.restore()
+    return (y0, bh)
+
 def _render_overlay():
     """Compose the overlay on the MAIN LOOP into the spare buffer, then publish it."""
     global _ovidx, _ovsurf, _ovsize, _ovbufs
@@ -403,6 +430,9 @@ def on_draw(_ov, ctx, _ts, _dur):
         ctx.rectangle(x * sx, y * sy, b * sx, TH * sy)                        #               left
         ctx.rectangle((x + TW - b) * sx, y * sy, b * sx, TH * sy)             #               right
     ctx.rectangle((W - 130 * S) * sx, 0, 130 * S * sx, 46 * S * sy)           # ATOLL bug
+    _cr = st.get("cap_rect")
+    if _cr:
+        ctx.rectangle(0, _cr[0], st["w"], _cr[1])                             # demo caption band
     ctx.fill()
 
 def _draw_overlay(ctx):
@@ -467,7 +497,15 @@ def _draw_overlay(ctx):
     ctx.set_source_rgba(1, 1, 1, 0.5); ctx.set_font_size(20 * S)
     ctx.move_to(W - 108 * S, 34 * S); ctx.show_text("ATOLL")
     ctx.restore()
+    st["cap_rect"] = _draw_caption(ctx, st.get("cap") or "", st["w"], st["h"])
 ov.connect("draw", on_draw)
+def _cap_tick():
+    try:
+        st["cap"] = open(os.path.join(RUN, "demo-caption")).read().strip()
+    except Exception:
+        st["cap"] = ""
+    return True
+_cap_tick(); GLib.timeout_add(400, _cap_tick)
 _render_overlay()                        # compose once up front so the first frames have an overlay
 GLib.timeout_add(100, _render_overlay)   # thereafter 10Hz, on the main loop, off the streaming thread
 

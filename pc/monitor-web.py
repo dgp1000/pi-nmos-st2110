@@ -522,8 +522,13 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #ovbar b{color:#3c9;font-size:2vh;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
  #ovpre{flex:1;overflow:auto;color:#0f0;font-size:1.7vh;white-space:pre;line-height:1.4;
    border:1px solid #131;padding:1vh;-webkit-overflow-scrolling:touch}
+ #demo{margin:.4vh auto;text-align:center}
+ #demobtn{font-size:min(2.4vw,2.8vh);padding:.45em 1.1em;background:#20304a;border:1px solid #4a6ea0;color:#cfe;border-radius:8px;font-weight:bold}
+ #demobtn.on{background:#a33;border-color:#f66;color:#fff}
+ #democap{display:none;position:fixed;left:0;right:0;bottom:0;z-index:50;background:rgba(0,0,0,.85);color:#fff;font-size:min(3vw,3.4vh);line-height:1.35;padding:.7em 1.2em;text-align:center}
 </style></head>
 <body>
+  <div id="democap"></div>
  <div id="top">
   <div id="brand">ATOLL<span>ST&nbsp;2110 &middot; NMOS island monitor &middot; <a href="#" id="anlink" style="color:#3c9;text-decoration:none">analyser &#8599;</a></span></div>
   <div id="tc">--:--:--:--</div>
@@ -546,6 +551,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   <div id="fecwrap"><label>ST&nbsp;2022-1 loss</label><input id="fecloss" type="range" min="0" max="10" step="0.5" value="0" oninput="fecLoss(this.value)"><span id="fecval">0.0%</span><button id="fectog" onclick="fecToggle()">FEC</button></div>
   <div id="tvwrap"><div id="tvfav"></div><button id="tvtoggle" onclick="toggleTv()">&#128250; TV Channels</button><div id="tvchan"></div></div>
   <div id="info"></div>
+  <div id="demo"><button id="demobtn" onclick="runDemo()">&#9654; Guided demo</button></div>
   <div id="lay">
    <span class="l2">OUTPUT &middot; MON 2</span>
    <button id="lsingle" onclick="setLayout('single')">Follow take</button>
@@ -781,6 +787,51 @@ loadProgramOut(); setInterval(loadProgramOut,5000);
 fecRefresh();   setInterval(fecRefresh,4000);
 spsRefresh();   setInterval(spsRefresh,4000);
 sync(); setInterval(sync,3000); tick();
+
+// ---- Guided demo: a scripted tour that drives the existing controls with on-screen captions.
+let demoOn=false, demoAbort=false;
+function cap(t){ const e=document.getElementById("democap"); if(e){ e.textContent=t||""; e.style.display=t?"block":"none"; } }
+function go(path){ return fetch(path,{cache:"no-store"}).catch(function(){}); }
+function nap(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+async function step(caption, action, dwell){
+  if(demoAbort) throw "abort";
+  cap(caption);
+  if(action) await action();
+  await nap(dwell);
+  if(demoAbort) throw "abort";
+}
+async function demoReset(){
+  await go("/fec/set?loss=0"); await go("/fec/set?enable=1");
+  await go("/sps/set?path=a&up=1"); await go("/sps/set?path=b&up=1");
+  await go("/programout/route?essence=none");
+}
+async function runDemo(){
+  const btn=document.getElementById("demobtn");
+  if(demoOn){ demoAbort=true; cap("Stopping demo\u2026"); return; }
+  demoOn=true; demoAbort=false; if(btn){ btn.textContent="\u25A0 Stop demo"; btn.classList.add("on"); }
+  try{
+    await demoReset();
+    await step("Atoll: a self-contained NMOS ST 2110 broadcast rig. This is the multiviewer \u2014 four live flows at once, each a real NMOS sender.", function(){ return go("/layout?mode=wall"); }, 9000);
+    await step("Taking a source is a real IS-05 operation. The red tally border and ON-AIR flag follow it live over IS-07.", function(){ return go("/take?src=hevc"); }, 6000);
+    await step("Take another source \u2014 the tally moves with it.", function(){ return go("/take?src=jxs"); }, 6000);
+    await step("Program Out: a software NMOS receiver you route any flow to over IS-05. The picture follows the connection \u2014 here, Live TV.", async function(){ await go("/layout?mode=program"); await go("/programout/route?essence=hevc"); }, 8000);
+    await step("Route a different flow over the same IS-05 connection \u2014 Home videos now.", function(){ return go("/programout/route?essence=jxs"); }, 7000);
+    await step("Live TV: changing channel opens the new channel on a second tuner first, then cuts \u2014 no black frame.", async function(){ await go("/layout?mode=single"); await go("/take?src=hevc"); }, 5000);
+    let chans=[];
+    try{ const d=await(await fetch("/tv/lineup",{cache:"no-store"})).json(); chans=((d.favorites&&d.favorites.length?d.favorites:d.channels)||[]).map(function(c){return c.num;}); }catch(e){}
+    if(chans.length>=2){ await step("Changing channel\u2026", function(){ return go("/tv/set?ch="+encodeURIComponent(chans[0])); }, 6000); await step("\u2026and again \u2014 seamless.", function(){ return go("/tv/set?ch="+encodeURIComponent(chans[1])); }, 6000); }
+    await step("ST 2022-1 FEC. Fullscreen the protected feed.", async function(){ await go("/layout?mode=single"); await go("/take?src=fec"); }, 5000);
+    await step("Inject 5% packet loss \u2014 FEC reconstructs every lost packet, the picture stays clean.", function(){ return go("/fec/set?loss=0.05"); }, 8000);
+    await step("Now switch FEC OFF at the same 5% loss \u2014 watch it tear.", function(){ return go("/fec/set?enable=0"); }, 8000);
+    await step("FEC back ON \u2014 clean again. Loss removed.", async function(){ await go("/fec/set?enable=1"); await nap(3000); await go("/fec/set?loss=0"); }, 5000);
+    await step("ST 2022-7 seamless protection: the same essence sent on two network paths.", function(){ return go("/take?src=sps"); }, 6000);
+    await step("Pull one path \u2014 the other carries it, hitless. The picture does not flinch.", function(){ return go("/sps/set?path=a&up=0"); }, 8000);
+    await step("Restore the path. Both live again.", function(){ return go("/sps/set?path=a&up=1"); }, 5000);
+    cap("Demo complete \u2014 everything you saw runs live and to spec."); await nap(6000);
+  }catch(e){}
+  await demoReset(); await go("/layout?mode=wall"); cap("");
+  demoOn=false; demoAbort=false; if(btn){ btn.textContent="\u25B6 Guided demo"; btn.classList.remove("on"); }
+}
 </script></body></html>"""
 
 PAGE = PAGE_TEMPLATE.replace("__FPS__", repr(FPS))

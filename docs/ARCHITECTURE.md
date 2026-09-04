@@ -162,7 +162,7 @@ WSL boots (WSL itself does not start with Windows). `~/atoll-run` is `ATOLL_RUN`
 
 | Process | File | Owner | Listens | Role |
 |---|---|---|---|---|
-| Panel | `pc/monitor-web.py` | `atoll-panel` | `:8096` | The iPad page and the single source of truth for *active source*, *layout* and *tile slots*. Issues IS-05 takes and routes Program Out over IS-05. Writes the knob files. Proxies the Mac music API and the Pi clock. |
+| Panel | `pc/monitor-web.py` | `atoll-panel` | `:8096` | The iPad page and the single source of truth for *active source*, *layout* and *tile slots*. Issues IS-05 takes and routes Program Out over IS-05. Writes the knob files. Proxies the Mac music API and the Pi clock. A **Guided demo** button runs a scripted, captioned tour of the whole rig. |
 | IS-07 emitter | `pc/is07-tally.py` | `atoll-is07` | `:8102` REST, `:8103` ws | One boolean event source per Atoll source key. Registers node/device/13 sources/flows/senders in IS-04. Pushes state on transition. |
 | Program Out | `pc/program-out.py` | `atoll-programout` | `:8092` | Software NMOS receiver: serves the IS-05 v1.1 Connection API and registers its node/device/receiver in IS-04. On activation it maps the connection's multicast/port to an island flow and writes `~/atoll-run/programout` for the renderer. |
 | Flow analyser | `pc/analyser.py` | `atoll-analyser` | `:8101` | Raw-socket join of every group: pps, bitrate, average datagram, RTP pt/SSRC/loss. IS-07 receiver (tally column + event log). |

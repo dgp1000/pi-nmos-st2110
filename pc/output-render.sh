@@ -103,6 +103,16 @@ build_pipeline() {   # $1=layout  $2=active
       # video+audio+VU meters, following the active source (Python: cairooverlay + level)
       echo "python3 \"$DIR/meter-view.py\" \"$2\" \"$SCREEN\""
       ;;
+    program)
+      # Program Out: render whatever flow is routed here over IS-05 (~/atoll-run/programout). $2 is
+      # the essence the receiver's active transport params resolved to; render it with the same
+      # meter-view single-view, or an idle card when nothing is connected.
+      if [ "$2" = "none" ] || [ -z "$2" ]; then
+        echo "gst-launch-1.0 -q videotestsrc pattern=black is-live=true ! video/x-raw,width=1920,height=1080,framerate=30/1 ! textoverlay text='Program Out: no route (connect a flow over IS-05)' valignment=center halignment=center font-desc='$F' ! $BRAND ! $VIDEO_SINK sync=false"
+      else
+        echo "python3 \"$DIR/meter-view.py\" \"$2\" \"$SCREEN\""
+      fi
+      ;;
     side)
       echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=270 sink_1::xpos=960 sink_1::ypos=270 ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! $VIDEO_SINK sync=false \
         $(hevc_tile "$HEVC_GRP" "$HEVC_PORT" 960 540 hd) ! identity single-segment=true ! textoverlay text='Live TV' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_0 \
@@ -154,6 +164,12 @@ while true; do
   slots="$(printf '%s' "$resp" | sed -n 's/.*"slots"[: ]*"\([a-z0-9,]*\)".*/\1/p')"
   [ -z "$layout" ] && layout="single"
   [ -z "$slots" ]  && slots="hevc,raw,jxs,music"
+  # Program Out ignores the panel's active source: it follows the receiver's IS-05 route (the essence
+  # program-out.py wrote to ~/atoll-run/programout on the last activation), or shows an idle card.
+  if [ "$layout" = "program" ]; then
+    active="$(sed -n 's/^\([a-z0-9]*\) .*/\1/p' "$ATOLL_RUN/programout" 2>/dev/null)"
+    [ -z "$active" ] && active="none"
+  fi
   [ -z "$active" ] && { sleep 1; continue; }
 
   # --- self-heal: rebuild only if the render pipeline actually died. Channel changes no longer force
@@ -166,7 +182,7 @@ while true; do
   # settled stream links cleanly, so a transient blip recovers on its own.
   if [ -n "$apid" ] && ! kill -0 "$apid" 2>/dev/null; then apid=""; aud_key="__force_audio_rebuild__"; fi
   # --- video: relaunch the pipeline only on layout/source/tile-assignment change ---
-  case "$layout" in single) key="single:$active";; multi) key="multi:$slots";; wall) key="wall:$slots";; *) key="$layout";; esac
+  case "$layout" in single) key="single:$active";; program) key="program:$active";; multi) key="multi:$slots";; wall) key="wall:$slots";; *) key="$layout";; esac
   if [ "$key" != "$cur_key" ]; then
     cmd="$(build_pipeline "$layout" "$active" "$slots")"
     if [ -n "$cmd" ]; then
@@ -182,7 +198,7 @@ while true; do
   # --- audio: follow the SELECTED source. single hevc/jxs already embed their own
   # (lip-synced) audio; run the standalone follower only where the video has none:
   # side/multi, and single+raw. Switches instantly without touching the video. ---
-  if [ "$layout" = "single" ]; then akey=""; else akey="$active"; fi
+  if [ "$layout" = "single" ] || [ "$layout" = "program" ]; then akey=""; else akey="$active"; fi
   adelay="$(cat "$ADELAY_FILE" 2>/dev/null)"; [[ "$adelay" =~ ^[0-9]+$ ]] || adelay=0
   if [ "$akey" != "$aud_key" ] || [ "$adelay" != "$last_adelay" ]; then
     kill_audio

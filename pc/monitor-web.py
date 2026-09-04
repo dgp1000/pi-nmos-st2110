@@ -29,6 +29,7 @@ FPS = 60000 / 1001
 PI_CLOCK = f"http://{_c.get('ISLAND_PI_IP', '10.10.10.1')}:8000/time"
 NODE = "http://localhost:8090/x-nmos/node/v1.3"
 CONN = "http://localhost:8090/x-nmos/connection/v1.1/single"
+PROGRAMOUT = f"http://localhost:{_c.get('PROGRAMOUT_PORT') or '8092'}"   # Program Out software receiver (IS-05)
 QUERY = "http://localhost:8080/x-nmos/query/v1.3"
 MAC_MUSIC = f"http://{_c.get('MAC_MUSIC_HOST', '192.168.6.159')}:{_c.get('MAC_MUSIC_PORT', '8008')}"   # Mac "Now Playing"; proxied for the iPad
 
@@ -65,6 +66,28 @@ def _safe_json(url, timeout=3):
         return None
 
 # ----------------------------- IS-05 control -----------------------------
+def _programout_state():
+    with urllib.request.urlopen(f"{PROGRAMOUT}/programout", timeout=3) as r:
+        return json.loads(r.read())
+
+def programout_route(essence):
+    """PATCH the Program Out receiver's IS-05 /staged to the chosen flow and activate. essence
+    "none" (or unknown) disconnects. The multicast/port come from the receiver's own catalog."""
+    st = _programout_state()
+    rid = st["receiver_id"]; cat = st.get("catalog") or {}
+    if essence in cat:
+        f = cat[essence]
+        body = {"master_enable": True,
+                "transport_params": [{"multicast_ip": f["ip"], "destination_port": int(f["port"])}],
+                "activation": {"mode": "activate_immediate"}}
+    else:
+        body = {"master_enable": False, "activation": {"mode": "activate_immediate"}}
+    req = urllib.request.Request(f"{PROGRAMOUT}/x-nmos/connection/v1.1/single/receivers/{rid}/staged",
+                                 data=json.dumps(body).encode(), method="PATCH",
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=4) as r:
+        return r.status
+
 def receiver_id(label):
     for rx in http_json(f"{NODE}/receivers"):
         if rx.get("label") == label:
@@ -443,6 +466,10 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  .gm{color:#fc0;font-weight:bold}
  #lay{margin-top:1vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
  #lay button{font-size:min(2.6vw,3vh);padding:.4em .8em;margin:.4vh .4vw}
+ #progwrap{margin-top:.6vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
+ #progbtns{display:flex;flex-wrap:wrap;justify-content:center;margin-left:.6vw}
+ #progbtns button{font-size:min(2vw,2.3vh);padding:.35em .7em;margin:.3vh .3vw;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
+ #progbtns button.on{background:#093;color:#000;border-color:#0f0;font-weight:bold}
  .l2{color:#5a5;font-size:min(1.7vw,2vh);letter-spacing:.12em;margin-right:.6vw}
  #music{margin-top:.8vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
  #music button{font-size:min(3vw,3.4vh);padding:.3em .7em;margin:.3vh .4vw}
@@ -525,6 +552,11 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="lside" onclick="setLayout('side')">Side &times; 2</button>
    <button id="lwall" onclick="setLayout('wall')">Wall +tally</button>
    <button id="lmulti" onclick="setLayout('multi')">Multiview</button>
+   <button id="lprogram" onclick="setLayout('program')">&#127909; Program Out</button>
+  </div>
+  <div id="progwrap">
+   <span class="l2">PROGRAM OUT &middot; IS-05 ROUTE</span>
+   <div id="progbtns"></div>
   </div>
   <div id="music">
    <span class="l2">MUSIC</span>
@@ -621,7 +653,25 @@ async function musicState(){
       const sh=document.getElementById('mshuf'); if(sh) sh.classList.toggle('on',!!d.shuffle);
   }catch(e){np.textContent='(offline)';}
 }
-const LAYBTN={single:'lsingle',side:'lside',multi:'lmulti',wall:'lwall'};
+const LAYBTN={single:'lsingle',side:'lside',multi:'lmulti',wall:'lwall',program:'lprogram'};
+async function loadProgramOut(){
+  try{
+    const d=await(await fetch("/programout/state",{cache:"no-store"})).json();
+    const box=document.getElementById("progbtns"); if(!box) return;
+    const cat=d.catalog||{}; const cur=d.essence;
+    let html="";
+    for(const k of Object.keys(cat)){
+      html+=`<button data-ess="${k}" class="${(k===cur)?'on':''}">${cat[k].label}</button>`;
+    }
+    html+=`<button data-ess="none" class="${(!cur)?'on':''}">Clear</button>`;
+    box.innerHTML=html;
+    box.querySelectorAll("button").forEach(b=>b.onclick=function(){routeProgram(b.getAttribute("data-ess"));});
+  }catch(e){}
+}
+async function routeProgram(ess){
+  try{await fetch("/programout/route?essence="+encodeURIComponent(ess),{cache:"no-store"});}catch(e){}
+  setTimeout(loadProgramOut,300);
+}
 function hlLayout(m){ document.querySelectorAll('#lay button').forEach(b=>b.classList.remove('on')); const b=document.getElementById(LAYBTN[m]); if(b) b.classList.add('on'); }
 async function setLayout(m){ hlLayout(m); try{await fetch('/layout?mode='+m,{cache:'no-store'});}catch(e){} }
 async function refreshState(){
@@ -727,6 +777,7 @@ refreshState(); setInterval(refreshState,5000);
 loadNmos();     setInterval(loadNmos,6000);
 musicState();   setInterval(musicState,4000);
 loadTv();       // populate the favorites row on load (no interval — avoids hammering the HDHR)
+loadProgramOut(); setInterval(loadProgramOut,5000);
 fecRefresh();   setInterval(fecRefresh,4000);
 spsRefresh();   setInterval(spsRefresh,4000);
 sync(); setInterval(sync,3000); tick();
@@ -764,10 +815,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif parsed.path == "/layout":
             qs = parse_qs(parsed.query)
             mode = qs.get("mode", ["single"])[0]
-            if mode not in ("single", "side", "multi", "wall"):
+            if mode not in ("single", "side", "multi", "wall", "program"):
                 mode = "single"
             _output["layout"] = mode
             self._send_json(json.dumps({"layout": mode}).encode())
+        elif parsed.path == "/programout/state":
+            try:
+                with urllib.request.urlopen(f"{PROGRAMOUT}/programout", timeout=3) as r:
+                    self._send_json(r.read())
+            except Exception as e:
+                self._send_json(json.dumps({"error": str(e)}).encode(), 502)
+        elif parsed.path == "/programout/route":
+            ess = parse_qs(parsed.query).get("essence", ["none"])[0]
+            try:
+                programout_route(ess)
+                self._send_json(json.dumps({"routed": ess}).encode())
+            except Exception as e:
+                self._send_json(json.dumps({"error": str(e)}).encode(), 502)
         elif parsed.path == "/slot":
             qs = parse_qs(parsed.query)
             try:

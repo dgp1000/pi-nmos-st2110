@@ -717,9 +717,12 @@ loss, shows the IS-07 tally per row via an explicit `IS07_KEY` map (two 2022-7 r
 three FEC rows share `fec`, Pi audio/ANC/Opus show a dash), and lists the IS-07 event stream with
 TAI timestamps. A **PGM** column (and a `PGM â <flow>` header readout) flags whichever flow is
 currently routed to Program Out over IS-05 â polled from `program-out.py` and matched by multicast
-address, so it is exact. The header also shows the panelâs current **Take** and an **FEC** summary
-(matrix + parity overhead + any real wire loss on the media flow; the demoâs injected loss and FEC
-gate are receiver-side, so they are not visible on the wire the analyser watches). It is deliberately not GStreamer so it cannot disturb what it measures, and
+address, so it is exact. The header also shows the panelâs current **Take** and an **FEC** summary with a live
+recovery counter. The analyser runs one small GStreamer ST 2022-1 decoder (its only use of gst) that
+joins the media + parity flows, injects the SAME `fec-loss`/`fec-enable` knobs the renderers use, and
+counts packets at the wire, after the loss injector, and after recovery â so it reports matrix, parity
+overhead, packets **recovered / dropped**, and lifetime residual, and it tracks the demo. (A wire-only
+count would read zero: the demoâs loss is injected receiver-side, not on the wire.) It is deliberately not GStreamer so it cannot disturb what it measures, and
 its own buffers are sized so it does not report its own overflow as network loss.
 
 ---

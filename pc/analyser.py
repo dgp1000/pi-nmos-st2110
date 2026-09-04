@@ -21,13 +21,18 @@ import http.server, socketserver, urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import is07client
+try:   # the ONE GStreamer use in the analyser -- FEC recovery can only be counted by decoding
+    import gi; gi.require_version("Gst", "1.0"); from gi.repository import Gst, GLib
+    Gst.init(None); _HAVE_GST = True
+except Exception:
+    _HAVE_GST = False
 NEED = ["ISLAND_IFACE", "ISLAND_PC_IP", "ISLAND_PI_IP", "ANALYSER_PORT",
         "HEVC_GRP", "HEVC_PORT", "HOME_GRP", "HOME_PORT", "MUSIC_GRP", "MUSIC_PORT",
         "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT", "PI_AUDIO_GRP", "PI_AUDIO_PORT",
         "ANC_GRP", "ANC_PORT", "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT",
         "OPUS_GRP", "OPUS_PORT", "MJPEG_GRP", "MJPEG_PORT", "VP9_GRP", "VP9_PORT",
         "TSRTP_GRP", "TSRTP_PORT", "FEC_GRP", "FEC_PORT",
-        "SPS_A_GRP", "SPS_A_PORT", "SPS_B_GRP", "SPS_B_PORT", "IS07_WS_PORT", "PROGRAMOUT_PORT", "PANEL_PORT", "FEC_COLUMNS", "FEC_ROWS"]
+        "SPS_A_GRP", "SPS_A_PORT", "SPS_B_GRP", "SPS_B_PORT", "IS07_WS_PORT", "PROGRAMOUT_PORT", "PANEL_PORT", "FEC_COLUMNS", "FEC_ROWS", "ATOLL_RUN"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
 LOCAL = CFG.get("ISLAND_PC_IP") or "0.0.0.0"
@@ -38,6 +43,60 @@ PANEL = f"http://localhost:{CFG.get('PANEL_PORT') or '8096'}"
 _FCOLS = int(CFG.get("FEC_COLUMNS") or 5); _FROWS = int(CFG.get("FEC_ROWS") or 5)
 _FEC_OVH = round(100 * (_FCOLS + _FROWS) / (_FCOLS * _FROWS))   # ST 2022-1 parity overhead, %
 _take = {"key": None, "label": None}   # the panel's current take (control-plane selection)
+RUN = CFG.get("ATOLL_RUN") or "/home/david/atoll-run"
+
+# FEC recovery meter: recovery only happens if something runs the ST 2022-1 decoder, and the
+# demo's loss is injected receiver-side (not on the wire), so a wire-only count would read zero.
+# This joins the media + parity flows, injects the SAME fec-loss knob the renderers use (so the
+# counter tracks the demo), recovers, and counts packets at the wire, after the loss injector,
+# and after fecdec. Its own sockets; it does not touch the raw-socket rate measurement.
+_fecrec = {"wire": 0, "after": 0, "out": 0, "on": False}
+def fec_meter():
+    if not _HAVE_GST:
+        return
+    fg, fp = g("FEC")
+    if not fg or not fp:
+        return
+    cp, rp = int(fp) + 2, int(fp) + 4
+    IF = CFG.get("ISLAND_IFACE") or "eth0"
+    MP2T = "application/x-rtp,media=video,clock-rate=90000,encoding-name=MP2T,payload=33"
+    FSC = "application/x-rtp,payload=96,clock-rate=90000"
+    desc = (f"udpsrc name=usrc address={fg} port={fp} multicast-iface={IF} auto-multicast=true buffer-size=8388608 caps=\"{MP2T}\" "
+            f"! identity name=lossy ! rtpst2022-1-fecdec name=fd "
+            f"udpsrc address={fg} port={cp} multicast-iface={IF} auto-multicast=true caps=\"{FSC}\" ! identity name=fecg0 ! queue ! fd.fec_0 "
+            f"udpsrc address={fg} port={rp} multicast-iface={IF} auto-multicast=true caps=\"{FSC}\" ! identity name=fecg1 ! queue ! fd.fec_1 "
+            f"fd. ! rtpjitterbuffer latency=1000 max-misorder-time=5000 max-dropout-time=5000 ! fakesink sync=false")
+    try:
+        pipe = Gst.parse_launch(desc)
+    except Exception as e:
+        print(f"fec_meter: pipeline failed ({e})", flush=True); return
+    def counter(key):
+        def cb(pad, info):
+            _fecrec[key] += 1
+            return Gst.PadProbeReturn.OK
+        return cb
+    for nm, k in (("usrc", "wire"), ("lossy", "after"), ("fd", "out")):
+        e = pipe.get_by_name(nm)
+        if e:
+            e.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, counter(k))
+    lossy = pipe.get_by_name("lossy"); gates = [pipe.get_by_name("fecg0"), pipe.get_by_name("fecg1")]
+    def knob(n, d):
+        try:
+            return float(open(os.path.join(RUN, n)).read().strip())
+        except Exception:
+            return d
+    def apply_knobs():
+        if lossy:
+            lossy.set_property("drop-probability", max(0.0, min(1.0, knob("fec-loss", 0.0))))
+        on = knob("fec-enable", 1.0) >= 0.5
+        for gt in gates:
+            if gt:
+                gt.set_property("drop-probability", 0.0 if on else 1.0)
+        return True
+    apply_knobs(); GLib.timeout_add_seconds(1, apply_knobs)
+    pipe.set_state(Gst.State.PLAYING)
+    _fecrec["on"] = True
+    GLib.MainLoop().run()
 
 # Which island flow is currently routed to Program Out over IS-05. Matched by multicast addr:port
 # (exact, naming-independent). Polled from program-out.py; last route kept on a transient error.
@@ -276,9 +335,11 @@ def snapshot():
     _fm = _by.get("FEC media"); _fc = _by.get("FEC column"); _fr = _by.get("FEC row")
     fec = None
     if _fm:
+        _w, _a, _o = _fecrec["wire"], _fecrec["after"], _fecrec["out"]
         fec = {"matrix": f"{_FCOLS}\u00d7{_FROWS}", "overhead": _FEC_OVH,
-               "loss": _fm["loss_pct"],
-               "parity": bool(_fc and _fc["alive"] and _fr and _fr["alive"])}
+               "parity": bool(_fc and _fc["alive"] and _fr and _fr["alive"]),
+               "meter": _fecrec["on"], "dropped": max(0, _w - _a), "recovered": max(0, _o - _a),
+               "residual": (round(100 * max(0, _w - _o) / _w, 3) if _w else 0.0)}
     return {"flows": out, "total_pps": tot_p, "is07": tally,
             "pgm": (_pgm.get("label") if _pgm.get("grp") else None),
             "take": _take.get("label"), "fec": fec,
@@ -347,7 +408,9 @@ async function load(){
    (p.reachable?'<span class="ok">locked</span>':'<span class="bad">unreachable</span>');
  document.getElementById('pgm').innerHTML = d.pgm ? 'PGM &rarr; <span class="ok">'+esc(d.pgm)+'</span>' : '';
  document.getElementById('take').innerHTML = d.take ? 'Take &rarr; <span class="ok">'+esc(d.take)+'</span>' : '';
- const fc=d.fec; document.getElementById('fec').innerHTML = fc ? 'FEC '+esc(fc.matrix)+' &middot; '+fc.overhead+'% parity'+((fc.loss>0)?' &middot; <span class="bad">media loss '+fc.loss.toFixed(2)+'%</span>':'') : '';
+ const fc=d.fec; let ft = fc ? 'FEC '+esc(fc.matrix)+' &middot; '+fc.overhead+'% parity' : '';
+ if(fc && fc.meter){ ft += ' &middot; recovered <span class="ok">'+fc.recovered.toLocaleString()+'</span> / dropped '+fc.dropped.toLocaleString(); if(fc.residual>0) ft += ' &middot; <span class="bad">residual '+fc.residual.toFixed(3)+'%</span>'; }
+ document.getElementById('fec').innerHTML = ft;
  document.getElementById('rows').innerHTML=d.flows.map(f=>{
   const dead=!f.alive;
   const lossCls=f.loss_pct>1?'bad':(f.loss_pct>0?'warn':'ok');
@@ -413,5 +476,6 @@ is07.start()
 threading.Thread(target=reader, daemon=True).start()
 threading.Thread(target=sampler, daemon=True).start()
 threading.Thread(target=pgm_poller, daemon=True).start()
+threading.Thread(target=fec_meter, daemon=True).start()
 print(f"analyser: watching {len(flows)} island flows -> http://0.0.0.0:{PORT}/", flush=True)
 TCPServer(("", PORT), H).serve_forever()

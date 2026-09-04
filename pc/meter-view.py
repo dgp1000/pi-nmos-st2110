@@ -21,11 +21,26 @@ NEED = ["ISLAND_IFACE", "VIDEO_SINK", "ATOLL_PLATFORM", "ATOLL_RUN", "HEVC_GRP",
         "MUSIC_GRP", "MUSIC_PORT", "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT",
         "PI_AUDIO_GRP", "PI_AUDIO_PORT", "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT",
         "OPUS_GRP", "OPUS_PORT", "MJPEG_GRP", "MJPEG_PORT", "VP9_GRP", "VP9_PORT",
-        "TSRTP_GRP", "TSRTP_PORT", "FEC_GRP", "FEC_PORT",
+        "TSRTP_GRP", "TSRTP_PORT", "FEC_GRP", "FEC_PORT", "FEC_COLUMNS", "FEC_ROWS",
         "SPS_A_GRP", "SPS_A_PORT", "SPS_B_GRP", "SPS_B_PORT",
         "GALLIUM_DRIVER", "PULSE_SERVER", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
+# ---- FEC recovery jitterbuffer sizing (2022-1) ----------------------------------------------------
+# ST 2022-1 column FEC can only reconstruct a lost packet once its whole L x D matrix has arrived, so
+# a recovered packet is emitted up to ~2 x L x D packet-times behind the live edge (the matrix plus
+# the column-FEC row that follows it). Size the jitterbuffer to hold that span even at a slow feed, so
+# recovery stays robust to GOP / bitrate changes and does NOT depend on the all-intra sender hack
+# keeping the packet rate high enough for a fixed 500 ms buffer (the old, fragile arrangement -- if
+# the feed reverted to a normal GOP at ~70 pps the matrix fell ~1.1 s behind and tore). FEC_JB_FLOOR_PPS
+# is a deliberately conservative packet-rate floor (normal-GOP 3 Mbit/s TS ~70-150 pps; the current
+# all-intra feed is ~300). At the 5x5 matrix this yields 1000 ms; it scales if FEC_COLUMNS/ROWS change.
+_FEC_COLS = int(CFG.get("FEC_COLUMNS") or 5)
+_FEC_ROWS = int(CFG.get("FEC_ROWS") or 5)
+FEC_JB_FLOOR_PPS = 50
+FEC_JB_MS = max(500, round(2 * _FEC_COLS * _FEC_ROWS / FEC_JB_FLOOR_PPS * 1000))
+FEC_JB = f"rtpjitterbuffer latency={FEC_JB_MS} max-misorder-time={FEC_JB_MS * 5} max-dropout-time={FEC_JB_MS * 5}"
+
 for k in ("GALLIUM_DRIVER", "PULSE_SERVER", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"):
     if CFG.get(k):
         os.environ[k] = CFG[k]
@@ -112,7 +127,7 @@ def build():
                 f"! identity name=lossy ! rtpst2022-1-fecdec name=fd "
                 f"udpsrc address={g} port={cp} multicast-iface={IFACE} auto-multicast=true caps=\"{FECSTREAM_CAPS}\" ! identity name=fecg0 ! queue ! fd.fec_0 "
                 f"udpsrc address={g} port={rp} multicast-iface={IFACE} auto-multicast=true caps=\"{FECSTREAM_CAPS}\" ! identity name=fecg1 ! queue ! fd.fec_1 "
-                f"fd. ! rtpjitterbuffer latency=500 max-misorder-time=5000 max-dropout-time=5000 ! rtpmp2tdepay ! tsdemux name=d "
+                f"fd. ! {FEC_JB} ! rtpmp2tdepay ! tsdemux name=d "
                 f"d. ! h264parse ! queue ! nvh264dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
                 f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! {APLAY}")
     if SRC == "sps":    # ST 2022-7: two identical RTP copies merged by sequence number.

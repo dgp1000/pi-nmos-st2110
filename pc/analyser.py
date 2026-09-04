@@ -27,12 +27,30 @@ NEED = ["ISLAND_IFACE", "ISLAND_PC_IP", "ISLAND_PI_IP", "ANALYSER_PORT",
         "ANC_GRP", "ANC_PORT", "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT",
         "OPUS_GRP", "OPUS_PORT", "MJPEG_GRP", "MJPEG_PORT", "VP9_GRP", "VP9_PORT",
         "TSRTP_GRP", "TSRTP_PORT", "FEC_GRP", "FEC_PORT",
-        "SPS_A_GRP", "SPS_A_PORT", "SPS_B_GRP", "SPS_B_PORT", "IS07_WS_PORT"]
+        "SPS_A_GRP", "SPS_A_PORT", "SPS_B_GRP", "SPS_B_PORT", "IS07_WS_PORT", "PROGRAMOUT_PORT"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
 LOCAL = CFG.get("ISLAND_PC_IP") or "0.0.0.0"
 PORT = int(CFG.get("ANALYSER_PORT") or 8101)
 PI = CFG.get("ISLAND_PI_IP", "10.10.10.1")
+PROGRAMOUT = f"http://localhost:{CFG.get('PROGRAMOUT_PORT') or '8092'}"
+
+# Which island flow is currently routed to Program Out over IS-05. Matched by multicast addr:port
+# (exact, naming-independent). Polled from program-out.py; last route kept on a transient error.
+_pgm = {"grp": None, "port": None, "label": None}
+def pgm_poller():
+    while True:
+        try:
+            with urllib.request.urlopen(f"{PROGRAMOUT}/programout", timeout=2) as r:
+                d = json.loads(r.read())
+            tp = (d.get("transport_params") or [{}])[0]
+            if d.get("master_enable") and tp.get("multicast_ip"):
+                _pgm.update(grp=str(tp.get("multicast_ip")), port=str(tp.get("destination_port")), label=d.get("label"))
+            else:
+                _pgm.update(grp=None, port=None, label=None)
+        except Exception:
+            pass   # program-out momentarily unreachable: keep the last known route
+        time.sleep(1.5)
 
 def g(k):
     return CFG.get(f"{k}_GRP", ""), CFG.get(f"{k}_PORT", "")
@@ -239,8 +257,12 @@ def snapshot():
         k = IS07_KEY.get(x["label"])
         # None (no tally source) is meaningfully different from False (has one, not on air).
         x["tally"] = tally["state"].get(k) if k else None
+    pgm_grp, pgm_port = _pgm.get("grp"), _pgm.get("port")
+    for x in out:
+        x["pgm"] = bool(pgm_grp) and x["grp"] == pgm_grp and str(x["port"]) == pgm_port
     tot_p = sum(x["pps"] for x in out)
     return {"flows": out, "total_pps": tot_p, "is07": tally,
+            "pgm": (_pgm.get("label") if _pgm.get("grp") else None),
             "total_mbps": round(sum(x["mbps"] for x in out), 2),
             "ptp": ptp_status(), "ts": time.strftime("%H:%M:%S")}
 
@@ -268,6 +290,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  .bad{color:#f55;font-weight:700}
  .ok{color:#2d2}
  .pill{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;border:1px solid #1a3a2a;color:#7a9}
+ .pill.pgm{background:#0b3a4a;color:#8fe8ff;border-color:#1a6b82;font-weight:600}
  .hi{background:#3a1010;border-color:#803;color:#f88}
  footer{padding:10px 18px;color:#476;font-size:12px;border-top:1px solid #0c1a0c}
  .air{background:#3a1010;border-color:#803;color:#f88;font-weight:700;letter-spacing:.06em}
@@ -288,9 +311,9 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  .evempty{padding:9px 11px;color:#476}
 </style></head><body>
 <header><h1>ATOLL</h1><span class="sub">island flow analyser &middot; 10.10.10.0/24</span>
- <span id="ptp" class="sub"></span><span id="is07" class="sub"></span><span class="tot" id="tot"></span></header>
+ <span id="ptp" class="sub"></span><span id="is07" class="sub"></span><span id="pgm" class="sub"></span><span class="tot" id="tot"></span></header>
 <div class="wrap"><table><thead><tr>
- <th>flow</th><th>tally</th><th>group : port</th><th class="n">pps</th><th class="n">Mbit/s</th>
+ <th>flow</th><th>tally</th><th>pgm</th><th>group : port</th><th class="n">pps</th><th class="n">Mbit/s</th>
  <th class="n">avg pkt</th><th>transport</th><th class="n">lost</th><th class="n">loss %</th><th>standard</th>
 </tr></thead><tbody id="rows"></tbody></table></div>
 <section class="evs"><h2>IS-07 event stream</h2>
@@ -303,6 +326,7 @@ async function load(){
  document.getElementById('tot').textContent=d.total_pps.toLocaleString()+' pps total \\u00b7 '+d.total_mbps+' Mbit/s';
  const p=d.ptp; document.getElementById('ptp').innerHTML='PTP GM '+esc(p.gm)+' '+
    (p.reachable?'<span class="ok">locked</span>':'<span class="bad">unreachable</span>');
+ document.getElementById('pgm').innerHTML = d.pgm ? 'PGM &rarr; <span class="ok">'+esc(d.pgm)+'</span>' : '';
  document.getElementById('rows').innerHTML=d.flows.map(f=>{
   const dead=!f.alive;
   const lossCls=f.loss_pct>1?'bad':(f.loss_pct>0?'warn':'ok');
@@ -314,6 +338,7 @@ async function load(){
   return '<tr>'+
    '<td class="lbl'+(dead?' dead':'')+'">'+esc(f.label)+(dead?' &middot; no signal':'')+'</td>'+
    '<td>'+tly+'</td>'+
+   '<td>'+(f.pgm?'<span class="pill pgm">PROGRAM</span>':'')+'</td>'+
    '<td class="grp">'+esc(f.grp)+' : '+f.port+'</td>'+
    '<td class="n">'+(dead?'&ndash;':f.pps.toLocaleString())+'</td>'+
    '<td class="n">'+(dead?'&ndash;':f.mbps.toFixed(2))+'</td>'+
@@ -366,5 +391,6 @@ class TCPServer(socketserver.ThreadingTCPServer):
 is07.start()
 threading.Thread(target=reader, daemon=True).start()
 threading.Thread(target=sampler, daemon=True).start()
+threading.Thread(target=pgm_poller, daemon=True).start()
 print(f"analyser: watching {len(flows)} island flows -> http://0.0.0.0:{PORT}/", flush=True)
 TCPServer(("", PORT), H).serve_forever()

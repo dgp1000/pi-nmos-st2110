@@ -128,7 +128,10 @@ def build():
                 f"udpsrc address={g} port={cp} multicast-iface={IFACE} auto-multicast=true caps=\"{FECSTREAM_CAPS}\" ! identity name=fecg0 ! queue ! fd.fec_0 "
                 f"udpsrc address={g} port={rp} multicast-iface={IFACE} auto-multicast=true caps=\"{FECSTREAM_CAPS}\" ! identity name=fecg1 ! queue ! fd.fec_1 "
                 f"fd. ! {FEC_JB} ! rtpmp2tdepay ! tsdemux name=d "
-                f"d. ! h264parse ! queue ! nvh264dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
+                # The 2022-1-recovered H.264 tears on nvh264dec (hardware) even at 0 loss; avdec is
+                # clean. Same fix as the wall FEC tile (commit e4a2d04) -- this fullscreen path was
+                # missed. One 720p 3 Mbps tile in software is cheap, and it is the only fec view.
+                f"d. ! h264parse ! queue ! avdec_h264 ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
                 f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! {APLAY}")
     if SRC == "sps":    # ST 2022-7: two identical RTP copies merged by sequence number.
         ag, ap = CFG["SPS_A_GRP"], CFG["SPS_A_PORT"]   # funnel interleaves both paths and

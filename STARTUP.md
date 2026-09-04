@@ -19,6 +19,7 @@ Access: from a Mac `ssh atoll-pc` (192.168.4.85:2222, key auth). Pi from PC or M
    | `atoll-panel` | `:8096` switcher + inspector + TV remote |
    | `atoll-analyser` | `:8101` island flow analyser (pps / bitrate / RTP loss / IS-07) |
    | `atoll-is07` | `:8102` IS-07 Event & Tally + `:8103` WebSocket transport |
+   | `atoll-programout` | `:8092` Program Out software receiver (IS-05 Connection API) |
    | `atoll-tv` | HDHomeRun → HEVC on 5010 (seamless channel changes) |
    | `atoll-tv-web` | `:8098` standalone channel picker (also built into the panel) |
    | `atoll-home` | Home videos, 5008 |
@@ -36,7 +37,7 @@ Access: from a Mac `ssh atoll-pc` (192.168.4.85:2222, key auth). Pi from PC or M
 
    Check them all at once:
    ```
-   systemctl is-active atoll-panel atoll-analyser atoll-is07 atoll-tv atoll-tv-web atoll-home \
+   systemctl is-active atoll-panel atoll-analyser atoll-is07 atoll-programout atoll-tv atoll-tv-web atoll-home \
      atoll-music atoll-anc atoll-j2k atoll-h264 atoll-opus atoll-mjpeg atoll-vp9 atoll-tsrtp \
      atoll-fec atoll-sps atoll-multiview atoll-jxs-web
    ```
@@ -66,7 +67,7 @@ Access: from a Mac `ssh atoll-pc` (192.168.4.85:2222, key auth). Pi from PC or M
 
 On the PC (WSL):
 ```
-sudo systemctl stop atoll-panel atoll-analyser atoll-is07 atoll-tv atoll-tv-web atoll-home \
+sudo systemctl stop atoll-panel atoll-analyser atoll-is07 atoll-programout atoll-tv atoll-tv-web atoll-home \
   atoll-music atoll-anc atoll-j2k atoll-h264 atoll-opus atoll-mjpeg atoll-vp9 atoll-tsrtp \
   atoll-fec atoll-sps atoll-multiview atoll-jxs-web
 cd ~/pi-nmos-st2110/deploy/nmos && sudo docker compose stop
@@ -83,6 +84,7 @@ next WSL boot.
 | Layout | Renderer | What you get |
 |---|---|---|
 | `single` / follow-take | `meter-view.py` | fullscreen, per-channel VU meters, live stream-info overlay, lip-synced |
+| `program` | `meter-view.py` | Program Out: the flow routed to the software receiver over IS-05 (panel "Program Out" row), fullscreen; idle card when nothing is connected |
 | `side` | gst-launch | two sources side by side |
 | `multi` | gst-launch | plain 2×2 compositor |
 | `wall` | `wall-view.py` | 2×2 **plus** per-tile bitrate, fps, audio meters, IS-07 tally, FEC counters |

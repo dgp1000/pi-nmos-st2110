@@ -21,10 +21,11 @@ flowchart TB
 
   subgraph CTRL["CONTROL PLANE (PC / WSL)"]
     panel["monitor-web.py<br/>IS-05 panel · IS-04/05 inspector · knobs<br/>:8096"]
-    statefiles[("~/atoll-run/*<br/>tv-channel · fec-loss · fec-enable<br/>sps-a · sps-b · audio-delay-ms · tv-audio-delay-ms")]
+    statefiles[("~/atoll-run/*<br/>tv-channel · fec-loss · fec-enable<br/>sps-a · sps-b · audio-delay-ms · tv-audio-delay-ms · programout")]
     is07["is07-tally.py<br/>IS-07 Event and Tally<br/>REST :8102 · WebSocket :8103"]
     nmos["docker: nmos-cpp<br/>registry :8080 · virtnode :8090<br/>AMWA testing :5000"]
     analyser["analyser.py<br/>flow analyser :8101"]
+    progout["program-out.py<br/>Program Out receiver<br/>IS-05 Connection API :8092"]
   end
 
   subgraph SEND["SENDERS (systemd, PC / WSL)"]
@@ -59,6 +60,9 @@ flowchart TB
   panel -- "IS-05 PATCH /staged" --> nmos
   panel -- "IS-04 Query · IS-05 active" --> nmos
   panel -- writes --> statefiles
+  panel -- "IS-05 PATCH /staged (route)" --> progout
+  progout -- "IS-04 register" --> nmos
+  progout -- writes --> statefiles
   panel -. "/state polled" .-> is07
   panel -. "/state polled 1 s" .-> render
   is07 -- "IS-04 registration + heartbeat" --> nmos
@@ -158,8 +162,9 @@ WSL boots (WSL itself does not start with Windows). `~/atoll-run` is `ATOLL_RUN`
 
 | Process | File | Owner | Listens | Role |
 |---|---|---|---|---|
-| Panel | `pc/monitor-web.py` | `atoll-panel` | `:8096` | The iPad page and the single source of truth for *active source*, *layout* and *tile slots*. Issues IS-05 takes. Writes the knob files. Proxies the Mac music API and the Pi clock. |
+| Panel | `pc/monitor-web.py` | `atoll-panel` | `:8096` | The iPad page and the single source of truth for *active source*, *layout* and *tile slots*. Issues IS-05 takes and routes Program Out over IS-05. Writes the knob files. Proxies the Mac music API and the Pi clock. |
 | IS-07 emitter | `pc/is07-tally.py` | `atoll-is07` | `:8102` REST, `:8103` ws | One boolean event source per Atoll source key. Registers node/device/13 sources/flows/senders in IS-04. Pushes state on transition. |
+| Program Out | `pc/program-out.py` | `atoll-programout` | `:8092` | Software NMOS receiver: serves the IS-05 v1.1 Connection API and registers its node/device/receiver in IS-04. On activation it maps the connection's multicast/port to an island flow and writes `~/atoll-run/programout` for the renderer. |
 | Flow analyser | `pc/analyser.py` | `atoll-analyser` | `:8101` | Raw-socket join of every group: pps, bitrate, average datagram, RTP pt/SSRC/loss. IS-07 receiver (tally column + event log). |
 | NMOS registry | `deploy/nmos/docker-compose.yml` → `nmos-registry` | docker | `:8080` HTTP, `:8081` ws, `:1883` MQTT | nmos-cpp IS-04 Registration + Query API. |
 | NMOS virtual node | `nmos-virtnode` | docker | `:8090` HTTP, `:8091` ws | nmos-cpp example node: the receivers `v0`/`m0` the panel switches, plus its own IS-07 sources. |
@@ -222,7 +227,7 @@ flowchart LR
 
   conf -- "source" --> bash["every *.sh sender + output-render.sh"]
   conf -- "atoll_config.py<br/>(sources once in bash, caches)" --> py1["monitor-web.py · reels-nmos.py"]
-  conf -- "NEED list: bash sources it, echoes each key" --> py2["wall-view · meter-view · analyser<br/>is07-tally · tv-send-inputselect · fecverify"]
+  conf -- "NEED list: bash sources it, echoes each key" --> py2["wall-view · meter-view · analyser<br/>is07-tally · tv-send-inputselect · fecverify · program-out"]
   conf -- "regex parse on Windows" --> ps["restore.ps1"]
   piconf -- source --> pi["pi/launch-all.sh"]
 ```
@@ -258,7 +263,7 @@ state and exposes them as JSON:
 | State | Set by | Read by |
 |---|---|---|
 | `_active["src"]` | `GET /take?src=` | `GET /state` → `output-render.sh`, `is07-tally.py` |
-| `_output["layout"]` (`single`/`side`/`multi`/`wall`) | `GET /layout?mode=` | `GET /state` |
+| `_output["layout"]` (`single`/`side`/`multi`/`wall`/`program`) | `GET /layout?mode=` | `GET /state` |
 | `_slots[4]` (source key per quadrant) | `GET /slot?pos=&src=` | `GET /state` |
 
 `take(src)` is the IS-05 part. `SOURCES` maps two keys to real NMOS receivers on the virtual node
@@ -289,6 +294,15 @@ and the FEC/2022-7 knobs every 4 s, and `/time` every 3 s. It is a triple-quoted
 a `\'` inside its JavaScript collapses to `'` and breaks the whole script; use `data-*`
 attributes and JS-assigned handlers when adding controls.
 
+Program Out is the real receiver-side connection. `program-out.py` is a software NMOS receiver
+(node + device + receiver, registered in IS-04, heartbeat every 5 s) that serves the IS-05 v1.1
+Connection API on `:8092`. The panel's Program Out row PATCHes its `/staged` with the chosen
+flow's `transport_params` (multicast IP + port) and `activate_immediate`; on activation the
+receiver looks the (address, port) up in its catalogue of island flows and writes
+`essence addr port sender_id` to `~/atoll-run/programout`. The `program` output layout follows
+that knob, so an IS-05 connection actually drives the picture — unlike the `v0`/`m0` gate, and
+discoverable, so any NMOS controller can route it too.
+
 ### 5.2 The knob files in `~/atoll-run`
 
 These are the rig's "GPIO": the panel writes them, long-running pipelines poll them and apply the
@@ -298,6 +312,7 @@ value to a live element property, so nothing rebuilds.
 |---|---|---|---|
 | `tv-channel` | panel `/tv/set`, `tv-web.py`, the TV sender itself on error | `tv-send-inputselect.py` (0.5 s), `wall-view`/`meter-view` (label) | Retune Live TV. |
 | `tv-favorites` | panel `/tv/fav` | panel | Favourite channel list. |
+| `programout` | `program-out.py` on IS-05 activation | `output-render.sh` (`program` layout) | The flow routed to Program Out: essence + multicast + port. |
 | `fec-loss` | panel `/fec/set` | `meter-view`, `wall-view` (1 s) | `identity drop-probability` on the FEC media flow: the loss injector. |
 | `fec-enable` | panel `/fec/set` | `meter-view`, `wall-view` | Gates the column/row FEC flows (drop-probability 0 or 1) so protected vs unprotected is a live A/B at constant loss. |
 | `sps-a`, `sps-b` | panel `/sps/set` | `meter-view`, `wall-view` | "Pull the cable" on a 2022-7 path. |
@@ -526,11 +541,12 @@ flowchart TD
   aspawn --> sleep["sleep 1"] --> poll
 ```
 
-`build_pipeline` is a four-way case:
+`build_pipeline` is a five-way case:
 
 | layout | What runs | Rebuild key |
 |---|---|---|
 | `single` | `python3 meter-view.py <active> <screen>` | `single:<active>` — every take rebuilds |
+| `program` | `python3 meter-view.py <routed> <screen>` (idle card if nothing connected) | `program:<routed>` — follows the Program Out IS-05 route, not the take |
 | `side` | inline `gst-launch-1.0` compositor: Live TV left, Pi raw right | `side` — never rebuilds on take |
 | `multi` | inline `gst-launch-1.0` compositor, four `tile_full()` fragments | `multi:<slots>` — slot changes rebuild, takes do not |
 | `wall` | `python3 wall-view.py <slots> <screen>` | `wall:<slots>` — same |
@@ -653,6 +669,10 @@ flowchart TB
   reels["reels-nmos.py (launch-media only)<br/>source → flow → sender for Test Reels<br/>templated on sender/m1, re-POST 5 s<br/>SDP served :8097"] --> reg
 
   legacy["activation-watcher.py + take.py (legacy demo)<br/>poll receiver a0 /active → start/stop L24 audio"] -. "IS-05" .-> vnode
+
+  progout["program-out.py<br/>node atoll-program-out · device · receiver 'Program Out'<br/>IS-05 Connection API :8092"] -- "POST /resource · health 5 s" --> reg
+  panel -- "IS-05 PATCH staged (route any island flow)" --> progout
+  progout -- "writes ~/atoll-run/programout" --> ro["output-render.sh<br/>program layout"]
 ```
 
 Three things Atoll adds to the stock nmos-cpp stack:
@@ -672,6 +692,12 @@ Three things Atoll adds to the stock nmos-cpp stack:
 3. **A discoverable custom sender.** `reels-nmos.py` shows the pattern for registering your own
    source/flow/sender against the registry directly: copy the schema from an existing node
    resource, attach to the virtnode's node/device, re-POST under the expiry, serve an SDP.
+4. **A routable software receiver.** `program-out.py` registers its own node/device/receiver and
+   serves the IS-05 v1.1 Connection API on `:8092`. PATCHing its receiver with the transport
+   parameters of any island flow and activating writes `~/atoll-run/programout`, which the
+   renderer's `program` layout follows — a real transport-params connection that drives the
+   output, and discoverable, so an external NMOS controller can route it too. This is the
+   receiver-side counterpart to the gate in point 1.
 
 `is07client.py` is the shared receiver (`Is07Client(sources, port, on_state, on_status)`,
 `source_id(key)`, `device_id()`): reconnects with capped backoff, treats 20 s of silence as a

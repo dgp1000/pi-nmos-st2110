@@ -27,13 +27,17 @@ NEED = ["ISLAND_IFACE", "ISLAND_PC_IP", "ISLAND_PI_IP", "ANALYSER_PORT",
         "ANC_GRP", "ANC_PORT", "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT",
         "OPUS_GRP", "OPUS_PORT", "MJPEG_GRP", "MJPEG_PORT", "VP9_GRP", "VP9_PORT",
         "TSRTP_GRP", "TSRTP_PORT", "FEC_GRP", "FEC_PORT",
-        "SPS_A_GRP", "SPS_A_PORT", "SPS_B_GRP", "SPS_B_PORT", "IS07_WS_PORT", "PROGRAMOUT_PORT"]
+        "SPS_A_GRP", "SPS_A_PORT", "SPS_B_GRP", "SPS_B_PORT", "IS07_WS_PORT", "PROGRAMOUT_PORT", "PANEL_PORT", "FEC_COLUMNS", "FEC_ROWS"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
 LOCAL = CFG.get("ISLAND_PC_IP") or "0.0.0.0"
 PORT = int(CFG.get("ANALYSER_PORT") or 8101)
 PI = CFG.get("ISLAND_PI_IP", "10.10.10.1")
 PROGRAMOUT = f"http://localhost:{CFG.get('PROGRAMOUT_PORT') or '8092'}"
+PANEL = f"http://localhost:{CFG.get('PANEL_PORT') or '8096'}"
+_FCOLS = int(CFG.get("FEC_COLUMNS") or 5); _FROWS = int(CFG.get("FEC_ROWS") or 5)
+_FEC_OVH = round(100 * (_FCOLS + _FROWS) / (_FCOLS * _FROWS))   # ST 2022-1 parity overhead, %
+_take = {"key": None, "label": None}   # the panel's current take (control-plane selection)
 
 # Which island flow is currently routed to Program Out over IS-05. Matched by multicast addr:port
 # (exact, naming-independent). Polled from program-out.py; last route kept on a transient error.
@@ -50,6 +54,13 @@ def pgm_poller():
                 _pgm.update(grp=None, port=None, label=None)
         except Exception:
             pass   # program-out momentarily unreachable: keep the last known route
+        try:
+            with urllib.request.urlopen(f"{PANEL}/state", timeout=2) as r:
+                ps = json.loads(r.read())
+            k = ps.get("active")
+            _take.update(key=k, label=IS07_LABEL.get(k, k) if k else None)
+        except Exception:
+            pass
         time.sleep(1.5)
 
 def g(k):
@@ -261,8 +272,16 @@ def snapshot():
     for x in out:
         x["pgm"] = bool(pgm_grp) and x["grp"] == pgm_grp and str(x["port"]) == pgm_port
     tot_p = sum(x["pps"] for x in out)
+    _by = {x["label"]: x for x in out}
+    _fm = _by.get("FEC media"); _fc = _by.get("FEC column"); _fr = _by.get("FEC row")
+    fec = None
+    if _fm:
+        fec = {"matrix": f"{_FCOLS}\u00d7{_FROWS}", "overhead": _FEC_OVH,
+               "loss": _fm["loss_pct"],
+               "parity": bool(_fc and _fc["alive"] and _fr and _fr["alive"])}
     return {"flows": out, "total_pps": tot_p, "is07": tally,
             "pgm": (_pgm.get("label") if _pgm.get("grp") else None),
+            "take": _take.get("label"), "fec": fec,
             "total_mbps": round(sum(x["mbps"] for x in out), 2),
             "ptp": ptp_status(), "ts": time.strftime("%H:%M:%S")}
 
@@ -311,7 +330,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  .evempty{padding:9px 11px;color:#476}
 </style></head><body>
 <header><h1>ATOLL</h1><span class="sub">island flow analyser &middot; 10.10.10.0/24</span>
- <span id="ptp" class="sub"></span><span id="is07" class="sub"></span><span id="pgm" class="sub"></span><span class="tot" id="tot"></span></header>
+ <span id="ptp" class="sub"></span><span id="is07" class="sub"></span><span id="pgm" class="sub"></span><span id="take" class="sub"></span><span id="fec" class="sub"></span><span class="tot" id="tot"></span></header>
 <div class="wrap"><table><thead><tr>
  <th>flow</th><th>tally</th><th>pgm</th><th>group : port</th><th class="n">pps</th><th class="n">Mbit/s</th>
  <th class="n">avg pkt</th><th>transport</th><th class="n">lost</th><th class="n">loss %</th><th>standard</th>
@@ -327,6 +346,8 @@ async function load(){
  const p=d.ptp; document.getElementById('ptp').innerHTML='PTP GM '+esc(p.gm)+' '+
    (p.reachable?'<span class="ok">locked</span>':'<span class="bad">unreachable</span>');
  document.getElementById('pgm').innerHTML = d.pgm ? 'PGM &rarr; <span class="ok">'+esc(d.pgm)+'</span>' : '';
+ document.getElementById('take').innerHTML = d.take ? 'Take &rarr; <span class="ok">'+esc(d.take)+'</span>' : '';
+ const fc=d.fec; document.getElementById('fec').innerHTML = fc ? 'FEC '+esc(fc.matrix)+' &middot; '+fc.overhead+'% parity'+((fc.loss>0)?' &middot; <span class="bad">media loss '+fc.loss.toFixed(2)+'%</span>':'') : '';
  document.getElementById('rows').innerHTML=d.flows.map(f=>{
   const dead=!f.alive;
   const lossCls=f.loss_pct>1?'bad':(f.loss_pct>0?'warn':'ok');

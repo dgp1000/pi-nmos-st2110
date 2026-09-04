@@ -43,6 +43,7 @@ PANEL = f"http://localhost:{CFG.get('PANEL_PORT') or '8096'}"
 _FCOLS = int(CFG.get("FEC_COLUMNS") or 5); _FROWS = int(CFG.get("FEC_ROWS") or 5)
 _FEC_OVH = round(100 * (_FCOLS + _FROWS) / (_FCOLS * _FROWS))   # ST 2022-1 parity overhead, %
 _take = {"key": None, "label": None}   # the panel's current take (control-plane selection)
+_ctrl = {"layout": None, "slots": [], "active": None}   # panel output layout + slots, for the "on output" column
 RUN = CFG.get("ATOLL_RUN") or "/home/david/atoll-run"
 
 # FEC recovery meter: recovery only happens if something runs the ST 2022-1 decoder, and the
@@ -118,6 +119,8 @@ def pgm_poller():
                 ps = json.loads(r.read())
             k = ps.get("active")
             _take.update(key=k, label=IS07_LABEL.get(k, k) if k else None)
+            _ctrl.update(layout=ps.get("layout"), active=k,
+                         slots=[x for x in (ps.get("slots") or "").split(",") if x])
         except Exception:
             pass
         time.sleep(1.5)
@@ -330,6 +333,24 @@ def snapshot():
     pgm_grp, pgm_port = _pgm.get("grp"), _pgm.get("port")
     for x in out:
         x["pgm"] = bool(pgm_grp) and x["grp"] == pgm_grp and str(x["port"]) == pgm_port
+    # "on output": where each flow is on monitor 2 right now, from the panel layout + slots.
+    _POS = ["TL", "TR", "BL", "BR"]
+    _lay = _ctrl.get("layout") or "single"; _sl = _ctrl.get("slots") or []; _act = _ctrl.get("active")
+    _shown = {}
+    if _lay in ("wall", "multi"):
+        for i, _s in enumerate(_sl[:4]):
+            if _s:
+                _shown.setdefault(_s, []).append(f"{_lay} {_POS[i]}")
+    elif _lay == "side":
+        _shown["hevc"] = ["side L"]; _shown["raw"] = ["side R"]
+    elif _lay == "single" and _act:
+        _shown[_act] = ["single"]
+    for x in out:
+        _k = IS07_KEY.get(x["label"])
+        _pos = list(_shown.get(_k, [])) if _k else []
+        if _lay == "program" and pgm_grp and x["grp"] == pgm_grp and str(x["port"]) == pgm_port:
+            _pos = ["program"]
+        x["output"] = ", ".join(_pos) if _pos else None
     tot_p = sum(x["pps"] for x in out)
     _by = {x["label"]: x for x in out}
     _fm = _by.get("FEC media"); _fc = _by.get("FEC column"); _fr = _by.get("FEC row")
@@ -371,6 +392,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  .ok{color:#2d2}
  .pill{display:inline-block;padding:1px 7px;border-radius:9px;font-size:11px;border:1px solid #1a3a2a;color:#7a9}
  .pill.pgm{background:#0b3a4a;color:#8fe8ff;border-color:#1a6b82;font-weight:600}
+ .pill.out{background:#132a13;color:#8ec98e;border-color:#2a5a2a}
  .hi{background:#3a1010;border-color:#803;color:#f88}
  footer{padding:10px 18px;color:#476;font-size:12px;border-top:1px solid #0c1a0c}
  .air{background:#3a1010;border-color:#803;color:#f88;font-weight:700;letter-spacing:.06em}
@@ -393,7 +415,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <header><h1>ATOLL</h1><span class="sub">island flow analyser &middot; 10.10.10.0/24</span>
  <span id="ptp" class="sub"></span><span id="is07" class="sub"></span><span id="pgm" class="sub"></span><span id="take" class="sub"></span><span id="fec" class="sub"></span><span class="tot" id="tot"></span></header>
 <div class="wrap"><table><thead><tr>
- <th>flow</th><th>tally</th><th>pgm</th><th>group : port</th><th class="n">pps</th><th class="n">Mbit/s</th>
+ <th>flow</th><th>tally</th><th>pgm</th><th>output</th><th>group : port</th><th class="n">pps</th><th class="n">Mbit/s</th>
  <th class="n">avg pkt</th><th>transport</th><th class="n">lost</th><th class="n">loss %</th><th>standard</th>
 </tr></thead><tbody id="rows"></tbody></table></div>
 <section class="evs"><h2>IS-07 event stream</h2>
@@ -423,6 +445,7 @@ async function load(){
    '<td class="lbl'+(dead?' dead':'')+'">'+esc(f.label)+(dead?' &middot; no signal':'')+'</td>'+
    '<td>'+tly+'</td>'+
    '<td>'+(f.pgm?'<span class="pill pgm">PROGRAM</span>':'')+'</td>'+
+   '<td>'+(f.output?'<span class="pill out">'+esc(f.output)+'</span>':'')+'</td>'+
    '<td class="grp">'+esc(f.grp)+' : '+f.port+'</td>'+
    '<td class="n">'+(dead?'&ndash;':f.pps.toLocaleString())+'</td>'+
    '<td class="n">'+(dead?'&ndash;':f.mbps.toFixed(2))+'</td>'+

@@ -722,7 +722,9 @@ recovery counter. The analyser runs one small GStreamer ST 2022-1 decoder (its o
 joins the media + parity flows, injects the SAME `fec-loss`/`fec-enable` knobs the renderers use, and
 counts packets at the wire, after the loss injector, and after recovery â so it reports matrix, parity
 overhead, packets **recovered / dropped**, and lifetime residual, and it tracks the demo. (A wire-only
-count would read zero: the demoâs loss is injected receiver-side, not on the wire.) It is deliberately not GStreamer so it cannot disturb what it measures, and
+count would read zero: the demoâs loss is injected receiver-side, not on the wire.) An **output**
+column shows where each flow currently sits on monitor 2 â wall/multi quadrant (TL/TR/BL/BR),
+side L/R, single, or program â from the panel layout + slots. It is deliberately not GStreamer so it cannot disturb what it measures, and
 its own buffers are sized so it does not report its own overflow as network loss.
 
 ---

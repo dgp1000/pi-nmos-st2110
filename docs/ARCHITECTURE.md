@@ -598,9 +598,16 @@ Three engineering choices to know about:
 - **Tally is a real IS-07 receiver.** Each tile subscribes to `source_id(key)` (UUID5 of the key,
   derived identically in the emitter). The panel is polled *only* while the WebSocket is down, and
   the flag then drops its "NMOS IS-07" line so the fallback is visible.
-- **`WALL_SW_DECODE=true`** decodes the H.264 tiles (FEC, 2022-7, tsrtp, h264) with `avdec_h264`
-  instead of `nvh264dec`. GPU decode showed torn bands on the FEC tile even with a byte-perfect
-  stream; the cause is undiagnosed and this is a ~186 % CPU workaround.
+- **Only the FEC tile is software-decoded.** `nvh264dec` tears the ST 2022-1-recovered FEC stream on
+  the live wall (torn bands from the recovered / reordered H.264). It is clean in an isolated decode
+  and clean on `avdec_h264`, so it is a hardware-decode fault under real wall load, not a bad stream.
+  The FEC tile alone therefore uses `avdec_h264` (~25 % of a core for one 720p 3 Mbps tile); every
+  other H.264 tile (tsrtp, 2022-7, h264) stays on `nvh264dec`. The old blunt workaround
+  `WALL_SW_DECODE=true` forced *all* H.264 tiles to software (~186 % CPU) and is off in production:
+  software-decoding every tile oversubscribes the WSLg display and steps the GPU-decoded Live TV tile
+  to keyframes. It stays as a diagnostic for isolating decode artifacts. (Same reason the default
+  4-up is compressed tiles only -- the CPU-decoded Pi `raw` tile oversubscribes the wall too; see
+  STARTUP.)
 
 ### 7.3 `meter-view.py` — single view
 

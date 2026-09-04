@@ -715,8 +715,10 @@ sampler thread turns the counters into pps / Mbit/s / average datagram / loss % 
 `/flows` returns the JSON the page polls; the page marks average datagrams under 400 B, colours
 loss, shows the IS-07 tally per row via an explicit `IS07_KEY` map (two 2022-7 rows share `sps`,
 three FEC rows share `fec`, Pi audio/ANC/Opus show a dash), and lists the IS-07 event stream with
-TAI timestamps. It is deliberately not GStreamer so it cannot disturb what it measures, and its
-own buffers are sized so it does not report its own overflow as network loss.
+TAI timestamps. A **PGM** column (and a `PGM â <flow>` header readout) flags whichever flow is
+currently routed to Program Out over IS-05 â polled from `program-out.py` and matched by multicast
+address, so it is exact. It is deliberately not GStreamer so it cannot disturb what it measures, and
+its own buffers are sized so it does not report its own overflow as network loss.
 
 ---
 

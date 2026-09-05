@@ -19,6 +19,7 @@ SCREEN = sys.argv[2] if len(sys.argv) > 2 else "2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 NEED = ["ISLAND_IFACE", "VIDEO_SINK", "ATOLL_PLATFORM", "ATOLL_RUN", "HEVC_GRP", "HEVC_PORT", "HOME_GRP", "HOME_PORT",
         "MUSIC_GRP", "MUSIC_PORT", "MUSIC_AUDIO_GRP", "MUSIC_AUDIO_PORT", "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT",
+        "AUDIO_GAIN_HEVC", "AUDIO_GAIN_JXS", "AUDIO_GAIN_MUSIC",
         "PI_AUDIO_GRP", "PI_AUDIO_PORT", "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT",
         "OPUS_GRP", "OPUS_PORT", "MJPEG_GRP", "MJPEG_PORT", "VP9_GRP", "VP9_PORT",
         "TSRTP_GRP", "TSRTP_PORT", "FEC_GRP", "FEC_PORT", "FEC_COLUMNS", "FEC_ROWS",
@@ -46,6 +47,8 @@ for k in ("GALLIUM_DRIVER", "PULSE_SERVER", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"
         os.environ[k] = CFG[k]
 IFACE = CFG["ISLAND_IFACE"] or "eth0"
 SINK = CFG["VIDEO_SINK"] or "waylandsink fullscreen=true"
+_AGAIN = (CFG.get(f"AUDIO_GAIN_{SRC.upper()}") or "1.0")   # per-source audio gain (normalize hot sources to Live TV)
+_VOL = f"volume volume={_AGAIN} ! " if _AGAIN not in ("1.0", "1") else ""   # no element at unity gain
 _SINK = "glimagesink" if SRC == "hevc" else SINK   # Live TV present path: glimagesink (GL/EGL, vsync-paced) -- waylandsink SHM present steps the ticker under WSLg
 # Present resolution for the on-screen sink. WSLg has no dmabuf, so waylandsink takes CPU (SHM)
 # frames that Weston must upload + composite every vsync -- cost scales with pixels. 720p roughly
@@ -84,7 +87,7 @@ ALEVEL = "audioconvert ! level name=lvl post-messages=true interval=50000000"
 # silently instead of killing the video. Downmix to stereo; level upstream keeps 6-ch meters. Any
 # residual skew is a live TRIM (both directions) via a pad offset from ADELAY_FILE below.
 APLAY = ("audioconvert ! audio/x-raw,channels=2 ! audioresample "
-         "! queue name=aq max-size-buffers=0 max-size-bytes=0 max-size-time=1000000000 "
+         f"! {_VOL}queue name=aq max-size-buffers=0 max-size-bytes=0 max-size-time=1000000000 "
          "! autoaudiosink sync=true")
 
 def ts_pipeline(g, p):   # HEVC video + MP3 audio in a TS (Live TV / Home / Music / Reels)

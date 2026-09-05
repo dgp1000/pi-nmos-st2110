@@ -18,7 +18,7 @@ SRC = sys.argv[1] if len(sys.argv) > 1 else "hevc"
 SCREEN = sys.argv[2] if len(sys.argv) > 2 else "2"
 HERE = os.path.dirname(os.path.abspath(__file__))
 NEED = ["ISLAND_IFACE", "VIDEO_SINK", "ATOLL_PLATFORM", "ATOLL_RUN", "HEVC_GRP", "HEVC_PORT", "HOME_GRP", "HOME_PORT",
-        "MUSIC_GRP", "MUSIC_PORT", "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT",
+        "MUSIC_GRP", "MUSIC_PORT", "MUSIC_AUDIO_GRP", "MUSIC_AUDIO_PORT", "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT",
         "PI_AUDIO_GRP", "PI_AUDIO_PORT", "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT",
         "OPUS_GRP", "OPUS_PORT", "MJPEG_GRP", "MJPEG_PORT", "VP9_GRP", "VP9_PORT",
         "TSRTP_GRP", "TSRTP_PORT", "FEC_GRP", "FEC_PORT", "FEC_COLUMNS", "FEC_ROWS",
@@ -92,9 +92,19 @@ def ts_pipeline(g, p):   # HEVC video + MP3 audio in a TS (Live TV / Home / Musi
             f"d. ! h265parse ! queue ! nvh265dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width={OUT_W},height={OUT_H} ! {VTAIL} "
             f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! {APLAY}")   # audio/mpeg pins the audio pad; decodebin = AAC (Live TV) or MP3
 
+def music_pipeline():   # Music: HEVC video (video-only TS) + ST 2110-30 L24 audio (audio-follows-source)
+    g, p = grp("MUSIC"); ag, ap = grp("MUSIC_AUDIO")
+    return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=d "
+            f"d. ! h265parse ! queue ! nvh265dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width={OUT_W},height={OUT_H} ! {VTAIL} "
+            f"udpsrc address={ag} port={ap} multicast-iface={IFACE} auto-multicast=true buffer-size=16777216 "
+            f'caps="application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96" '
+            f"! rtpjitterbuffer latency=500 ! rtpL24depay ! {ALEVEL} ! {APLAY}")
+
 def build():
-    if SRC in ("hevc", "jxs", "music", "reels"):
-        g, p = grp({"hevc": "HEVC", "jxs": "HOME", "music": "MUSIC", "reels": "REELS"}[SRC])
+    if SRC == "music":
+        return music_pipeline()
+    if SRC in ("hevc", "jxs", "reels"):
+        g, p = grp({"hevc": "HEVC", "jxs": "HOME", "reels": "REELS"}[SRC])
         return ts_pipeline(g, p)
     if SRC == "raw":   # Pi RTP video + the separate ST 2110-30 L24 audio flow
         g, p = grp("PI_RAW"); ag, ap = grp("PI_AUDIO")
@@ -164,7 +174,7 @@ VCODEC = {"hevc": "HEVC / H.265", "jxs": "HEVC / H.265", "music": "HEVC / H.265"
           "raw": "Uncompressed RFC 4175", "j2k": "JPEG 2000", "jpegxs": "JPEG XS",
           "h264": "H.264 / AVC", "mjpeg": "Motion JPEG", "vp9": "VP9", "tsrtp": "H.264 / AVC", "fec": "H.264 / AVC", "sps": "H.264 / AVC"}
 ACODEC = {"hevc": "AAC 5.1", "jxs": "MPEG audio (MP3)", "music": "MPEG audio (MP3)",
-          "reels": "MPEG audio (MP3)", "raw": "L24 PCM (2110-30)", "h264": "Opus", "tsrtp": "AAC", "fec": "AAC", "sps": "AAC"}
+          "reels": "MPEG audio (MP3)", "music": "L24 PCM (2110-30)", "raw": "L24 PCM (2110-30)", "h264": "Opus", "tsrtp": "AAC", "fec": "AAC", "sps": "AAC"}
 TRANSPORT = {"hevc": "MPEG-TS / UDP", "jxs": "MPEG-TS / UDP", "music": "MPEG-TS / UDP",
              "reels": "MPEG-TS / UDP", "raw": "ST 2110-20 RTP", "j2k": "J2K/RTP", "jpegxs": "local",
              "h264": "RTP (RFC 6184) + Opus RTP", "mjpeg": "RTP (RFC 2435)", "vp9": "RTP (RFC 7741)", "tsrtp": "MPEG-TS / RTP (ST 2022-2)", "fec": "TS/RTP + ST 2022-1 FEC", "sps": "TS/RTP x2 (ST 2022-7)"}

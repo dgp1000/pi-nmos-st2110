@@ -167,9 +167,9 @@ WSL boots (WSL itself does not start with Windows). `~/atoll-run` is `ATOLL_RUN`
 | Program Out | `pc/program-out.py` | `atoll-programout` | `:8092` | Software NMOS receiver: serves the IS-05 v1.1 Connection API and registers its node/device/receiver in IS-04. On activation it maps the connection's multicast/port to an island flow and writes `~/atoll-run/programout` for the renderer. |
 | Music NMOS source | `pc/music-nmos.py` | `atoll-music-nmos` | `:8093` | Registers the music channel as an IS-04 node with two senders — video (HEVC) and ST 2110-30 L24 audio — and serves an SDP per sender, so music is discoverable in the inspector and routable via Program Out. Heartbeats like the other registrars. |
 | Flow analyser | `pc/analyser.py` | `atoll-analyser` | `:8101` | Raw-socket join of every group: pps, bitrate, average datagram, RTP pt/SSRC/loss. IS-07 receiver (tally column + event log). |
-| NMOS registry | `deploy/nmos/docker-compose.yml` → `nmos-registry` | docker | `:8080` HTTP, `:8081` ws, `:1883` MQTT | nmos-cpp IS-04 Registration + Query API. |
+| NMOS registry | `deploy/nmos/docker-compose.yml` → `nmos-registry` | docker | `:8080` HTTP, `:8081` ws, `:1883` MQTT | nmos-cpp IS-04 Registration + Query API, and the IS-09 System API (`/x-nmos/system/v1.0/global`) the Atoll nodes discover. |
 | NMOS virtual node | `nmos-virtnode` | docker | `:8090` HTTP, `:8091` ws | nmos-cpp example node: the receivers `v0`/`m0` the panel switches, plus its own IS-07 sources. |
-| AMWA testing tool | `nmos-testing` | docker | `:5000` | Conformance tester. Present, never yet pointed at Atoll's own APIs. |
+| AMWA testing tool | `nmos-testing` | docker | `:5000` | Conformance tester. The IS-09 System API client is now implemented node-side (see §8); running the suite against Atoll's own APIs is the remaining verification step. |
 | TV picker (standalone) | `pc/tv-web.py` | `atoll-tv-web` | `:8098` | Channel grid that writes `tv-channel`. Superseded by the panel's built-in remote; kept running. |
 
 ### Senders
@@ -658,7 +658,7 @@ kept as the iPad/Mac way to *see* the wall.
 ```mermaid
 flowchart TB
   subgraph docker["docker compose — deploy/nmos"]
-    reg["nmos-registry (nmos-cpp)<br/>Registration + Query API :8080<br/>expiry 12 s"]
+    reg["nmos-registry (nmos-cpp)<br/>Registration + Query API :8080<br/>+ IS-09 System API /x-nmos/system<br/>expiry 12 s"]
     vnode["nmos-virtnode (nmos-cpp example node)<br/>Node + Connection API :8090<br/>receivers v0 v1 m0 m1 … · own IS-07 sources · events ws :8091"]
     test["amwa/nmos-testing :5000"]
     vnode -- "registers + heartbeats" --> reg
@@ -679,11 +679,12 @@ flowchart TB
 
   progout["program-out.py<br/>node atoll-program-out · device · receiver 'Program Out'<br/>IS-05 Connection API :8092"] -- "POST /resource · health 5 s" --> reg
   musicnmos["music-nmos.py<br/>node atoll-music · device · 2 senders (video + L24 audio)<br/>SDP per sender :8093"] -- "POST /resource · health 5 s" --> reg
+  is07 -. "IS-09: discover System API via DNS-SD (_nmos-system._tcp)<br/>heartbeat from global · also program-out + music-nmos" .-> reg
   panel -- "IS-05 PATCH staged (route any island flow)" --> progout
   progout -- "writes ~/atoll-run/programout" --> ro["output-render.sh<br/>program layout"]
 ```
 
-Three things Atoll adds to the stock nmos-cpp stack:
+Five things Atoll adds to the stock nmos-cpp stack:
 
 1. **A control surface that issues real IS-05.** The panel's switch between the Pi raw flow and
    the Home videos flow is an actual `master_enable` toggle on the node's receivers `v0` and `m0`.
@@ -711,6 +712,16 @@ Three things Atoll adds to the stock nmos-cpp stack:
    renderer's `program` layout follows — a real transport-params connection that drives the
    output, and discoverable, so an external NMOS controller can route it too. This is the
    receiver-side counterpart to the gate in point 1.
+5. **An IS-09 System API client.** Every Atoll node now honours the System API. `atoll_system.py`
+   (shared by `is07-tally.py`, `program-out.py` and `music-nmos.py`) discovers it via DNS-SD
+   (`_nmos-system._tcp`, using `avahi-browse`; lowest advertised `pri` wins), falls back to the
+   configured registry host — the nmos-cpp registry co-hosts the System API on `:8080` — if
+   DNS-SD finds nothing, fetches `/x-nmos/system/v1.0/global`, and drives each node's IS-04
+   registration **heartbeat interval** from `is04.heartbeat_interval` there instead of a
+   hard-coded 5 s. A daemon thread re-discovers and re-fetches, tracking the global `version`, so
+   a live change is picked up without a restart; it also reads the `ptp` block (domain_number,
+   announce_receipt_timeout) for reference. This closes the IS-09 node-behaviour gap — the nodes
+   previously ignored the System API. Needs `avahi-utils` (for `avahi-browse`) on the host.
 
 `is07client.py` is the shared receiver (`Is07Client(sources, port, on_state, on_status)`,
 `source_id(key)`, `device_id()`): reconnects with capped backoff, treats 20 s of silence as a

@@ -188,6 +188,17 @@ still selectable — put it in `single`/`side`, not the default wall.
   line disappears and the analyser header flips to "no events", while tally keeps working via the
   fallback.
 
+### IS-09
+- Every Atoll node discovers the **System API** and honours its global config. `atoll_system.py`
+  (shared by `is07-tally.py`, `program-out.py`, `music-nmos.py`) browses `_nmos-system._tcp` over
+  DNS-SD (`avahi-browse`; lowest advertised `pri` wins), falls back to the registry host (which
+  co-hosts the System API on `:8080`) if DNS-SD is empty, fetches `/x-nmos/system/v1.0/global`,
+  and drives each node's IS-04 heartbeat from `is04.heartbeat_interval` (was a hard-coded 5 s).
+  Confirm with `sudo journalctl -u atoll-is07 | grep IS-09` — expect `System API via DNS-SD …
+  heartbeat=5s, ptp.domain=127`.
+- **Needs `avahi-utils`** (for `avahi-browse`) on the host — now in `install.sh`'s apt list. If the
+  nodes log `configured fallback` instead of `DNS-SD`, avahi-browse is missing or avahi isn't running.
+
 ### Misc
 - **multiview-app.py** is an OPTIONAL per-tile renderer (each tile its own pipeline via
   intervideosink; tile sinks MUST be sync=false). It genuinely isolates a tile's decode error, but

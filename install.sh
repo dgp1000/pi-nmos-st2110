@@ -29,7 +29,7 @@ if [ "$CHECK_ONLY" = 0 ]; then
     gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
     gstreamer1.0-pulseaudio gstreamer1.0-gl \
-    ffmpeg python3 python3-pip curl jq iproute2 docker.io docker-compose-v2 \
+    ffmpeg python3 python3-pip curl jq iproute2 avahi-utils docker.io docker-compose-v2 \
     && ok "packages installed" \
     || warn "some packages failed (try 'docker-compose-plugin' if 'docker-compose-v2' is unavailable)"
 else

@@ -113,6 +113,7 @@ still selectable — put it in `single`/`side`, not the default wall.
   raised (WSL default 4 MB), so the socket overflows and drops packets before the jitterbuffer —
   heavy audio dropouts. `deploy/sysctl/60-atoll-rmem.conf` raises it to 32 MB (persisted to
   `/etc/sysctl.d`); it covers both the Music and Pi `raw` L24 feeds.
+- **WSLg audio sink resync.** The Music L24 monitor runs its sink `sync=false` (free-run on the Windows audio-device clock); a `sync=true` sink slaves with the default skew method and clicks ~every 5 s. Music is a visualizer feed (no lip-sync); other sources keep `sync=true`.
 - **`mpegtsmux alignment=7`** is why there is headroom: it bundles 7 TS packets per datagram. Live TV
   went 4,470 → 653 pps and Music 958 → 120 pps for the same bitrate. The analyser highlights any
   flow whose average datagram is under ~400 B, which means someone lost that setting.

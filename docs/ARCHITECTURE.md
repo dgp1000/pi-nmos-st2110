@@ -806,6 +806,7 @@ These are the constraints that recur across modules. Each one was learned by bre
   (WSL default is 4 MB), and the socket then overflows and drops packets before the jitterbuffer
   sees them — heavy audio dropouts. `deploy/sysctl/60-atoll-rmem.conf` sets it to 32 MB (persisted
   to `/etc/sysctl.d`). Fixes both the Music and Pi `raw` L24 feeds.
+- **The WSLg audio sink resyncs on a slaved clock.** The pulse sink plays on the Windows audio-device clock, not the pipeline clock; a `sync=true` audio sink slaves to it with the default *skew* method and hard-corrects roughly every 5 s — an audible click. The Music monitor runs its L24 sink **`sync=false`** (free-run on the device clock): music is a visualizer feed, so there is no lip-sync to lose. Applied in `meter-view.py` (single/program) and the `output-render.sh` audio follower (wall/multi/side); other sources keep `sync=true`.
 - **`mpegtsmux alignment=7` on every TS sender.** Packet rate is the ceiling; 188-byte datagrams
   burn it for nothing.
 - **`config-interval=-1`** on `h264parse`/`h265parse` and on `rtph264pay`, so joiners get headers.

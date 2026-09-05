@@ -98,7 +98,7 @@ def music_pipeline():   # Music: HEVC video (video-only TS) + ST 2110-30 L24 aud
             f"d. ! h265parse ! queue ! nvh265dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width={OUT_W},height={OUT_H} ! {VTAIL} "
             f"udpsrc address={ag} port={ap} multicast-iface={IFACE} auto-multicast=true buffer-size=16777216 "
             f'caps="application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96" '
-            f"! rtpjitterbuffer latency=500 ! rtpL24depay ! {ALEVEL} ! {APLAY}")
+            f"! rtpjitterbuffer latency=500 ! rtpL24depay ! {ALEVEL} ! {APLAY.replace('sync=true', 'sync=false')}")
 
 def build():
     if SRC == "music":

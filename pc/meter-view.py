@@ -46,6 +46,16 @@ for k in ("GALLIUM_DRIVER", "PULSE_SERVER", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"
         os.environ[k] = CFG[k]
 IFACE = CFG["ISLAND_IFACE"] or "eth0"
 SINK = CFG["VIDEO_SINK"] or "waylandsink fullscreen=true"
+_SINK = "glimagesink" if SRC == "hevc" else SINK   # Live TV present path: glimagesink (GL/EGL, vsync-paced) -- waylandsink SHM present steps the ticker under WSLg
+# Present resolution for the on-screen sink. WSLg has no dmabuf, so waylandsink takes CPU (SHM)
+# frames that Weston must upload + composite every vsync -- cost scales with pixels. 720p roughly
+# halves the 3D/present load vs 1080p and upscales fine to a fullscreen monitor. Override with
+# ATOLL_OUT_W/ATOLL_OUT_H (e.g. 1920x1080) when there is present headroom.
+OUT_W = int(os.environ.get("ATOLL_OUT_W", "1280"))
+OUT_H = int(os.environ.get("ATOLL_OUT_H", "720"))
+_WINW = int(os.environ.get("ATOLL_TV_W", "3840"))   # Live TV glimagesink window size (Monitor 2 native)
+_WINH = int(os.environ.get("ATOLL_TV_H", "2160"))
+_WINSCALE = f"glupload ! glcolorscale ! video/x-raw(memory:GLMemory),width={_WINW},height={_WINH} ! " if SRC == "hevc" else ""
 IS_WSL = CFG["ATOLL_PLATFORM"] == "wsl"
 RUN = CFG.get("ATOLL_RUN", "")
 def grp(k): return CFG[f"{k}_GRP"], CFG[f"{k}_PORT"]
@@ -64,7 +74,7 @@ SPS_CAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=MP2T,pa
 BRAND = ("textoverlay text=ATOLL valignment=top halignment=right ypad=18 xpad=28 "
          "font-desc='Sans Bold 20' color=0x80ffffff shaded-background=false")
 # video ends at a named cairooverlay 'ov'; 'usrc' is tapped for bitrate, 'vpre' for source caps.
-VTAIL = f"videoconvert ! cairooverlay name=ov ! {BRAND} ! videoconvert ! {SINK} sync=true"
+VTAIL = f"videoconvert ! cairooverlay name=ov ! {BRAND} ! videoconvert ! {_WINSCALE}{_SINK} sync=true"
 # measure ALL channels at 'level' (so the meters show 5.1), THEN downmix to stereo for playback --
 # WSLg's Pulse output is stereo and autoaudiosink won't take a 6-channel stream.
 ALEVEL = "audioconvert ! level name=lvl post-messages=true interval=50000000"
@@ -79,7 +89,7 @@ APLAY = ("audioconvert ! audio/x-raw,channels=2 ! audioresample "
 
 def ts_pipeline(g, p):   # HEVC video + MP3 audio in a TS (Live TV / Home / Music / Reels)
     return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=d "
-            f"d. ! h265parse ! queue ! nvh265dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
+            f"d. ! h265parse ! queue ! nvh265dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width={OUT_W},height={OUT_H} ! {VTAIL} "
             f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! {APLAY}")   # audio/mpeg pins the audio pad; decodebin = AAC (Live TV) or MP3
 
 def build():
@@ -89,36 +99,36 @@ def build():
     if SRC == "raw":   # Pi RTP video + the separate ST 2110-30 L24 audio flow
         g, p = grp("PI_RAW"); ag, ap = grp("PI_AUDIO")
         return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true caps=\"{RAW_CAPS}\" "
-                f"! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
+                f"! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert name=vpre ! videoscale ! video/x-raw,width={OUT_W},height={OUT_H} ! {VTAIL} "
                 f"udpsrc address={ag} port={ap} multicast-iface={IFACE} auto-multicast=true buffer-size=16777216 "
                 f"caps=\"application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96\" "
                 f"! rtpjitterbuffer latency=500 ! rtpL24depay ! {ALEVEL} ! {APLAY}")
     if SRC == "j2k":   # video only (no audio) -> meters idle
         g, p = grp("J2K")
         return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{J2K_CAPS}\" "
-                f"! rtpj2kdepay ! avdec_jpeg2000 ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL}")
+                f"! rtpj2kdepay ! avdec_jpeg2000 ! videoconvert name=vpre ! videoscale ! video/x-raw,width={OUT_W},height={OUT_H} ! {VTAIL}")
     if SRC == "h264":  # H.264 video (RFC 6184) + its Opus audio (RFC 7587) -- two separate RTP essence
         g, p = grp("H264"); ag, ap = grp("OPUS")   # flows for one programme, like 2110-20 + 2110-30
         return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{H264_CAPS}\" "
                 f"! rtpjitterbuffer latency=100 ! rtph264depay ! h264parse ! nvh264dec ! cudadownload "
-                f"! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
+                f"! videoconvert name=vpre ! videoscale ! video/x-raw,width={OUT_W},height={OUT_H} ! {VTAIL} "
                 f"udpsrc address={ag} port={ap} multicast-iface={IFACE} auto-multicast=true caps=\"{OPUS_CAPS}\" "
                 f"! rtpjitterbuffer latency=200 ! rtpopusdepay ! opusdec ! {ALEVEL} ! {APLAY}")
     if SRC == "mjpeg":  # Motion JPEG over RTP (RFC 2435), all-intra, video only -> meters idle
         g, p = grp("MJPEG")
         return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=16777216 caps=\"{MJPEG_CAPS}\" "
                 f"! rtpjitterbuffer latency=100 ! rtpjpegdepay ! nvjpegdec "
-                f"! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL}")
+                f"! videoconvert name=vpre ! videoscale ! video/x-raw,width={OUT_W},height={OUT_H} ! {VTAIL}")
     if SRC == "vp9":    # VP9 over RTP (RFC 7741); vp9parse supplies the caps nvvp9dec requires
         g, p = grp("VP9")
         return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{VP9_CAPS}\" "
                 f"! rtpjitterbuffer latency=100 ! rtpvp9depay ! vp9parse ! nvvp9dec "
-                f"! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL}")
+                f"! videoconvert name=vpre ! videoscale ! video/x-raw,width={OUT_W},height={OUT_H} ! {VTAIL}")
     if SRC == "tsrtp":  # MPEG-TS over RTP (ST 2022-2): a full A/V programme inside the TS.
         g, p = grp("TSRTP")   # the queue on the audio branch is required or the demuxer stalls
         return (f"udpsrc name=usrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{TSRTP_CAPS}\" "
                 f"! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name=d "
-                f"d. ! h264parse ! queue ! nvh264dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
+                f"d. ! h264parse ! queue ! nvh264dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width={OUT_W},height={OUT_H} ! {VTAIL} "
                 f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! {APLAY}")
     if SRC == "fec":    # ST 2022-1 protected TS/RTP. Two LIVE knobs (see apply_fec below):
         g, p = grp("FEC")   # 'lossy' injects packet loss on the media flow; 'fecg0/fecg1' gate the
@@ -131,7 +141,7 @@ def build():
                 # The 2022-1-recovered H.264 tears on nvh264dec (hardware) even at 0 loss; avdec is
                 # clean. Same fix as the wall FEC tile (commit e4a2d04) -- this fullscreen path was
                 # missed. One 720p 3 Mbps tile in software is cheap, and it is the only fec view.
-                f"d. ! h264parse ! queue ! avdec_h264 ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
+                f"d. ! h264parse ! queue ! avdec_h264 ! videoconvert name=vpre ! videoscale ! video/x-raw,width={OUT_W},height={OUT_H} ! {VTAIL} "
                 f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! {APLAY}")
     if SRC == "sps":    # ST 2022-7: two identical RTP copies merged by sequence number.
         ag, ap = CFG["SPS_A_GRP"], CFG["SPS_A_PORT"]   # funnel interleaves both paths and
@@ -141,11 +151,11 @@ def build():
         return (f"funnel name=fn ! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name=d "
                 f"udpsrc name=ua address={ag} port={ap} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{SPS_CAPS}\" ! identity name=pa ! queue ! fn. "
                 f"udpsrc name=ub address={bg} port={bp} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"{SPS_CAPS}\" ! identity name=pb ! queue ! fn. "
-                f"d. ! h264parse ! queue ! nvh264dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL} "
+                f"d. ! h264parse ! queue ! nvh264dec ! cudadownload ! videoconvert name=vpre ! videoscale ! video/x-raw,width={OUT_W},height={OUT_H} ! {VTAIL} "
                 f"d. ! audio/mpeg ! queue ! decodebin ! {ALEVEL} ! {APLAY}")
     # jpegxs / unknown -> local test pattern, video only
     return (f"videotestsrc pattern=ball motion=sweep is-live=true ! video/x-raw,width=1920,height=1080,framerate=30/1 "
-            f"! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert name=vpre ! videoscale ! video/x-raw,width=1920,height=1080 ! {VTAIL}")
+            f"! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert name=vpre ! videoscale ! video/x-raw,width={OUT_W},height={OUT_H} ! {VTAIL}")
 
 SRCNAME = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "reels": "Test Reels",
            "raw": "Pi raw 2110-20", "j2k": "JPEG 2000 island", "jpegxs": "JPEG XS codec",

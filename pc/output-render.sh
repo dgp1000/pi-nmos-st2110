@@ -20,6 +20,8 @@ SCREEN="${1:-2}"
 # GALLIUM_DRIVER + PULSE_SERVER come from atoll.conf (WSL only). The window-mover is WSL-only too.
 MOVER=""
 [ "${ATOLL_PLATFORM:-}" = wsl ] && MOVER="$(wslpath -w "$DIR/move-window-screen.ps1")"
+SNAP=""
+[ "${ATOLL_PLATFORM:-}" = wsl ] && SNAP="$(wslpath -w "$DIR/snap-window-screen.ps1")"
 RAW_CAPS="application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)RAW,sampling=(string)YCbCr-4:2:2,depth=(string)8,width=(string)320,height=(string)240,colorimetry=(string)BT601-5,payload=(int)96"
 F="Sans Bold 22"
 # Semi-transparent "ATOLL" bug, top-right of every output (single/side/multi). color is
@@ -192,6 +194,7 @@ while true; do
       pid=$!
       cur_key="$key"
       [ "${ATOLL_PLATFORM:-}" = wsl ] && [ "$SCREEN" != "0" ] && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$MOVER" -Screen "$SCREEN" -TimeoutSec 12 >/dev/null 2>&1 &
+      [ "${ATOLL_PLATFORM:-}" = wsl ] && [ "$SCREEN" != "0" ] && powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$SNAP" -Screen "$SCREEN" -TimeoutSec 14 >/dev/null 2>&1 &
     fi
   fi
 

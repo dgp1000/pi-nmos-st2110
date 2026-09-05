@@ -77,6 +77,8 @@ def grp(k): return CFG[f"{k}_GRP"], CFG[f"{k}_PORT"]
 
 W = int(CFG.get("WALL_W") or 1920)
 H = int(CFG.get("WALL_H") or 1080)
+WINW = int(os.environ.get("ATOLL_TV_W", "3840"))   # glimagesink window size (Monitor 2 native)
+WINH = int(os.environ.get("ATOLL_TV_H", "2160"))
 TW, TH = W // 2, H // 2              # each quadrant
 S = W / 1920.0                       # overlay scale, so the UI keeps its proportions at any size
 POS = [(0, 0), (TW, 0), (0, TH), (TW, TH)]
@@ -96,7 +98,7 @@ def udp(g, p, buf=8388608, caps=None, name=None):
             f"buffer-size={buf} {c}")
 
 def scale(i):
-    return f"! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! video/x-raw,width={TW},height={TH} ! identity name=tap{i} ! queue leaky=downstream max-size-buffers=2 ! mix.sink_{i} "
+    return f"! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! video/x-raw,width={TW},height={TH} ! identity name=tap{i} ! queue leaky=downstream max-size-time=700000000 max-size-buffers=0 max-size-bytes=0 ! mix.sink_{i} "
 
 def ts_tile(i, g, p, vparse, vdec):
     """MPEG-TS over plain UDP: video decoded, audio decoded only to feed this tile's level meter."""
@@ -173,7 +175,7 @@ desc = (f"compositor name=mix ignore-inactive-pads=true background=black {sinkpr
         # NOTE: do NOT ask the compositor for BGRA to "save" the pre-overlay conversion. Measured, that
         # is WORSE (296% vs 238% CPU at 2560x1440): compositing in 4-byte BGRA moves 2.67x more
         # data per pixel than YUV, which costs more than the conversion it avoids.
-        f"! video/x-raw,width={W},height={H} ! videoconvert ! cairooverlay name=ov ! videoconvert ! {SINK} sync={SYNC} "
+        f"! video/x-raw,width={W},height={H} ! videoconvert ! cairooverlay name=ov ! videoconvert ! glupload ! glcolorscale ! video/x-raw(memory:GLMemory),width={WINW},height={WINH} ! glimagesink sync=true "
         + "".join(tile(i, s) for i, s in enumerate(SLOTS)))
 pipe = Gst.parse_launch(desc)
 ov = pipe.get_by_name("ov")

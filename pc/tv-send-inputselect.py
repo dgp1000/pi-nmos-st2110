@@ -65,7 +65,7 @@ PORT = sys.argv[2] if len(sys.argv) > 2 else CFG["HEVC_PORT"]
 STATE = sys.argv[3] if len(sys.argv) > 3 else os.path.join(CFG["ATOLL_RUN"], "tv-channel")
 TTL = CFG["MCAST_TTL"] or "1"
 DEFCH = CFG["TV_CHANNEL"] or "8.1"
-VCAPS = Gst.Caps.from_string("video/x-raw,format=NV12,width=1280,height=720,framerate=30/1")
+VCAPS = Gst.Caps.from_string("video/x-raw,format=NV12,width=1280,height=720,framerate=60000/1001")
 # Always 6-channel (5.1) so the channel count NEVER changes mid-stream (a changing count is a
 # discontinuity that breaks the seamless switch). audioconvert upmixes stereo sources into this
 # layout; a real 5.1 broadcast passes straight through. Mask 0x3f = FL|FR|FC|LFE|RL|RR (L R C LFE Ls Rs).
@@ -93,7 +93,7 @@ pipeline = Gst.parse_launch(
     "input-selector name=asel sync-streams=false ! queue ! audioconvert ! audioresample "
     "! audio/x-raw,channels=6,channel-mask=(bitmask)0x3f ! avenc_aac bitrate=384000 ! aacparse ! " + MUXQ + " ! mux. "
     f"mpegtsmux name=mux alignment=7 ! " + SINKQ + f" ! udpsink host={GRP} port={PORT} multicast-iface={IFACE} auto-multicast=true ttl={TTL} "
-    "videotestsrc pattern=black is-live=true ! video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 ! vsel. "
+    "videotestsrc pattern=black is-live=true ! video/x-raw,format=NV12,width=1280,height=720,framerate=60000/1001 ! vsel. "
     "audiotestsrc wave=silence is-live=true ! audioconvert ! audioresample ! audio/x-raw,format=S16LE,rate=48000,channels=6,channel-mask=(bitmask)0x3f ! asel.")
 vsel = pipeline.get_by_name("vsel"); asel = pipeline.get_by_name("asel")
 vfb = vsel.get_static_pad("sink_0"); afb = asel.get_static_pad("sink_0")

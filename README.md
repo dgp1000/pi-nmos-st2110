@@ -122,7 +122,7 @@ streams separately, as the analyser does. Everything below is live at once, and 
    │  RENDERER   output-render.sh  →  wall-view.py   (2×2 + meters + tally)      │
    │                               →  meter-view.py  (single + VU + info)        │
    └──────────────┬──────────────────────────────────────────────┬──────────────┘
-                  │  wired ST 2110 island                        │  waylandsink
+                  │  wired ST 2110 island                        │  glimagesink
                   │  (managed switch, IGMP snooping)             ▼
                   ▼                                     Monitor 2 — the wall
        Raspberry Pi 5  ·  PTP grandmaster               wall · multi · side · single
@@ -333,7 +333,7 @@ On a **Linux-native** box (on the island, with an NVIDIA GPU) none of the WSL ma
 no `d3d12`/WSLg, no `/mnt/c`, no PowerShell window-mover. Bring the whole rig up with
 **`bash pc/atoll-up.sh`** (the cross-platform sibling of `restore.ps1`). For an X11 session set
 `VIDEO_SINK=ximagesink` in `atoll.conf` (and handle fullscreen via your window manager); on Wayland
-the default `waylandsink fullscreen=true` works as-is. This is the natural turnkey-appliance target.
+the default `waylandsink fullscreen=true` works as-is. (The WSL build instead presents on-screen via **glimagesink** — waylandsink's WSLg SHM path, lacking dmabuf, *steps* fine scrolling content; with real dmabuf on a native GPU, waylandsink is smooth.) This is the natural turnkey-appliance target.
 
 ---
 

@@ -53,7 +53,7 @@ flowchart TB
     mjpeg["multiview-web.py + multiview-mjpeg.sh<br/>browser 2x2 :8099"]
   end
 
-  monitor["Monitor 2 (WSLg waylandsink)"]
+  monitor["Monitor 2 (WSLg glimagesink, GL/EGL)"]
 
   ipad -- HTTP --> panel
   ipad -- HTTP --> analyser
@@ -111,7 +111,7 @@ demonstrate.
 flowchart LR
   subgraph HOME["Home network (WiFi / management)"]
     ipad2["iPad<br/>192.168.4.x"]
-    mac["Mac<br/>192.168.6.159:8008<br/>Now-Playing server"]
+    mac["Mac<br/>DHCP :8008 (MAC_MUSIC_HOST)<br/>Now-Playing server"]
     hdhr["HDHomeRun FLEX 4K<br/>DHCP; found by DeviceID<br/>:5004"]
   end
 
@@ -129,7 +129,7 @@ flowchart LR
     pieth["eth0 10.10.10.1<br/>PTP grandmaster"]
   end
 
-  mon2["Monitor 2<br/>2560x1440 → wall rendered 1920x1080"]
+  mon2["Monitor 2 2560x1440<br/>composite 1920x1080 → GPU upscale 3840x2160<br/>→ glimagesink 2560x1440 (WSLg 1.5x DPI)"]
 
   ipad2 <--> wifi
   mac --> wifi
@@ -201,9 +201,9 @@ Live TV), `atoll-jxs` (JPEG XS over TS at ~100 Mb/s, exceeds the WSL ceiling), `
 | Process | File | Owner | Output | Role |
 |---|---|---|---|---|
 | Renderer loop | `pc/output-render.sh` | **manual, local WSL terminal** | spawns the three below | Polls the panel once a second, builds a pipeline key from layout+source+slots, relaunches a child renderer only when the key changes. Also runs the audio follower. |
-| Wall | `pc/wall-view.py` | child of output-render | WSLg window, monitor 2 | The instrumented 2x2: cairo overlay with tally border, per-tile bitrate/fps/audio meters, FEC counters. IS-07 receiver. |
-| Single view | `pc/meter-view.py` | child of output-render | WSLg window | Fullscreen active source with VU meters and a stream-info panel. Hosts the live FEC/2022-7 knobs for single view. |
-| gst-launch multi / side | inline strings in `output-render.sh` | child of output-render | WSLg window | The original 2x2 and side-by-side, kept for comparison with the wall. |
+| Wall | `pc/wall-view.py` | child of output-render | WSLg window, monitor 2 | The instrumented 2x2: cairo overlay with tally border, per-tile bitrate/fps/audio meters, FEC counters. IS-07 receiver. Presents via **glimagesink** (GL/EGL, vsync-paced), GPU-upscaled to fill monitor 2. |
+| Single view | `pc/meter-view.py` | child of output-render | WSLg window | Fullscreen active source with VU meters and a stream-info panel. Hosts the live FEC/2022-7 knobs for single view. Live TV (`hevc`) presents via **glimagesink** (GL/EGL); other sources via `waylandsink`. |
+| gst-launch multi / side | inline strings in `output-render.sh` | child of output-render | WSLg window | The original 2x2 and side-by-side, kept for comparison with the wall. Both present via **glimagesink** (GL/EGL), GPU-upscaled to fill monitor 2. |
 | Browser multiview | `pc/multiview-web.py` + `pc/multiview-mjpeg.sh` | `atoll-multiview` | MJPEG `:8099` | Same compositor topology, JPEG frames over HTTP instead of a window. Built when WSLg could not show a window. |
 | JPEG XS viewer | `pc/jxs-web.py` | `atoll-jxs-web` | MJPEG `:8100` | Local svtjpegxsenc→svtjpegxsdec, proof that the ST 2110-22 codec works here. |
 
@@ -416,12 +416,12 @@ flowchart LR
     venc --> mux["mpegtsmux alignment=7"]
     aenc --> mux
     mux --> udp["udpsink 239.10.10.65:5010"]
-    black["videotestsrc black 720p30"] --> vsel
+    black["videotestsrc black 720p59.94"] --> vsel
     silence["audiotestsrc silence 48k 6ch"] --> asel
   end
   subgraph source["source branch — rebuilt on every channel change"]
     soup["souphttpsrc HDHR /auto/vCH"] --> dec["decodebin3<br/>(nv*dec ranked NONE → CPU avdec)"]
-    dec -- video --> vchain["queue → deinterlace → videorate → videoscale → videoconvert → NV12 720p30"] --> vsel
+    dec -- video --> vchain["queue → deinterlace → videorate → videoscale → videoconvert → NV12 720p59.94"] --> vsel
     dec -- audio --> achain["queue → audioconvert → audioresample → S16LE 48k 6ch"] --> asel
   end
 ```
@@ -514,7 +514,7 @@ loops forever; `atoll-home` points it at `~/atoll-playlist`, a folder of symlink
 `launch-media.sh` builds from `MUSIC_ROOT`. `music-channel.sh` probes the Mac's `/state` every
 cycle and runs either the live bridge (pull `nowplaying.ts` over WiFi, NVDEC → NVENC HEVC, AAC →
 MP3) or a "connecting" card for 15 s, so 5012 is never empty; an empty tile stalls the
-compositor. `tv-send-inputselect.py` is section 5.4.
+compositor. `tv-send-inputselect.py` is section 5.4. The Mac Now-Playing host is reached at `MAC_MUSIC_HOST:8008` (`pc/atoll.conf`), a **hardcoded IP that drifts** with DHCP (it moved 192.168.6.159 → 192.168.4.51 mid-run, the same drift that moves the HDHomeRun); `.local`/mDNS does not resolve from WSL, so a **DHCP reservation** for the Mac mini (and the HDHomeRun) on the router is the durable fix — otherwise, when the Music tile shows "connecting", update `MAC_MUSIC_HOST` and restart `atoll-music`.
 
 ---
 
@@ -532,7 +532,7 @@ flowchart TD
   force --> key["key = single:active · side · multi:slots · wall:slots"]
   key --> changed{"key != cur_key?"}
   changed -- yes --> kill["kill child process group"] --> build["build_pipeline(layout, active, slots)"]
-  build --> spawn["setsid bash -c cmd &<br/>+ move-window-screen.ps1 on WSL"]
+  build --> spawn["setsid bash -c cmd &<br/>+ move-window + snap-window-screen.ps1 on WSL"]
   changed -- no --> audio
   spawn --> audio["audio follower: akey = active unless single"]
   audio --> achanged{"akey or audio-delay-ms changed,<br/>or follower died?"}
@@ -575,11 +575,11 @@ never `pkill -f`, whose pattern matches the SSH command that launched it.
 ```mermaid
 flowchart LR
   subgraph pipe["ONE GstPipeline (Gst.parse_launch)"]
-    t0["tile 0: udpsrc u0 → depay/demux → decode → scale → identity tap0 → queue"] --> mix
+    t0["tile 0: udpsrc u0 → depay/demux → decode → scale → identity tap0 → queue 700ms leaky"] --> mix
     t1["tile 1 …"] --> mix
     t2["tile 2 …"] --> mix
     t3["tile 3 …"] --> mix["compositor mix<br/>4 quadrants"]
-    mix --> ov["cairooverlay ov"] --> sink["waylandsink fullscreen sync=WALL_SYNC"]
+    mix --> ov["cairooverlay ov"] --> gl["glupload → glcolorscale 3840x2160"] --> sink["glimagesink sync=true"]
     a0["per tile: audio → decodebin → level lvli → fakesink"]
   end
   subgraph probes["pad probes (streaming threads, count only)"]
@@ -606,7 +606,9 @@ multiviewer draws live: a red tally border and "ON AIR / NMOS IS-07" flag on the
 UMD label with Mb/s and fps (fps under 28 turns orange), per-channel audio meters from a `level`
 element per tile, and for the FEC tile the counters `dropped / recovered / resid / reord`.
 
-Three engineering choices to know about:
+Four engineering choices to know about:
+
+- **The present path is glimagesink, not waylandsink.** waylandsink presents through WSLg's SHM path (no dmabuf) — a per-frame CPU→GPU upload with uneven pacing that visibly *steps* fine scrolling content (a broadcast news ticker), even though the stream is clean (even PTS, 16.7 ms = 59.94 fps; the HDHomeRun app is smooth). glimagesink presents via OpenGL/EGL, vsync-paced — smooth, and it dropped the GPU 3D-engine load ~80% → ~60%. glimagesink cannot be resized under WSLg (it recreates its window), so the tail upscales to 3840×2160 on the GPU (`glupload ! glcolorscale`) and WSLg's 1.5× DPI makes that a 2560×1440 window filling monitor 2; the per-tile queues are 700 ms leaky (was 2-buffer) so the bursty Live TV delivery does not starve/step its tile.
 
 - **The overlay is double-buffered and drawn off the streaming thread.** `on_draw` only blits
   regions (tally border, flag, bottom strip, ATOLL bug) from a surface the main loop finished
@@ -628,7 +630,7 @@ Three engineering choices to know about:
 ### 7.3 `meter-view.py` — single view
 
 Same construction as the wall for one source: `build()` returns a pipeline string per source key
-ending in `videoconvert → cairooverlay ov → ATOLL bug → sink sync=true`, with the audio branch
+ending in `videoconvert → cairooverlay ov → ATOLL bug → sink sync=true` (Live TV/`hevc` upscales on the GPU — `glupload → glcolorscale 3840×2160 → glimagesink` — for a smooth, full-screen monitor-2 window; other sources use `waylandsink`), with the audio branch
 `decodebin → level → downmix to stereo → queue aq → autoaudiosink sync=true`. Level measures
 all channels before the downmix, so Live TV shows six bars (L R C LFE Ls Rs) while WSLg's stereo
 Pulse still gets something it accepts. Probes on `usrc` (bitrate), `vpre` (source caps) and
@@ -754,9 +756,7 @@ does not cover (`~/atoll-playlist`, the Test Reels sender, `reels-nmos.py`). Som
 paths from the previous PC build (`monitor-run.sh` hardcodes `/mnt/c/Users/dgper/...`,
 `restore-check.sh` still probes `:8095`), so treat them as reference rather than run them blind.
 
-`move-window-screen.ps1` is the WSL-only helper every renderer calls: Wayland clients cannot
-position themselves, so after the window maps a PowerShell script snapshots the window list, finds
-the new one and keeps snapping it to the chosen monitor's bounds for `TimeoutSec`.
+`move-window-screen.ps1` and `snap-window-screen.ps1` are the WSL-only placement helpers `output-render.sh` runs after each renderer maps (Wayland clients cannot position themselves). `move-window-screen.ps1` catches the newly-mapped window and snaps it to the chosen monitor's bounds for `TimeoutSec` — for `waylandsink` windows, which tolerate the resize; it now **skips** `OpenGL Renderer` (glimagesink) windows. `snap-window-screen.ps1` places the glimagesink window (matched by its `OpenGL Renderer (Ubuntu)` title) **move-only** — never resizing, because glimagesink recreates its window on any resize — so it relies on the renderer opening at the right size (the 3840×2160 → 2560×1440 upscale above). Both run via a resolved full PowerShell path (`PWSH`) so placement works even when `output-render.sh` is started from an environment whose PATH lacks the Windows interop dirs.
 
 ---
 

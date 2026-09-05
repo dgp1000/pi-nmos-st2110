@@ -56,7 +56,7 @@ Access: from a Mac `ssh atoll-pc` (192.168.4.85:2222, key auth). Pi from PC or M
 
 4. **Multiview on monitor 2 — MANUAL** (needs the WSLg display, so run it in a *local* PC WSL
    terminal, never over SSH): `cd ~/pi-nmos-st2110/pc && bash output-render.sh 2`
-   (use `0` for the primary monitor if #2 is off-screen). It follows the panel's take/layout.
+   (use `0` for the primary monitor if #2 is off-screen). It follows the panel's take/layout. The on-screen present is **glimagesink** (GL/EGL); on every take `output-render.sh` auto-places it full-screen on monitor 2 (`snap-window-screen.ps1`), so no manual window dragging.
 
 5. **View / control.** Panel `192.168.4.85:8096` (iPad) or `localhost:8096` (PC's own browser);
    analyser `:8101`; browser multiview `:8099`; JPEG XS `:8100`. From the PC's own browser use
@@ -122,7 +122,8 @@ still selectable — put it in `single`/`side`, not the default wall.
 - **Live TV A/V sync**: single / follow-take view is lip-synced — `meter-view.py` runs the audio sink
   at `sync=true` off the stream's own PTS, not a hand-tuned delay. `~/atoll-run/tv-audio-delay-ms`
   remains as a two-way trim if a source needs nudging.
-- The wall paces its sinks from PTS (`WALL_SYNC=true`). Without it playback bursts then pauses.
+- The on-screen output presents via **glimagesink** (GL/EGL, vsync-paced, `sync=true`) — single Live TV, the wall, and the inline multi/side layouts. waylandsink's WSLg SHM present (no dmabuf) *stepped* fine scrolling content (the Live TV ticker) even with a clean stream; glimagesink is smooth and lighter on the GPU (3D-engine ~80% → ~60%). glimagesink can't be resized (recreates its window), so the renderer opens it at size: GPU-upscaled to 3840×2160, which WSLg's 1.5× DPI renders as a 2560×1440 window filling monitor 2. `snap-window-screen.ps1` (move-only, by window title) places it; `move-window-screen.ps1` handles the remaining waylandsink windows and skips glimagesink. (`WALL_SYNC` no longer drives the sink.)
+- **Source IPs drift (DHCP).** The Mac Now-Playing host (`MAC_MUSIC_HOST` in `pc/atoll.conf`) and the HDHomeRun are on home-WiFi DHCP and move (both moved mid-session). The HDHomeRun self-heals by DeviceID discovery; the Mac music host is a **hardcoded IP** and `.local`/mDNS does not resolve from WSL, so if the Music tile shows "connecting", update `MAC_MUSIC_HOST` and `sudo systemctl restart atoll-music`. A **DHCP reservation** for the Mac mini (and the HDHomeRun) on the router avoids both.
 - **Make-before-break channel changes**: the `atoll-tv` service runs `tv-send-inputselect.py` — one
   pipeline where souphttpsrc→decodebin3 feeds input-selectors (video+audio kept TOGETHER) → one
   encoder each → mpegtsmux → 5010. On a change the new channel is opened on a SECOND HDHomeRun tuner

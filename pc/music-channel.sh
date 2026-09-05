@@ -20,7 +20,11 @@ run_bridge() {
       ! videorate ! videoscale ! videoconvert ! video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 \
       ! cudaupload ! nvh265enc rc-mode=cbr bitrate=6000 preset=p4 tune=low-latency gop-size=30 aud=true \
       ! h265parse config-interval=-1 ! queue ! mux. \
-    d. ! aacparse ! avdec_aac ! audioconvert ! audioresample ! lamemp3enc target=bitrate bitrate=192 ! mpegaudioparse ! queue ! mux. \
+    d. ! aacparse ! avdec_aac ! audioconvert ! audioresample ! audio/x-raw,rate=48000,channels=2 ! tee name=at \
+    at. ! queue ! lamemp3enc target=bitrate bitrate=192 ! mpegaudioparse ! queue ! mux. \
+    at. ! queue ! audioconvert ! audio/x-raw,format=S24BE,rate=48000,channels=2 \
+      ! rtpL24pay pt=96 min-ptime=1000000 max-ptime=1000000 \
+      ! udpsink host=$MUSIC_AUDIO_GRP port=$MUSIC_AUDIO_PORT multicast-iface="$IFACE" auto-multicast=true ttl=$MCAST_TTL \
     mpegtsmux name=mux alignment=7 ! queue \
       ! udpsink host=$MUSIC_GRP port=$MUSIC_PORT multicast-iface="$IFACE" auto-multicast=true ttl=$MCAST_TTL
 }

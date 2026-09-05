@@ -31,7 +31,7 @@ flowchart TB
   subgraph SEND["SENDERS (systemd, PC / WSL)"]
     tv["tv-send-inputselect.py<br/>HDHomeRun → HEVC/TS"]
     media["media-send.sh<br/>playlist → HEVC/TS"]
-    music["music-channel.sh<br/>Mac Now-Playing → HEVC/TS"]
+    music["music-channel.sh + music-nmos.py<br/>Mac Now-Playing → HEVC video + L24 audio<br/>NMOS source"]
     rtp["h264 · opus · mjpeg · vp9 · j2k<br/>essence over RTP"]
     tsrtp["tsrtp · fec · sps<br/>TS over RTP + 2022-1 / 2022-7"]
     anc["anc-send.py<br/>ST 2110-40 ATC"]
@@ -165,6 +165,7 @@ WSL boots (WSL itself does not start with Windows). `~/atoll-run` is `ATOLL_RUN`
 | Panel | `pc/monitor-web.py` | `atoll-panel` | `:8096` | The iPad page and the single source of truth for *active source*, *layout* and *tile slots*. Issues IS-05 takes and routes Program Out over IS-05. Writes the knob files. Proxies the Mac music API and the Pi clock. A **Guided demo** button runs a scripted, captioned tour of the whole rig. |
 | IS-07 emitter | `pc/is07-tally.py` | `atoll-is07` | `:8102` REST, `:8103` ws | One boolean event source per Atoll source key. Registers node/device/13 sources/flows/senders in IS-04. Pushes state on transition. |
 | Program Out | `pc/program-out.py` | `atoll-programout` | `:8092` | Software NMOS receiver: serves the IS-05 v1.1 Connection API and registers its node/device/receiver in IS-04. On activation it maps the connection's multicast/port to an island flow and writes `~/atoll-run/programout` for the renderer. |
+| Music NMOS source | `pc/music-nmos.py` | `atoll-music-nmos` | `:8093` | Registers the music channel as an IS-04 node with two senders — video (HEVC) and ST 2110-30 L24 audio — and serves an SDP per sender, so music is discoverable in the inspector and routable via Program Out. Heartbeats like the other registrars. |
 | Flow analyser | `pc/analyser.py` | `atoll-analyser` | `:8101` | Raw-socket join of every group: pps, bitrate, average datagram, RTP pt/SSRC/loss. IS-07 receiver (tally column + event log). |
 | NMOS registry | `deploy/nmos/docker-compose.yml` → `nmos-registry` | docker | `:8080` HTTP, `:8081` ws, `:1883` MQTT | nmos-cpp IS-04 Registration + Query API. |
 | NMOS virtual node | `nmos-virtnode` | docker | `:8090` HTTP, `:8091` ws | nmos-cpp example node: the receivers `v0`/`m0` the panel switches, plus its own IS-07 sources. |
@@ -177,7 +178,8 @@ WSL boots (WSL itself does not start with Windows). `~/atoll-run` is `ATOLL_RUN`
 |---|---|---|---|---|---|
 | `hevc` "Live TV" | `atoll-tv` | `pc/tv-send-inputselect.py` | NVENC HEVC 6 Mb/s + AAC 5.1 384 kb/s | MPEG-TS / UDP | `239.10.10.65:5010` |
 | `jxs` "Home videos" | `atoll-home` | `pc/media-send.sh --jxs ~/atoll-playlist` | NVENC HEVC 12 Mb/s + MP3 192 | MPEG-TS / UDP | `239.10.10.22:5008` |
-| `music` | `atoll-music` | `pc/music-channel.sh` | NVENC HEVC 6 Mb/s + MP3 192 (or a 4 Mb/s placeholder card) | MPEG-TS / UDP | `239.10.10.30:5012` |
+| `music` | `atoll-music` | `pc/music-channel.sh` | NVENC HEVC 6 Mb/s, video-only (or a 4 Mb/s placeholder card) | MPEG-TS / UDP | `239.10.10.30:5012` |
+| *(audio for `music`)* | `atoll-music` | `pc/music-channel.sh` | L24 48 kHz stereo, 1 ms ptime (pt 96) | ST 2110-30 RTP | `239.10.10.32:5013` |
 | `reels` "Test Reels" | *(none — only `launch-media.sh`)* | `pc/media-send.sh --reels` | NVENC HEVC + MP3 | MPEG-TS / UDP | `239.10.10.31:5014` |
 | `raw` "Pi raw 2110-20" | `atoll-pi` (on the Pi) | `pi/launch-all.sh` | none — UYVY 320x240 59.94 | ST 2110-20 RTP (RFC 4175) | `239.10.10.21:5006` |
 | *(audio for `raw`)* | `atoll-pi` | `pi/launch-all.sh` | none — L24 48 kHz stereo, 1 ms ptime | ST 2110-30 RTP | `239.10.10.10:5004` |
@@ -473,7 +475,7 @@ flowchart LR
     a1["Live TV · Home · Music · Reels"] --> a2["mpegtsmux alignment=7"] --> a3["udpsink"]
   end
   subgraph B["Family 2 — one essence per RTP flow"]
-    b1["H.264 · VP9 · MJPEG · J2K · Opus · Pi raw · Pi L24 · ANC"] --> b2["rtpXpay"] --> b3["udpsink"]
+    b1["H.264 · VP9 · MJPEG · J2K · Opus · Pi raw · Pi L24 · Music L24 · ANC"] --> b2["rtpXpay"] --> b3["udpsink"]
   end
   subgraph C["Family 3 — MPEG-TS inside RTP (ST 2022-2)"]
     c1["tsrtp · fec · sps"] --> c2["mpegtsmux alignment=7 → rtpmp2tpay pt 33"]
@@ -512,9 +514,12 @@ ST 2022-7 possible:
 directory it globs every video file, decodes with `decodebin3`, letterboxes to 720p30 NV12 and
 loops forever; `atoll-home` points it at `~/atoll-playlist`, a folder of symlinks that
 `launch-media.sh` builds from `MUSIC_ROOT`. `music-channel.sh` probes the Mac's `/state` every
-cycle and runs either the live bridge (pull `nowplaying.ts` over WiFi, NVDEC → NVENC HEVC, AAC →
-MP3) or a "connecting" card for 15 s, so 5012 is never empty; an empty tile stalls the
-compositor. `tv-send-inputselect.py` is section 5.4. The Mac Now-Playing host is reached at `MAC_MUSIC_HOST:8008` (`pc/atoll.conf`), a **hardcoded IP that drifts** with DHCP (it moved 192.168.6.159 → 192.168.4.51 mid-run, the same drift that moves the HDHomeRun); `.local`/mDNS does not resolve from WSL, so a **DHCP reservation** for the Mac mini (and the HDHomeRun) on the router is the durable fix — otherwise, when the Music tile shows "connecting", update `MAC_MUSIC_HOST` and restart `atoll-music`.
+cycle and runs either the live bridge (pull `nowplaying.ts` over WiFi, NVDEC → NVENC HEVC
+video-only on 5012, plus AAC → ST 2110-30 **L24** (`rtpL24pay`, 1 ms ptime) on 5013) or a
+"connecting" card for 15 s, so 5012 is never empty; an empty tile stalls the compositor.
+`music-nmos.py` (`atoll-music-nmos`, `:8093`) then registers the channel as an NMOS source —
+two senders (video + L24 audio) with an SDP each — so it is discoverable in the inspector and
+routable via Program Out. `tv-send-inputselect.py` is section 5.4. The Mac Now-Playing host is reached at `MAC_MUSIC_HOST:8008` (`pc/atoll.conf`), a **hardcoded IP that drifts** with DHCP (it moved 192.168.6.159 → 192.168.4.51 mid-run, the same drift that moves the HDHomeRun); `.local`/mDNS does not resolve from WSL, so a **DHCP reservation** for the Mac mini (and the HDHomeRun) on the router is the durable fix — otherwise, when the Music tile shows "connecting", update `MAC_MUSIC_HOST` and restart `atoll-music`.
 
 ---
 
@@ -673,6 +678,7 @@ flowchart TB
   legacy["activation-watcher.py + take.py (legacy demo)<br/>poll receiver a0 /active → start/stop L24 audio"] -. "IS-05" .-> vnode
 
   progout["program-out.py<br/>node atoll-program-out · device · receiver 'Program Out'<br/>IS-05 Connection API :8092"] -- "POST /resource · health 5 s" --> reg
+  musicnmos["music-nmos.py<br/>node atoll-music · device · 2 senders (video + L24 audio)<br/>SDP per sender :8093"] -- "POST /resource · health 5 s" --> reg
   panel -- "IS-05 PATCH staged (route any island flow)" --> progout
   progout -- "writes ~/atoll-run/programout" --> ro["output-render.sh<br/>program layout"]
 ```
@@ -694,6 +700,11 @@ Three things Atoll adds to the stock nmos-cpp stack:
 3. **A discoverable custom sender.** `reels-nmos.py` shows the pattern for registering your own
    source/flow/sender against the registry directly: copy the schema from an existing node
    resource, attach to the virtnode's node/device, re-POST under the expiry, serve an SDP.
+   `music-nmos.py` uses the same pattern to publish the music channel as its own node with two
+   senders (video + ST 2110-30 L24 audio) and an SDP each — the A2 approach: a standalone
+   registrar, not an extension of the virtnode. The L24 SDP is standards-clean 2110-30; the
+   video is HEVC-in-MPEG-TS/UDP advertised for discovery + Program-Out routing (which matches
+   by multicast ip:port, not the SDP, since NMOS has no raw-TS/UDP transport URN).
 4. **A routable software receiver.** `program-out.py` registers its own node/device/receiver and
    serves the IS-05 v1.1 Connection API on `:8092`. PATCHing its receiver with the transport
    parameters of any island flow and activating writes `~/atoll-run/programout`, which the
@@ -790,6 +801,11 @@ These are the constraints that recur across modules. Each one was learned by bre
 - **One sender per multicast group.** Two senders on a group produce a corrupt stream and doubled
   pps. Never start a sender ad hoc over SSH with `setsid … &`; use the unit, and count real
   senders with `pgrep -fc "[u]dpsink host=<grp> port=<port>"`.
+- **High-rate multicast receive needs a large socket buffer.** L24 audio at 1 ms ptime is ~1000
+  pkt/s; a `udpsrc buffer-size=16 MB` request is *denied* unless `net.core.rmem_max` is raised
+  (WSL default is 4 MB), and the socket then overflows and drops packets before the jitterbuffer
+  sees them — heavy audio dropouts. `deploy/sysctl/60-atoll-rmem.conf` sets it to 32 MB (persisted
+  to `/etc/sysctl.d`). Fixes both the Music and Pi `raw` L24 feeds.
 - **`mpegtsmux alignment=7` on every TS sender.** Packet rate is the ceiling; 188-byte datagrams
   burn it for nothing.
 - **`config-interval=-1`** on `h264parse`/`h265parse` and on `rtph264pay`, so joiners get headers.

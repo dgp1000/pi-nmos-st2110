@@ -23,7 +23,8 @@ Access: from a Mac `ssh atoll-pc` (192.168.4.85:2222, key auth). Pi from PC or M
    | `atoll-tv` | HDHomeRun → HEVC on 5010 (seamless channel changes) |
    | `atoll-tv-web` | `:8098` standalone channel picker (also built into the panel) |
    | `atoll-home` | Home videos, 5008 |
-   | `atoll-music` | Mac Now-Playing bridge → 5012 (self-healing) |
+   | `atoll-music` | Mac Now-Playing bridge → HEVC video 5012 + ST 2110-30 L24 audio 5013 (self-healing) |
+   | `atoll-music-nmos` | Registers music as an NMOS source (IS-04 senders + SDPs) → :8093 |
    | `atoll-anc` | ST 2110-40 ancillary timecode, 5020 |
    | `atoll-j2k` | JPEG 2000 J2K/RTP, 5016 |
    | `atoll-h264` + `atoll-opus` | H.264 RTP 5018 + its Opus audio 5022 |
@@ -38,7 +39,7 @@ Access: from a Mac `ssh atoll-pc` (192.168.4.85:2222, key auth). Pi from PC or M
    Check them all at once:
    ```
    systemctl is-active atoll-panel atoll-analyser atoll-is07 atoll-programout atoll-tv atoll-tv-web atoll-home \
-     atoll-music atoll-anc atoll-j2k atoll-h264 atoll-opus atoll-mjpeg atoll-vp9 atoll-tsrtp \
+     atoll-music atoll-music-nmos atoll-anc atoll-j2k atoll-h264 atoll-opus atoll-mjpeg atoll-vp9 atoll-tsrtp \
      atoll-fec atoll-sps atoll-multiview atoll-jxs-web
    ```
    (`atoll-hevc`, `atoll-jxs` and `atoll-music-ph` are deliberately **disabled** — superseded.)
@@ -68,7 +69,7 @@ Access: from a Mac `ssh atoll-pc` (192.168.4.85:2222, key auth). Pi from PC or M
 On the PC (WSL):
 ```
 sudo systemctl stop atoll-panel atoll-analyser atoll-is07 atoll-programout atoll-tv atoll-tv-web atoll-home \
-  atoll-music atoll-anc atoll-j2k atoll-h264 atoll-opus atoll-mjpeg atoll-vp9 atoll-tsrtp \
+  atoll-music atoll-music-nmos atoll-anc atoll-j2k atoll-h264 atoll-opus atoll-mjpeg atoll-vp9 atoll-tsrtp \
   atoll-fec atoll-sps atoll-multiview atoll-jxs-web
 cd ~/pi-nmos-st2110/deploy/nmos && sudo docker compose stop
 ssh dgperkins@10.10.10.1 sudo systemctl stop atoll-pi
@@ -107,6 +108,11 @@ still selectable — put it in `single`/`side`, not the default wall.
   (~6 Mbit/s) and the RTP codec feeds fit; uncompressed HD 2110-20 and JPEG XS (~100 Mbit/s CBR) do
   **not**, which is why the Pi stays 320×240 and JPEG XS runs as a local encode→decode. The analyser
   (`:8101`) exists to make this visible — watch the **pps** column, not Mbit/s.
+- **High-rate multicast receive needs a large socket buffer.** ST 2110-30 L24 at 1 ms ptime is
+  ~1000 pkt/s; the `udpsrc buffer-size=16 MB` request is denied unless `net.core.rmem_max` is
+  raised (WSL default 4 MB), so the socket overflows and drops packets before the jitterbuffer —
+  heavy audio dropouts. `deploy/sysctl/60-atoll-rmem.conf` raises it to 32 MB (persisted to
+  `/etc/sysctl.d`); it covers both the Music and Pi `raw` L24 feeds.
 - **`mpegtsmux alignment=7`** is why there is headroom: it bundles 7 TS packets per datagram. Live TV
   went 4,470 → 653 pps and Music 958 → 120 pps for the same bitrate. The analyser highlights any
   flow whose average datagram is under ~400 B, which means someone lost that setting.

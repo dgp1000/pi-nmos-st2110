@@ -68,7 +68,8 @@ streams separately, as the analyser does. Everything below is live at once, and 
 | Pi audio         | SMPTE **ST 2110-30** L24 / AES67 (RTP)      | `239.10.10.10:5004`  | Raspberry Pi 5                   |
 | Pi raw video     | SMPTE **ST 2110-20** uncompressed (RFC 4175)| `239.10.10.21:5006`  | Raspberry Pi 5                   |
 | Home videos      | HEVC over MPEG-TS                            | `239.10.10.22:5008`  | PC playlist                      |
-| Music            | HEVC over MPEG-TS                            | `239.10.10.30:5012`  | Mac "Now Playing", bridged       |
+| Music            | HEVC over MPEG-TS (NMOS source)             | `239.10.10.30:5012`  | Mac "Now Playing", bridged       |
+| Music audio      | SMPTE **ST 2110-30** L24 / AES67 (RTP)      | `239.10.10.32:5013`  | Mac "Now Playing", bridged       |
 | Test Reels       | HEVC over MPEG-TS                            | `239.10.10.31:5014`  | PC reels loop (NMOS-registered)  |
 | Ancillary        | SMPTE **ST 2110-40** ATC timecode (RFC 8331)| `239.10.10.50:5020`  | PC, locked to PTP                |
 | Live TV          | HEVC over MPEG-TS                            | `239.10.10.65:5010`  | HDHomeRun tuner, re-encoded      |

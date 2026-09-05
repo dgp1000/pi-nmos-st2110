@@ -169,7 +169,7 @@ WSL boots (WSL itself does not start with Windows). `~/atoll-run` is `ATOLL_RUN`
 | Flow analyser | `pc/analyser.py` | `atoll-analyser` | `:8101` | Raw-socket join of every group: pps, bitrate, average datagram, RTP pt/SSRC/loss. IS-07 receiver (tally column + event log). |
 | NMOS registry | `deploy/nmos/docker-compose.yml` → `nmos-registry` | docker | `:8080` HTTP, `:8081` ws, `:1883` MQTT | nmos-cpp IS-04 Registration + Query API, and the IS-09 System API (`/x-nmos/system/v1.0/global`) the Atoll nodes discover. |
 | NMOS virtual node | `nmos-virtnode` | docker | `:8090` HTTP, `:8091` ws | nmos-cpp example node: the receivers `v0`/`m0` the panel switches, plus its own IS-07 sources. |
-| AMWA testing tool | `nmos-testing` | docker | `:5000` | Conformance tester. The IS-09 System API client is now implemented node-side (see §8); running the suite against Atoll's own APIs is the remaining verification step. |
+| AMWA testing tool | `nmos-testing` | docker | `:5000` | Conformance tester. IS-04/05/07 pass; **IS-09-01** (System API server) and **IS-09-02** (multicast discovery — test_01/03/04) now pass against Atoll's stack (see §8 for the results + method). |
 | TV picker (standalone) | `pc/tv-web.py` | `atoll-tv-web` | `:8098` | Channel grid that writes `tv-channel`. Superseded by the panel's built-in remote; kept running. |
 
 ### Senders
@@ -722,6 +722,16 @@ Five things Atoll adds to the stock nmos-cpp stack:
    a live change is picked up without a restart; it also reads the `ptp` block (domain_number,
    announce_receipt_timeout) for reference. This closes the IS-09 node-behaviour gap — the nodes
    previously ignored the System API. Needs `avahi-utils` (for `avahi-browse`) on the host.
+
+   **Verified with AMWA `nmos-testing`.** IS-09-01 (System API server) passes — 5/5 applicable,
+   0 fail. IS-09-02 (node System-API discovery, multicast) passes the runnable tests against the
+   virtnode: test_01 (discover via multicast DNS), test_03 (correct versioned path) and test_04
+   (selects by advertised priority); test_02/02_01 (unicast DNS) stay disabled unless
+   `DNS_SD_MODE=unicast`, and test_05 is the manual check that the config takes effect — which our
+   client does by applying `is04.heartbeat_interval`. IS-09-02's discovery tests advertise a *mock*
+   System API and wait for the node to contact it, so the node under test is **restarted during the
+   advertisement window** (widen `DNS_SD_ADVERT_TIMEOUT` in nmos-testing's UserConfig to make the
+   timing comfortable) to trigger a fresh DNS-SD discovery.
 
 `is07client.py` is the shared receiver (`Is07Client(sources, port, on_state, on_status)`,
 `source_id(key)`, `device_id()`): reconnects with capped backoff, treats 20 s of silence as a

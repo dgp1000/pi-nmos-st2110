@@ -198,6 +198,13 @@ still selectable — put it in `single`/`side`, not the default wall.
   heartbeat=5s, ptp.domain=127`.
 - **Needs `avahi-utils`** (for `avahi-browse`) on the host — now in `install.sh`'s apt list. If the
   nodes log `configured fallback` instead of `DNS-SD`, avahi-browse is missing or avahi isn't running.
+- **Conformance (AMWA `nmos-testing`, `:5000`).** IS-09-01 (System API server) and IS-09-02
+  (multicast discovery: test_01/03/04) pass. IS-09-02 advertises a *mock* System API and waits for
+  the node to contact it, so run it against the virtnode and **restart `nmos-virtnode` during the
+  advert window** to force a fresh discovery: in the UI pick IS-09-02, Node host `172.18.0.2`,
+  System version `v1.0`, click Run, then `sudo docker restart nmos-virtnode`. Widen
+  `DNS_SD_ADVERT_TIMEOUT` (set `CONFIG.DNS_SD_ADVERT_TIMEOUT` in nmos-testing's UserConfig) for
+  comfortable timing. test_02 needs `DNS_SD_MODE=unicast`; test_05 is a manual check.
 
 ### Misc
 - **multiview-app.py** is an OPTIONAL per-tile renderer (each tile its own pipeline via

@@ -26,6 +26,8 @@ CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
 PORT       = int(CFG.get("MUSIC_NMOS_PORT") or 8093)
 ADVERTISE  = (CFG.get("NMOS_ADVERTISE_HOST") or "").strip() or "localhost"
 REGISTRY   = (CFG.get("NMOS_REGISTRY") or "").strip() or "http://localhost:8080"
+from atoll_system import SystemAPI   # IS-09 System API client
+SYS = SystemAPI(REGISTRY)   # IS-09: discover + honour the System API (heartbeat interval, ptp)
 REG        = f"{REGISTRY}/x-nmos/registration/v1.3"
 ISLAND_IP  = (CFG.get("ISLAND_PC_IP") or "10.10.10.2").strip()
 V_GRP, V_PORT = (CFG.get("MUSIC_GRP") or "").strip(), (CFG.get("MUSIC_PORT") or "").strip()
@@ -141,7 +143,7 @@ def register_all():
         return False
 def heartbeat():
     while True:
-        time.sleep(5)
+        time.sleep(SYS.heartbeat_interval)
         if not _registered["ok"]:
             register_all(); continue
         try:

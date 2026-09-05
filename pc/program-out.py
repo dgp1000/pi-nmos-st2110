@@ -57,6 +57,8 @@ DEVICE_ID = str(uuid.uuid5(NS, "atoll:programout:device"))
 RX_ID = str(uuid.uuid5(NS, "atoll:programout:receiver"))
 ADVERTISE_HOST = (CFG.get("NMOS_ADVERTISE_HOST") or "").strip() or "localhost"
 REGISTRY = (CFG.get("NMOS_REGISTRY") or "").strip() or "http://localhost:8080"
+from atoll_system import SystemAPI   # IS-09 System API client
+SYS = SystemAPI(REGISTRY)   # IS-09: discover + honour the System API (heartbeat interval, ptp)
 REG = f"{REGISTRY}/x-nmos/registration/v1.3"
 
 # ---- IS-05 connection state ----------------------------------------------------------------------
@@ -223,7 +225,7 @@ def register_all():
         print(f"  IS-04 registration failed ({e}) -- IS-05 API still serves locally", flush=True); return False
 def heartbeat():
     while True:
-        time.sleep(5)
+        time.sleep(SYS.heartbeat_interval)
         if not _registered["ok"]:
             register_all(); continue
         try:

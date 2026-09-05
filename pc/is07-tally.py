@@ -91,6 +91,8 @@ def poller():
 #  IS-04 registration
 # ---------------------------------------------------------------------------
 REGISTRY = CFG.get("NMOS_REGISTRY") or "http://localhost:8080"
+from atoll_system import SystemAPI   # IS-09 System API client
+SYS = SystemAPI(REGISTRY)   # IS-09: discover + honour the System API (heartbeat interval, ptp)
 REG = f"{REGISTRY}/x-nmos/registration/v1.3"
 ADVERTISE_HOST = CFG.get("NMOS_ADVERTISE_HOST") or ""
 
@@ -178,7 +180,7 @@ def heartbeat():
     """Registries garbage-collect a node that stops sending health. Re-register on 404, which is
     what a registry restart looks like from here."""
     while True:
-        time.sleep(5)
+        time.sleep(SYS.heartbeat_interval)
         if not _registered["ok"]:
             register_all()
             continue

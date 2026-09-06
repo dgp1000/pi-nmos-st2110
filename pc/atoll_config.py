@@ -6,7 +6,7 @@ source it in bash once and capture the resolved values. atoll.conf must sit alon
 (it does in both pc/ and ~/atoll-run/)."""
 import subprocess, os, functools
 
-_VARS = ("ATOLL_USER PI_USER ISLAND_PC_IP ISLAND_PI_IP ISLAND_IFACE PC_WIFI_IP "
+_VARS = ("ATOLL_USER PI_USER ISLAND_PC_IP ISLAND_PI_IP ISLAND_PI2_IP ISLAND_IFACE PC_WIFI_IP "
          "MAC_MUSIC_HOST MAC_MUSIC_PORT MAC_MUSIC_TS PANEL_PORT REELS_SDP_PORT "
          "HEVC_GRP HEVC_PORT HOME_GRP HOME_PORT MUSIC_GRP MUSIC_PORT "
          "HDHR_HOST HDHR_DEVICE_ID ATOLL_RUN TV_CHANNEL PROGRAMOUT_PORT "

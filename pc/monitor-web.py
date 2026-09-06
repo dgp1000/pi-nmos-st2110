@@ -27,6 +27,7 @@ _c = cfg.load()
 PORT = int(_c.get("PANEL_PORT", "8096"))
 FPS = 60000 / 1001
 PI_CLOCK = f"http://{_c.get('ISLAND_PI_IP', '10.10.10.1')}:8000/time"
+PI2_STATUS = f"http://{_c.get('ISLAND_PI2_IP', '10.10.10.3')}:8000/status"   # 2nd-Pi PTP follower readout (island-only; proxied for the iPad)
 NODE = "http://localhost:8090/x-nmos/node/v1.3"
 CONN = "http://localhost:8090/x-nmos/connection/v1.1/single"
 PROGRAMOUT = f"http://localhost:{_c.get('PROGRAMOUT_PORT') or '8092'}"   # Program Out software receiver (IS-05)
@@ -300,6 +301,14 @@ def pi_time():
     except Exception:
         return json.dumps({"epoch_ms": time.time() * 1000}).encode()
 
+def follower_status():
+    """Proxy the 2nd-Pi PTP follower's /status (island-only) for the iPad panel."""
+    try:
+        with urllib.request.urlopen(PI2_STATUS, timeout=2) as r:
+            return r.read()
+    except Exception:
+        return json.dumps({"state": "offline"}).encode()
+
 def music_state():
     """Proxy the Mac music server's now-playing state for the iPad panel."""
     try:
@@ -464,6 +473,8 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  button:active{transform:scale(.96)}
  #info{color:#777;font-size:min(1.9vw,2.2vh);margin-top:1vh;line-height:1.5}
  .gm{color:#fc0;font-weight:bold}
+ #finfo{font-size:min(1.7vw,2vh);margin-top:.4vh;line-height:1.4;color:#777}
+ .flock{color:#3c9;font-weight:bold} .fwarn{color:#fc0;font-weight:bold} .foff{color:#c84;font-weight:bold}
  #lay{margin-top:1vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
  #lay button{font-size:min(2.6vw,3vh);padding:.4em .8em;margin:.4vh .4vw}
  #progwrap{margin-top:.6vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
@@ -551,6 +562,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   <div id="fecwrap"><label>ST&nbsp;2022-1 loss</label><input id="fecloss" type="range" min="0" max="10" step="0.5" value="0" oninput="fecLoss(this.value)"><span id="fecval">0.0%</span><button id="fectog" onclick="fecToggle()">FEC</button></div>
   <div id="tvwrap"><div id="tvfav"></div><button id="tvtoggle" onclick="toggleTv()">&#128250; TV Channels</button><div id="tvchan"></div></div>
   <div id="info"></div>
+  <div id="finfo"></div>
   <div id="demo"><button id="demobtn" onclick="runDemo()">&#9654; Guided demo</button></div>
   <div id="lay">
    <span class="l2">OUTPUT &middot; MON 2</span>
@@ -769,6 +781,7 @@ async function sync(){
 }
 const p=(n,l=2)=>String(n).padStart(l,'0');
 const tcEl=document.getElementById('tc'), infoEl=document.getElementById('info');
+const finfoEl=document.getElementById('finfo');
 function renderInfo(){   // only when ptp changes (called from sync, ~3s) -- NOT per frame
   const role = ptp.state==='MASTER' ? '<span class="gm">GRANDMASTER</span>' : (ptp.state||'\\u2014');
   infoEl.innerHTML='PTP domain 0 &middot; '+role+' &middot; '+(ptp.gm||'\\u2014')+' &middot; offset '+(ptp.offset||'\\u2014')+' ns';
@@ -786,7 +799,16 @@ loadTv();       // populate the favorites row on load (no interval — avoids ha
 loadProgramOut(); setInterval(loadProgramOut,5000);
 fecRefresh();   setInterval(fecRefresh,4000);
 spsRefresh();   setInterval(spsRefresh,4000);
-sync(); setInterval(sync,3000); tick();
+async function followerSync(){
+  try{const r=await fetch('/follower',{cache:'no-store'});const d=await r.json();
+      let cls='foff',label=(d.state||'offline');
+      if(d.state==='SLAVE'){const ms=(d.offset||0)/1e6; if(Math.abs(ms)<2){cls='flock';label='LOCKED';}else{cls='fwarn';label='SLAVE';}}
+      else if(d.state==='UNCALIBRATED'||d.state==='LISTENING'){cls='fwarn';label=d.state;}
+      const off=(d.offset!=null&&d.state!=='offline')?(' &middot; offset '+((d.offset/1e6).toFixed(3))+' ms'):'';
+      finfoEl.innerHTML='PTP FOLLOWER (pi2) &middot; <span class="'+cls+'">'+label+'</span>'+off;
+  }catch(e){finfoEl.innerHTML='PTP FOLLOWER (pi2) &middot; <span class="foff">unreachable</span>';}
+}
+sync(); setInterval(sync,3000); followerSync(); setInterval(followerSync,3000); tick();
 
 // ---- Guided demo: a scripted tour that drives the existing controls with on-screen captions.
 let demoOn=false, demoAbort=false;
@@ -921,6 +943,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     self._send_json(json.dumps({"error": str(e)}).encode(), 500)
         elif parsed.path == "/time":
             self._send_json(pi_time())
+        elif parsed.path == "/follower":
+            self._send_json(follower_status())
         elif parsed.path.startswith("/music/"):
             action = parsed.path[len("/music/"):]
             if action == "state":

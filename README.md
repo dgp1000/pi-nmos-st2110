@@ -194,6 +194,7 @@ Linux box (the scripts are Linux; the WSL-specific bits are noted below).
 
 **Optional**
 - A **Raspberry Pi 5** as the ST 2110 source + PTP grandmaster (`pi/`).
+- A **2nd Pi** (any model) as a **PTP follower** that locks to the grandmaster — a two-node PTP demo with a live web readout (`pi/follow-all.sh`, autostart via `atoll-follower*.service`).
 - A **Mac** running a "Now Playing" `.ts` server for the music channel.
 - An **HDHomeRun** tuner for the Live TV channel.
 
@@ -305,8 +306,12 @@ pc/
   build-reels-loop.ps1  concatenate reels clips into one continuous loop
 pi/
   atoll-pi.conf       ← the Pi config (edit this)
-  launch-all.sh       Pi ST 2110-20/-30 generators + PTP grandmaster + web clock
+  launch-all.sh       Pi ST 2110-20/-30 generators + PTP grandmaster + web clock (waits for NTP)
   master-clock-web.py PTP web clock (:8000)
+  follow-all.sh       2nd-Pi PTP follower launcher (hybrid E2E) + web readout
+  follower-ptp.cfg    follower ptp4l config (hybrid E2E, software TS, median delay filter)
+  follower-clock-web.py follower offset/lock web readout (:8000)
+  atoll-follower*.service  systemd units so the follower auto-starts headless
 deploy/nmos/          the NMOS stack: docker-compose + registry.json + node.json
 docs/
   ARCHITECTURE.md     module-by-module system diagram: what each program does and how they connect

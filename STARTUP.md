@@ -146,6 +146,20 @@ still selectable — put it in `single`/`side`, not the default wall.
   `tv-send-seamless.py` (older inter-bridge design — ~0.7 s A/V skew + green frames) and
   `tv-send.sh` (restart-the-whole-pipeline — perfect single view, rebuilds the multiview on every
   channel change).
+- **2nd-Pi PTP follower demo.** `pi2-nmos` (a Pi 2B) at `10.10.10.3` on the island locks its clock to
+  the Pi 5 grandmaster. Two boot services: `atoll-follower` (`ptp4l -f ~/follower-ptp.cfg -i eth0`)
+  and `atoll-follower-web` (`:8000` readout). **Hybrid E2E** is the key — the island switch does IGMP
+  snooping with no querier, so the grandmaster's multicast *receive* membership ages out and it
+  ignores multicast `Delay_Req` (follower stuck `UNCALIBRATED`, `rx_Delay_Resp=0`); `hybrid_e2e 1`
+  sends `Delay_Req` **unicast** to the master, no grandmaster change needed. NTP is disabled on the
+  follower so PTP owns the clock (first lock *steps* it to the master's time). Accuracy ~±1–3 ms — the
+  Pi 2B USB-NIC software-timestamping ceiling (a Pi 4 native NIC / Pi 5 PHC would be tighter). Headless
+  and autonomous: static IP via netplan, both services enabled, re-locks unattended after any reboot.
+  **View:** `http://10.10.10.3:8000` from the PC (island-only, not on WiFi). Deploy to a fresh Pi:
+  `apt install -y linuxptp`, copy `pi/atoll-pi.conf` + `pi/follow-all.sh` + `pi/follower-ptp.cfg` +
+  `pi/follower-clock-web.py`, install the two `pi/atoll-follower*.service` units, `systemctl enable`.
+- **Grandmaster clock hardening.** `pi/launch-all.sh` waits up to 60 s for NTP sync before starting
+  `ptp4l`, so the Pi 5 never serves a stale boot-time (RTC/fake-hwclock) clock to the whole island.
 
 ### The wall
 - The cairo overlay is composed on the **GLib main loop**, double-buffered, blitted by region — not

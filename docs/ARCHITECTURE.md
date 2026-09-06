@@ -41,8 +41,10 @@ flowchart TB
     groups[("239.10.10.x groups<br/>16 flows, ~12k pps")]
   end
 
-  subgraph PI["RASPBERRY PI 5 (10.10.10.1)"]
-    pi["launch-all.sh<br/>ptp4l grandmaster<br/>ST 2110-30 L24 · ST 2110-20 raw<br/>master-clock-web.py :8000"]
+  subgraph PI["RASPBERRY PIs — the island clock"]
+    pi["Pi 5 · launch-all.sh<br/>ptp4l grandmaster<br/>ST 2110-30 L24 · ST 2110-20 raw<br/>master-clock-web.py :8000"]
+    pifollow["Pi 2 · atoll-follower<br/>ptp4l -s hybrid E2E<br/>web readout :8000"]
+    pifollow -. PTP lock .-> pi
   end
 
   subgraph RX["RECEIVERS / RENDERERS (PC / WSL)"]
@@ -129,6 +131,10 @@ flowchart LR
     pieth["eth0 10.10.10.1<br/>PTP grandmaster"]
   end
 
+  subgraph RPI2["Raspberry Pi 2 (pi2-nmos · follower)"]
+    pi2eth["eth0 10.10.10.3<br/>PTP follower (hybrid E2E)"]
+  end
+
   mon2["Monitor 2 2560x1440<br/>composite 1920x1080 → GPU upscale 3840x2160<br/>→ glimagesink 2560x1440 (WSLg 1.5x DPI)"]
 
   ipad2 <--> wifi
@@ -138,6 +144,7 @@ flowchart LR
   wsl --- eth2
   eth2 <--> sw
   sw <--> pieth
+  sw <--> pi2eth
   wsl --> mon2
 ```
 
@@ -217,6 +224,21 @@ Live TV), `atoll-jxs` (JPEG XS over TS at ~100 Mb/s, exceeds the WSL ceiling), `
 | gst L24 sender | `pi/launch-all.sh` | `atoll-pi` | 440 Hz sine → `rtpL24pay` 1 ms ptime → `239.10.10.10:5004`. |
 | gst raw sender | `pi/launch-all.sh` | `atoll-pi` | `videotestsrc` UYVY 320x240 59.94 → `rtpvrawpay` → `239.10.10.21:5006`. |
 | Web clock | `pi/master-clock-web.py` | `atoll-pi` | `:8000` page + `/time` JSON, PTP status via `pmc`. The panel proxies `/time` for its timecode. |
+| `ptp4l -s` follower (hybrid E2E) | `pi/follower-ptp.cfg` · `atoll-follower.service` | `atoll-pi` (Pi 2 · `10.10.10.3`) | 2nd-Pi **PTP follower** — locks its clock to the grandmaster. Hybrid E2E (unicast `Delay_Req`); software timestamping; NTP off so PTP owns the clock. |
+| Follower web readout | `pi/follower-clock-web.py` · `atoll-follower-web.service` | `atoll-pi` (Pi 2) | `:8000` — live offset-from-master, servo state (`LISTENING`→`UNCALIBRATED`→`SLAVE`), GM identity, convergence sparkline. |
+
+**PTP follower demo (2nd Pi).** A second Pi (a Pi 2B here — any Pi works) joins the island at
+`10.10.10.3` and locks its clock to the Pi 5 grandmaster, demonstrating PTP between two nodes. The
+one wrinkle: the island switch does **IGMP snooping with no querier**, so the grandmaster's *receive*
+membership ages out and it silently ignores multicast `Delay_Req` — the follower reaches
+`UNCALIBRATED` with `rx_Delay_Resp = 0` and never measures path delay. **Hybrid E2E** (unicast
+`Delay_Req` straight to the master) sidesteps this with no grandmaster change. The Pi 2B has no PTP
+hardware clock and a USB-attached NIC, so software-timestamping convergence sits around **±1–3 ms**
+(a Pi 4's native NIC would be far tighter; a Pi 5's PHC tighter still). Both `atoll-follower*`
+services are enabled for boot and the static IP persists via netplan, so the follower is fully
+**autonomous** — verified re-locking unattended across both its own and the grandmaster's reboots.
+`pi/launch-all.sh` now waits for NTP sync before starting `ptp4l`, so the grandmaster never anchors
+to a stale boot-time clock and serves the wrong time to the rig.
 
 ---
 

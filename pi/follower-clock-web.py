@@ -44,6 +44,15 @@ def ptp_status():
         pass
     return info
 
+def do_resync():
+    """Demo hook: restart the PTP follower service so it visibly re-converges (LISTENING -> UNCALIBRATED -> SLAVE)."""
+    try:
+        subprocess.Popen(["systemctl", "restart", "atoll-follower"])
+        return b'{"ok": true}'
+    except Exception as e:
+        import json as _j
+        return _j.dumps({"ok": False, "error": str(e)}).encode()
+
 PAGE = """<!doctype html><html><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
@@ -127,6 +136,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/status"):
             self._send(json.dumps(ptp_status()).encode(), "application/json")
+        elif self.path.startswith("/resync"):
+            self._send(do_resync(), "application/json")
         else:
             self._send(PAGE.encode("utf-8"), "text/html; charset=utf-8")
 

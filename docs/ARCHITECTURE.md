@@ -240,6 +240,18 @@ services are enabled for boot and the static IP persists via netplan, so the fol
 `pi/launch-all.sh` now waits for NTP sync before starting `ptp4l`, so the grandmaster never anchors
 to a stale boot-time clock and serves the wrong time to the rig.
 
+**`slaveOnly` is production-realistic, not a demo shortcut.** The follower runs `slaveOnly 1`
+because that is exactly how a real ST 2110 *endpoint* is configured — cameras, encoders, receivers
+and multiviewers all run slave-only. They consume the reference time to stamp and align media; they
+must never win BMCA and become the facility clock (a cheap endpoint oscillator feeding the whole
+plant is the failure you design out — the safe failure is "no master → holdover → alarm", never
+"an endpoint quietly becomes the reference"). Only the dedicated, good grandmasters are
+master-capable and contend in BMCA. What *is* demo-specific here is the per-Pi web readout that
+makes the offset visible: production endpoints lock silently, and PTP lock health is monitored
+**centrally** (management/monitoring TLVs, the grandmaster's own dashboards, SNMP, an NMOS timing
+monitor), not via a web page on each box. The panel's one-line follower status is closer to how
+you'd really surface it — one pane watching grandmaster + endpoint health at a glance.
+
 ---
 
 ## 4. Configuration: one file, three readers

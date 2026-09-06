@@ -152,7 +152,11 @@ still selectable — put it in `single`/`side`, not the default wall.
   snooping with no querier, so the grandmaster's multicast *receive* membership ages out and it
   ignores multicast `Delay_Req` (follower stuck `UNCALIBRATED`, `rx_Delay_Resp=0`); `hybrid_e2e 1`
   sends `Delay_Req` **unicast** to the master, no grandmaster change needed. NTP is disabled on the
-  follower so PTP owns the clock (first lock *steps* it to the master's time). Accuracy ~±1–3 ms — the
+  follower so PTP owns the clock (first lock *steps* it to the master's time). `slaveOnly 1` is
+  **production-realistic** — every real ST 2110 endpoint (camera, encoder, receiver) runs slave-only so
+  it can never win BMCA and become the facility clock; only dedicated grandmasters are master-capable.
+  The per-Pi web readout is the demo bit (real endpoints lock silently; lock health is monitored
+  centrally) — the panel's follower status line is the closer-to-production view. Accuracy ~±1–3 ms — the
   Pi 2B USB-NIC software-timestamping ceiling (a Pi 4 native NIC / Pi 5 PHC would be tighter). Headless
   and autonomous: static IP via netplan, both services enabled, re-locks unattended after any reboot.
   **View:** `http://10.10.10.3:8000` from the PC (island-only, not on WiFi). Deploy to a fresh Pi:

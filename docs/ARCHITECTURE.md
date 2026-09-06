@@ -713,12 +713,15 @@ flowchart TB
 
   progout["program-out.py<br/>node atoll-program-out · device · receiver 'Program Out'<br/>IS-05 Connection API :8092"] -- "POST /resource · health 5 s" --> reg
   musicnmos["music-nmos.py<br/>node atoll-music · device · 2 senders (video + L24 audio)<br/>SDP per sender :8093"] -- "POST /resource · health 5 s" --> reg
+  audiomap["audiomap-nmos.py<br/>node atoll-audiomap · device · cm-ctrl control<br/>IS-08 Channel Mapping API :8094"] -- "POST /resource · health 5 s" --> reg
+  panel -- "IS-08 map/activations (route audio channels)" --> audiomap
+  audiomap -- "writes ~/atoll-run/audiomap · restarts" --> amapper["audiomapper.sh<br/>localhost L24 → audiomixmatrix → MUSIC_AUDIO_GRP"]
   is07 -. "IS-09: discover System API via DNS-SD (_nmos-system._tcp)<br/>heartbeat from global · also program-out + music-nmos" .-> reg
   panel -- "IS-05 PATCH staged (route any island flow)" --> progout
   progout -- "writes ~/atoll-run/programout" --> ro["output-render.sh<br/>program layout"]
 ```
 
-Five things Atoll adds to the stock nmos-cpp stack:
+Six things Atoll adds to the stock nmos-cpp stack:
 
 1. **A control surface that issues real IS-05.** The panel's switch between the Pi raw flow and
    the Home videos flow is an actual `master_enable` toggle on the node's receivers `v0` and `m0`.
@@ -776,6 +779,20 @@ Five things Atoll adds to the stock nmos-cpp stack:
    System API and wait for the node to contact it, so the node under test is **restarted during the
    advertisement window** (widen `DNS_SD_ADVERT_TIMEOUT` in nmos-testing's UserConfig to make the
    timing comfortable) to trigger a fresh DNS-SD discovery.
+
+6. **Audio channel mapping (IS-08).** `audiomap-nmos.py` (`:8094`) serves the AMWA IS-08 v1.0
+   Channel Mapping API for the music audio and registers a node/device with a `cm-ctrl` control so
+   it is discoverable. It exposes one input (the music stereo) and one output (the ST 2110-30 L24
+   sender), and a controller maps the output's channels to the input's — straight stereo, swap
+   L↔R, dual-mono, or muting a channel (IS-08 is channel *routing*, one input channel per output
+   channel or silence — not mixing). Activations are immediate or scheduled (relative/absolute) via
+   `POST /map/activations`. The map is made **audible** by an IS-08 processor in the audio path:
+   `music-channel.sh` sends its decoded L24 to `localhost` instead of the multicast group, and
+   `audiomapper.sh` (a tiny `udpsrc → rtpL24depay → audiomixmatrix → rtpL24pay → udpsink` hop)
+   applies the routing matrix — translated from the active map — and re-sends on the real
+   `MUSIC_AUDIO_GRP` the renderer plays. Only that hop restarts on a map change, so re-routing is
+   instant and never disturbs the music video tile (which would stall the multiview compositor). The
+   panel drives it with Stereo / Swap L↔R / Mono (L) / Mute R buttons and a guided-demo step.
 
 `is07client.py` is the shared receiver (`Is07Client(sources, port, on_state, on_status)`,
 `source_id(key)`, `device_id()`): reconnects with capped backoff, treats 20 s of silence as a

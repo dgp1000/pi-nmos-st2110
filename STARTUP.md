@@ -218,6 +218,18 @@ still selectable — put it in `single`/`side`, not the default wall.
 - Quick check: `curl -s :8092/programout` shows the active essence, sender_id, transport_params and any
   pending scheduled activation; `curl :8080/x-nmos/query/v1.3/receivers/<id>` shows the live subscription.
 
+### IS-08 (audio channel mapping)
+- **Music audio has an IS-08 Channel Mapping API** (`audiomap-nmos.py`, `:8094`, IS-04-registered with
+  a cm-ctrl control). A controller maps the output's 2 channels to the input's — straight stereo, swap
+  L↔R, dual-mono, mute a channel (IS-08 routes channels, it does not mix). It's made audible by an IS-08
+  processor in the path: `music-channel.sh` sends decoded L24 to `localhost:MUSIC_AUDIO_PREMAP_PORT` and
+  `audiomapper.sh` (`atoll-audiomapper`) applies the routing matrix (`~/atoll-run/audiomap`) and re-sends
+  on `MUSIC_AUDIO_GRP`. Only the mapper restarts on a map change → **instant** re-route, music video tile
+  untouched (no compositor stall). Activations: immediate or scheduled via `POST /map/activations`.
+- Panel: **MUSIC AUDIO · IS-08 CHANNEL MAP** row (Stereo / Swap L↔R / Mono (L) / Mute R). Best shown in
+  Music + single view. Quick check: `curl :8094/audiomap` (preset, matrix, pending) or the standard
+  `curl :8094/x-nmos/channelmapping/v1.0/map/active`.
+
 ### IS-09
 - Every Atoll node discovers the **System API** and honours its global config. `atoll_system.py`
   (shared by `is07-tally.py`, `program-out.py`, `music-nmos.py`) browses `_nmos-system._tcp` over

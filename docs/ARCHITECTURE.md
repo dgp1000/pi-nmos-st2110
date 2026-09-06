@@ -655,10 +655,16 @@ Four engineering choices to know about:
 - **Tally is a real IS-07 receiver.** Each tile subscribes to `source_id(key)` (UUID5 of the key,
   derived identically in the emitter). The panel is polled *only* while the WebSocket is down, and
   the flag then drops its "NMOS IS-07" line so the fallback is visible.
-- **Only the FEC tile is software-decoded.** `nvh264dec` tears the ST 2022-1-recovered FEC stream on
-  the live wall (torn bands from the recovered / reordered H.264). It is clean in an isolated decode
-  and clean on `avdec_h264`, so it is a hardware-decode fault under real wall load, not a bad stream.
-  The FEC tile alone therefore uses `avdec_h264` (~25 % of a core for one 720p 3 Mbps tile); every
+- **Only the FEC tile is software-decoded — diagnosed (6 Sep 2026).** Clean at zero loss on either
+  decoder; the tearing is a *residual-loss* effect (what ST 2022-1 can't fully rebuild — the demo's
+  point). Two mechanisms: (1) the sender carries SPS/PPS inband (`config-interval=-1`), so a lost
+  SPS/PPS frame deconfigures `nvh264dec` (`Should configure decoder first`, negotiation failure) →
+  torn frames — fixed by re-inserting cached SPS/PPS with `h264parse config-interval=1` on the FEC
+  tile (fatal nvdec gap errors 2/14s → 0 at 5 % loss); (2) NVDEC has no macroblock error concealment,
+  so residual corrupt frames still glitch, whereas `avdec_h264` conceals them — the graceful
+  degradation this FEC demo exists to show. So the FEC tile uses `avdec_h264` on purpose (~25 % of a
+  core for one 720p 3 Mbps tile), with `config-interval=1`; `nvh264dec`+`config-interval=1` is a
+  viable GPU alternative if glitch-not-conceal is acceptable. Every
   other H.264 tile (tsrtp, 2022-7, h264) stays on `nvh264dec`. The old blunt workaround
   `WALL_SW_DECODE=true` forced *all* H.264 tiles to software (~186 % CPU) and is off in production:
   software-decoding every tile oversubscribes the WSLg display and steps the GPU-decoded Live TV tile

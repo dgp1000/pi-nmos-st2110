@@ -170,8 +170,17 @@ still selectable — put it in `single`/`side`, not the default wall.
   on the streaming thread. Drawing it inline cost median 25 ms against a 33 ms frame budget and
   judder on every tile; this is median 1.6 ms. Anything you draw must sit **inside a blitted region**
   or it silently never reaches the screen.
-- `WALL_SW_DECODE=true` is **required**, not optional: `nvh264dec` mishandles the FEC stream and
-  breaks the picture up. Software decode costs ~186% CPU. Root cause still undiagnosed.
+- **The FEC tile decodes in software (`avdec_h264`) by design — root cause diagnosed 6 Sep 2026.**
+  Under residual loss (what FEC can't fully rebuild — the demo's whole point) the recovered H.264 has
+  gaps. The sender carries SPS/PPS inband (`config-interval=-1`); when loss eats the frame carrying
+  them, `nvh264dec` loses configuration (`Should configure decoder first` / `Failed to negotiate`) and
+  tears. `h264parse config-interval=1` on the receiver re-inserts cached SPS/PPS and kills those fatal
+  errors (2/14s→0 at 5% loss) — now in wall-view.py. But NVDEC still has no macroblock error
+  concealment, so residual corrupt frames glitch, whereas `avdec_h264` conceals them smoothly — which
+  is exactly the graceful degradation the FEC demo shows. So the FEC tile uses `avdec` on purpose
+  (~25% of a core for one 720p tile), not as a workaround. `nvh264dec`+`config-interval=1` is a viable
+  GPU alternative if you accept glitch-not-conceal. `WALL_SW_DECODE=true` (all tiles → software,
+  ~186% CPU) stays only as a blunt diagnostic; it is **not** required and is off in production.
 - Native 2560×1440 was tried and reverted — it cost ~2 extra cores (531% vs 333%) and dropped frames.
   `WALL_W`/`WALL_H` stay at 1920×1080.
 - Trust **Task Manager** for GPU load on this rig, not WSL's `nvidia-smi` — the latter is blind to

@@ -150,14 +150,22 @@ def tile(i, src):
                     udp(g, cp, caps=FECSTREAM) + f"! identity name=fg0_{i} ! queue ! fd{i}.fec_0 " +
                     udp(g, rp, caps=FECSTREAM) + f"! identity name=fg1_{i} ! queue ! fd{i}.fec_1 " +
                     f"fd{i}. ! {FEC_JB} ! identity name=fjb{i} ! rtpmp2tdepay ")
-        # The 2022-1-recovered FEC stream tears on nvh264dec in the live wall (hardware decode of the
-        # recovered/reordered H.264 shows torn frames -- clean in isolation, clean on avdec; David
-        # confirmed 4 Sep 2026). Decode the FEC tile in software; it is one 720p 3 Mbps tile, ~25% of
-        # a core, so it does not re-oversubscribe the way WALL_SW_DECODE=true (all H.264 tiles) did.
-        # tsrtp and the other H.264 tiles decode fine on the GPU via H264DEC.
+        # FEC tile decodes in SOFTWARE (avdec_h264), on purpose -- root cause diagnosed 6 Sep 2026:
+        # under residual loss (what FEC can't fully rebuild, the point of the demo) the recovered
+        # H.264 has gaps. (1) The sender carries SPS/PPS inband (config-interval=-1); when loss eats
+        # the frame carrying them, nvh264dec loses configuration -> "Should configure decoder first"
+        # / "Failed to negotiate" -> torn frames. Re-inserting cached SPS/PPS on the receiver with
+        # h264parse config-interval=1 fixes THAT (fatal nvdec gap errors: 2/14s -> 0 at 5% loss).
+        # (2) But NVDEC still has no macroblock error concealment, so residual corrupt frames glitch;
+        # avdec_h264 conceals them smoothly -- which is exactly the graceful degradation this FEC
+        # demo exists to show. So avdec is the right decoder here, not merely a workaround. It is one
+        # 720p 3 Mbps tile (~25% of a core), nowhere near the WALL_SW_DECODE=true all-tiles
+        # oversubscription. tsrtp and the other H.264 tiles decode fine on the GPU via H264DEC.
+        # (nvh264dec + config-interval=1 is a viable GPU alternative if you accept glitch-not-conceal.)
+        parse = "h264parse config-interval=1" if src == "fec" else "h264parse"
         vdec = "avdec_h264 ! videoconvert" if src == "fec" else H264DEC
         return (head + f"! tsdemux name={d} "
-                f"{d}. ! h264parse ! queue ! {vdec} " + scale(i) +
+                f"{d}. ! {parse} ! queue ! {vdec} " + scale(i) +
                 f"{d}. ! audio/mpeg ! queue ! decodebin ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")
     if src == "sps":     # both paths funnelled; the jitterbuffer drops the duplicate copy
         d = f"d{i}"

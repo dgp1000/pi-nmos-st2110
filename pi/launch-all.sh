@@ -10,6 +10,15 @@ pkill -x ptp4l 2>/dev/null; pkill -x gst-launch-1.0 2>/dev/null; pkill -f master
 sleep 1
 
 echo "[1] PTP grandmaster ($ISLAND_IFACE)..."
+# Wait for NTP to correct the clock BEFORE starting ptp4l. If the Pi booted with a stale
+# RTC/fake-hwclock time, ptp4l would anchor to it and serve the WRONG time to the whole rig
+# until manually restarted -- even after NTP later fixes the system clock. So sync first.
+echo "    waiting up to 60s for NTP sync..."
+for i in $(seq 1 30); do
+  [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = "yes" ] && break
+  sleep 2
+done
+echo "    NTP synchronized: $(timedatectl show -p NTPSynchronized --value 2>/dev/null); clock now: $(date)"
 setsid ptp4l -i "$ISLAND_IFACE" -S >"$L/ptp4l.log" 2>&1 </dev/null &
 
 echo "[2] ST 2110-30 audio sender -> $PI_AUDIO_GRP:$PI_AUDIO_PORT ..."

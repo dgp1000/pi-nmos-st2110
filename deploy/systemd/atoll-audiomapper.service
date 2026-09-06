@@ -1,0 +1,13 @@
+[Unit]
+Description=Atoll IS-08 audio channel-mapping processor (music audio localhost hop -> MUSIC_AUDIO_GRP)
+After=network-online.target atoll-music.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env bash /home/david/pi-nmos-st2110/pc/audiomapper.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

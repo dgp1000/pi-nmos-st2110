@@ -1,0 +1,13 @@
+[Unit]
+Description=Atoll IS-08 Audio Channel Mapping API (music audio) -> :8094
+After=network-online.target atoll-audiomapper.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/david/pi-nmos-st2110/pc/audiomap-nmos.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

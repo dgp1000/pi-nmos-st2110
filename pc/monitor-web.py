@@ -33,6 +33,7 @@ CONN = "http://localhost:8090/x-nmos/connection/v1.1/single"
 PROGRAMOUT = f"http://localhost:{_c.get('PROGRAMOUT_PORT') or '8092'}"   # Program Out software receiver (IS-05)
 QUERY = "http://localhost:8080/x-nmos/query/v1.3"
 MAC_MUSIC = f"http://{_c.get('MAC_MUSIC_HOST', '192.168.6.159')}:{_c.get('MAC_MUSIC_PORT', '8008')}"   # Mac "Now Playing"; proxied for the iPad
+AUDIOMAP = f"http://localhost:{_c.get('AUDIOMAP_NMOS_PORT') or '8094'}"   # IS-08 Channel Mapping API for the music audio
 
 SOURCES = {
     "jxs":  {"label": "easy-nmos-node/receiver/m0"},   # PC JPEG-XS island flow
@@ -65,6 +66,29 @@ def _safe_json(url, timeout=3):
         return http_json(url, timeout=timeout)
     except Exception:
         return None
+
+# ----------------------------- IS-08 audio channel mapping ---------------
+_AMAP_PRESETS = {
+    "stereo": {"0": {"input": "in1", "channel_index": 0}, "1": {"input": "in1", "channel_index": 1}},
+    "swap":   {"0": {"input": "in1", "channel_index": 1}, "1": {"input": "in1", "channel_index": 0}},
+    "monoL":  {"0": {"input": "in1", "channel_index": 0}, "1": {"input": "in1", "channel_index": 0}},
+    "muteR":  {"0": {"input": "in1", "channel_index": 0}, "1": {"input": None, "channel_index": None}},
+}
+def audiomap_state():
+    with urllib.request.urlopen(f"{AUDIOMAP}/audiomap", timeout=3) as r:
+        return r.read()
+def audiomap_set(preset, secs=0):
+    """POST an IS-08 channel-map activation for a named preset (immediate, or scheduled if secs>0)."""
+    action = {"out1": _AMAP_PRESETS.get(preset, _AMAP_PRESETS["stereo"])}
+    if secs and int(secs) > 0:
+        act = {"mode": "activate_scheduled_relative", "requested_time": f"{int(secs)}:0"}
+    else:
+        act = {"mode": "activate_immediate"}
+    body = json.dumps({"activation": act, "action": action}).encode()
+    req = urllib.request.Request(f"{AUDIOMAP}/x-nmos/channelmapping/v1.0/map/activations",
+                                 data=body, method="POST", headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        return r.status
 
 # ----------------------------- IS-05 control -----------------------------
 def _programout_state():
@@ -494,6 +518,9 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #progbtns{display:flex;flex-wrap:wrap;justify-content:center;margin-left:.6vw}
  #progbtns button{font-size:min(2vw,2.3vh);padding:.35em .7em;margin:.3vh .3vw;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
  #progbtns button.on{background:#093;color:#000;border-color:#0f0;font-weight:bold}
+ #amapwrap{margin-top:.6vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
+ #amapwrap button{font-size:min(2vw,2.3vh);padding:.35em .7em;margin:.3vh .3vw;background:#0a1014;border:1px solid #1a2a3a;color:#9cc;border-radius:6px}
+ #amapwrap button.on{background:#39c;color:#000;border-color:#0cf;font-weight:bold}
  #schedtog{font-size:min(1.8vw,2.1vh);padding:.35em .7em;margin:.3vh .5vw;background:#141410;border:1px solid #3a3a1a;color:#cc9;border-radius:6px}
  #schedtog.on{background:#fc0;color:#000;border-color:#fc0;font-weight:bold}
  #progpend{font-size:min(1.8vw,2.1vh);color:#fc0;margin-left:.5vw;font-weight:bold}
@@ -603,6 +630,13 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="mshuf" onclick="music('shuffle')" title="shuffle">&#128256;</button>
    <span id="mnp">&mdash;</span>
   </div>
+  <div id="amapwrap">
+   <span class="l2">MUSIC AUDIO &middot; IS-08 CHANNEL MAP</span>
+   <button data-amap="stereo" onclick="setAudiomap('stereo')">Stereo</button>
+   <button data-amap="swap" onclick="setAudiomap('swap')">Swap L&harr;R</button>
+   <button data-amap="monoL" onclick="setAudiomap('monoL')">Mono (L)</button>
+   <button data-amap="muteR" onclick="setAudiomap('muteR')">Mute R</button>
+  </div>
   <div id="slotwrap">
    <span class="l2">MULTIVIEW TILES</span>
    <div id="slots">
@@ -681,6 +715,17 @@ g.querySelectorAll('.star').forEach(b=>b.onclick=function(){tvFav(b.getAttribute
 function toggleTv(){tvOpen=!tvOpen;document.getElementById('tvchan').style.display=tvOpen?'grid':'none';loadTv();}
 async function tvPick(ch){try{await fetch('/tv/set?ch='+encodeURIComponent(ch),{cache:'no-store'});}catch(e){}setTimeout(loadTv,400);}
 async function tvFav(ch,on){try{await fetch('/tv/fav?ch='+encodeURIComponent(ch)+'&on='+on,{cache:'no-store'});}catch(e){}loadTv();}
+async function loadAudiomap(){
+  try{
+    const d=await(await fetch("/audiomap/state",{cache:"no-store"})).json();
+    const cur=d.preset;
+    document.querySelectorAll("#amapwrap button").forEach(b=>b.classList.toggle("on", b.getAttribute("data-amap")===cur));
+  }catch(e){}
+}
+async function setAudiomap(preset){
+  try{await fetch("/audiomap/set?preset="+encodeURIComponent(preset),{cache:"no-store"});}catch(e){}
+  setTimeout(loadAudiomap,300);
+}
 async function musicState(){
   const np=document.getElementById('mnp');
   try{const r=await fetch('/music/state',{cache:'no-store'});const d=await r.json();
@@ -823,6 +868,7 @@ function tick(){   // per-frame: ONLY the timecode text (cheap); no innerHTML, n
 refreshState(); setInterval(refreshState,5000);
 loadNmos();     setInterval(loadNmos,6000);
 musicState();   setInterval(musicState,4000);
+loadAudiomap(); setInterval(loadAudiomap,3000);
 loadTv();       // populate the favorites row on load (no interval — avoids hammering the HDHR)
 loadProgramOut(); setInterval(loadProgramOut,2000);
 fecRefresh();   setInterval(fecRefresh,4000);
@@ -873,6 +919,8 @@ async function runDemo(){
     await step("Program Out: a software NMOS receiver you route any flow to over IS-05. The picture follows the connection \u2014 here, Live TV.", async function(){ await go("/layout?mode=program"); await go("/programout/route?essence=hevc"); }, 8000);
     await step("Route a different flow over the same IS-05 connection \u2014 Home videos now.", function(){ return go("/programout/route?essence=jxs"); }, 7000);
     await step("IS-05 activations can be scheduled, not just immediate \u2014 arming a take for +5s; the connection fires on the clock.", function(){ return go("/programout/route?essence=hevc&secs=5"); }, 9000);
+    await step("IS-08 audio channel mapping \u2014 routing the music's stereo channels live. Swapping left and right\u2026", async function(){ await go("/take?src=music"); await go("/layout?mode=single"); await go("/audiomap/set?preset=swap"); }, 8000);
+    await step("\u2026and back to straight stereo.", function(){ return go("/audiomap/set?preset=stereo"); }, 6000);
     await step("Live TV: changing channel opens the new channel on a second tuner first, then cuts \u2014 no black frame.", async function(){ await go("/layout?mode=single"); await go("/take?src=hevc"); }, 5000);
     let chans=[];
     try{ const d=await(await fetch("/tv/lineup",{cache:"no-store"})).json(); chans=((d.favorites&&d.favorites.length?d.favorites:d.channels)||[]).map(function(c){return c.num;}); }catch(e){}
@@ -931,6 +979,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             try:
                 with urllib.request.urlopen(f"{PROGRAMOUT}/programout", timeout=3) as r:
                     self._send_json(r.read())
+            except Exception as e:
+                self._send_json(json.dumps({"error": str(e)}).encode(), 502)
+        elif parsed.path == "/audiomap/state":
+            try:
+                self._send_json(audiomap_state())
+            except Exception as e:
+                self._send_json(json.dumps({"error": str(e)}).encode(), 502)
+        elif parsed.path == "/audiomap/set":
+            _q = parse_qs(parsed.query)
+            preset = _q.get("preset", ["stereo"])[0]
+            try:
+                secs = int(_q.get("secs", ["0"])[0] or 0)
+            except ValueError:
+                secs = 0
+            try:
+                audiomap_set(preset, secs)
+                self._send_json(json.dumps({"preset": preset, "secs": secs}).encode())
             except Exception as e:
                 self._send_json(json.dumps({"error": str(e)}).encode(), 502)
         elif parsed.path == "/programout/route":

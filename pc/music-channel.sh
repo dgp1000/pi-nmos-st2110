@@ -12,7 +12,7 @@ MACBASE="http://$MAC_MUSIC_HOST:$MAC_MUSIC_PORT"
 mac_up() { curl -s --max-time 4 -o /dev/null "$MACBASE/state"; }
 
 # Live bridge: Mac H.264 TS -> NVDEC -> 720p30 -> NVENC HEVC -> video-only TS on MUSIC_GRP,
-# plus AAC -> ST 2110-30 L24 (rtpL24pay) on MUSIC_AUDIO_GRP (audio-follows-source).
+# plus AAC -> L24 to the localhost audiomapper (IS-08), which re-sends on MUSIC_AUDIO_GRP.
 # Returns (non-zero) when the stream drops or the Mac goes away, so the loop re-checks.
 run_bridge() {
   gst-launch-1.0 -q \
@@ -23,7 +23,7 @@ run_bridge() {
       ! h265parse config-interval=-1 ! queue ! mux. \
     d. ! queue ! aacparse ! avdec_aac ! audioconvert ! audioresample ! audio/x-raw,format=S24BE,rate=48000,channels=2 \
       ! queue ! rtpL24pay pt=96 min-ptime=1000000 max-ptime=1000000 \
-      ! udpsink host=$MUSIC_AUDIO_GRP port=$MUSIC_AUDIO_PORT multicast-iface="$IFACE" auto-multicast=true ttl=$MCAST_TTL \
+      ! udpsink host=127.0.0.1 port=${MUSIC_AUDIO_PREMAP_PORT:-5015} \
     mpegtsmux name=mux alignment=7 ! queue \
       ! udpsink host=$MUSIC_GRP port=$MUSIC_PORT multicast-iface="$IFACE" auto-multicast=true ttl=$MCAST_TTL
 }

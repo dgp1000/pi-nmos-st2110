@@ -18,7 +18,7 @@ import http.server, socketserver, json, time, uuid, threading, urllib.request, u
 from urllib.parse import urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-NEED = ["NMOS_REGISTRY", "NMOS_ADVERTISE_HOST", "MUSIC_NMOS_PORT", "ISLAND_PC_IP",
+NEED = ["NMOS_REGISTRY", "NMOS_ADVERTISE_HOST", "MUSIC_NMOS_PORT", "ISLAND_PC_IP", "PTP_GMID",
         "MUSIC_GRP", "MUSIC_PORT", "MUSIC_AUDIO_GRP", "MUSIC_AUDIO_PORT"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
@@ -32,6 +32,8 @@ REG        = f"{REGISTRY}/x-nmos/registration/v1.3"
 ISLAND_IP  = (CFG.get("ISLAND_PC_IP") or "10.10.10.2").strip()
 V_GRP, V_PORT = (CFG.get("MUSIC_GRP") or "").strip(), (CFG.get("MUSIC_PORT") or "").strip()
 A_GRP, A_PORT = (CFG.get("MUSIC_AUDIO_GRP") or "").strip(), (CFG.get("MUSIC_AUDIO_PORT") or "").strip()
+_GMID = (CFG.get("PTP_GMID") or "").strip()
+_REFCLK = (f"a=ts-refclk:ptp=IEEE1588-2008:{_GMID}:0\r\n" if _GMID else "a=ts-refclk:ptp=IEEE1588-2008:traceable\r\n")
 
 NS = uuid.UUID("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
 u = lambda s: str(uuid.uuid5(NS, s))
@@ -60,7 +62,7 @@ def _sdp_audio():
         "a=rtpmap:96 L24/48000/2\r\n"
         "a=ptime:1\r\n"
         "a=mediaclk:direct=0\r\n"
-        "a=ts-refclk:ptp=IEEE1588-2008:traceable\r\n")
+        + _REFCLK)
 def _sdp_video():
     v = int(time.time())
     return (

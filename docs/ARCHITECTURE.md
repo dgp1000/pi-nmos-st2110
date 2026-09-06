@@ -713,6 +713,7 @@ flowchart TB
 
   progout["program-out.py<br/>node atoll-program-out · device · receiver 'Program Out'<br/>IS-05 Connection API :8092"] -- "POST /resource · health 5 s" --> reg
   musicnmos["music-nmos.py<br/>node atoll-music · device · 2 senders (video + L24 audio)<br/>SDP per sender :8093"] -- "POST /resource · health 5 s" --> reg
+  pinmos["pi-nmos.py<br/>node atoll-pi · device · 2 senders (ST 2110-20 raw + -30 L24)<br/>standards SDPs :8095"] -- "POST /resource · health 5 s" --> reg
   audiomap["audiomap-nmos.py<br/>node atoll-audiomap · device · cm-ctrl control<br/>IS-08 Channel Mapping API :8094"] -- "POST /resource · health 5 s" --> reg
   panel -- "IS-08 map/activations (route audio channels)" --> audiomap
   audiomap -- "writes ~/atoll-run/audiomap · restarts" --> amapper["audiomapper.sh<br/>localhost L24 → audiomixmatrix → MUSIC_AUDIO_GRP"]
@@ -721,7 +722,7 @@ flowchart TB
   progout -- "writes ~/atoll-run/programout" --> ro["output-render.sh<br/>program layout"]
 ```
 
-Six things Atoll adds to the stock nmos-cpp stack:
+Seven things Atoll adds to the stock nmos-cpp stack:
 
 1. **A control surface that issues real IS-05.** The panel's switch between the Pi raw flow and
    the Home videos flow is an actual `master_enable` toggle on the node's receivers `v0` and `m0`.
@@ -793,6 +794,20 @@ Six things Atoll adds to the stock nmos-cpp stack:
    `MUSIC_AUDIO_GRP` the renderer plays. Only that hop restarts on a map change, so re-routing is
    instant and never disturbs the music video tile (which would stall the multiview compositor). The
    panel drives it with Stereo / Swap L↔R / Mono (L) / Mute R buttons and a guided-demo step.
+
+7. **Standards-complete SDPs for the real ST 2110 senders (IS-04 manifests + ST 2110-21).**
+   `pi-nmos.py` (`:8095`) advertises the Pi's genuine ST 2110 essences — ST 2110-20 raw video
+   (RFC 4175) and ST 2110-30 L24 audio — which were previously on the wire but invisible to NMOS.
+   It registers a node/device with two senders and serves a standards-complete SDP for each. The
+   video SDP carries the full **ST 2110-20** media format (`sampling=YCbCr-4:2:2`, `width`/`height`,
+   `exactframerate`, `depth`, `TCS`, `colorimetry`, `PM=2110GPM`, `SSN=ST2110-20:2017`) and the
+   **ST 2110-21** sender-pacing declaration (`TP=2110TPW`). Both SDPs carry `a=mediaclk:direct=0`
+   and `a=ts-refclk:ptp=IEEE1588-2008:<gmid>:0` — the real PTP grandmaster EUI-64 and domain, tying
+   the essence to the same clock the follower demo locks to. **Honesty on -21:** these are software
+   gst senders with no hardware packet shaping, so they are declared **Wide** (`2110TPW`), not
+   Narrow — true `2110TPN` needs a hardware-paced NIC; the SDP states what the sender actually is.
+   `music-nmos.py`'s L24 SDP was likewise upgraded from a `traceable` reference clock to the specific
+   grandmaster id. The senders and their SDPs show up in the panel's IS-04/05 inspector.
 
 `is07client.py` is the shared receiver (`Is07Client(sources, port, on_state, on_status)`,
 `source_id(key)`, `device_id()`): reconnects with capped backoff, treats 20 s of silence as a

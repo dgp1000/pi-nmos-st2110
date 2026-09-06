@@ -218,6 +218,17 @@ still selectable — put it in `single`/`side`, not the default wall.
 - Quick check: `curl -s :8092/programout` shows the active essence, sender_id, transport_params and any
   pending scheduled activation; `curl :8080/x-nmos/query/v1.3/receivers/<id>` shows the live subscription.
 
+### SDPs / ST 2110-21 (sender descriptions)
+- **The Pi's real ST 2110 senders are advertised with standards-complete SDPs** by `pi-nmos.py`
+  (`atoll-pi-nmos`, `:8095`): ST 2110-20 raw video (`/sdp/pi-video.sdp`) and ST 2110-30 L24 audio
+  (`/sdp/pi-audio.sdp`). The video SDP has the full -20 `a=fmtp` (sampling/size/exactframerate/depth/
+  colorimetry/PM/SSN) plus the ST 2110-21 pacing type `TP=2110TPW`; both carry `a=mediaclk:direct=0`
+  and `a=ts-refclk:ptp=...:<gmid>:0` (grandmaster EUI-64 in `PTP_GMID`, else `traceable`). They
+  register as node `atoll-pi` and appear in the panel's IS-04/05 inspector.
+- **-21 honesty:** the gst software senders aren't hardware-paced, so they're declared **Wide**
+  (`2110TPW`), not Narrow. Change `TP=` in `pi-nmos.py` only if the pacing actually changes.
+- Quick check: `curl :8095/sdp/pi-video.sdp` and `curl :8095/sdp/pi-audio.sdp`; `curl :8095/status`.
+
 ### IS-08 (audio channel mapping)
 - **Music audio has an IS-08 Channel Mapping API** (`audiomap-nmos.py`, `:8094`, IS-04-registered with
   a cm-ctrl control). A controller maps the output's 2 channels to the input's — straight stereo, swap

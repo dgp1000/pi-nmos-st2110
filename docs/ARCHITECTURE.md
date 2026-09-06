@@ -740,12 +740,22 @@ Five things Atoll adds to the stock nmos-cpp stack:
    registrar, not an extension of the virtnode. The L24 SDP is standards-clean 2110-30; the
    video is HEVC-in-MPEG-TS/UDP advertised for discovery + Program-Out routing (which matches
    by multicast ip:port, not the SDP, since NMOS has no raw-TS/UDP transport URN).
-4. **A routable software receiver.** `program-out.py` registers its own node/device/receiver and
-   serves the IS-05 v1.1 Connection API on `:8092`. PATCHing its receiver with the transport
-   parameters of any island flow and activating writes `~/atoll-run/programout`, which the
-   renderer's `program` layout follows — a real transport-params connection that drives the
-   output, and discoverable, so an external NMOS controller can route it too. This is the
-   receiver-side counterpart to the gate in point 1.
+4. **A routable software receiver — full IS-05.** `program-out.py` registers its own
+   node/device/receiver and serves the IS-05 v1.1 Connection API on `:8092`. Activating its
+   receiver writes `~/atoll-run/programout`, which the renderer's `program` layout follows — a real
+   connection that drives the picture, discoverable so an external NMOS controller can route it too.
+   A controller can connect it three ways: **transport_params** (a multicast_ip + destination_port
+   directly); **sender_id** (name a discovered NMOS sender — program-out looks it up in the registry
+   Query API, fetches its SDP via `manifest_href`, parses the multicast/port, and routes to it: the
+   canonical "connect this receiver to that sender", verified against the music sender →
+   `239.10.10.30:5012`); and any of the three **activation modes** — `activate_immediate`,
+   `activate_scheduled_relative` ("in N seconds") and `activate_scheduled_absolute` (at a TAI time),
+   the scheduled ones armed by a timer that fires the staged→active move on the clock (a new PATCH
+   supersedes a pending activation). On activate/deactivate it updates the receiver's IS-04
+   `subscription` (`sender_id`, `active`) and re-registers, so the registry and any controller see the
+   connection — the genuinely **two-way** half of IS-05, versus the one-way *gate* in point 1. The
+   panel exposes this with per-flow route buttons, a "Schedule +5s" toggle (routes then fire on the
+   clock, with a pending badge) and a guided-demo step.
 5. **An IS-09 System API client.** Every Atoll node now honours the System API. `atoll_system.py`
    (shared by `is07-tally.py`, `program-out.py` and `music-nmos.py`) discovers it via DNS-SD
    (`_nmos-system._tcp`, using `avahi-browse`; lowest advertised `pri` wins), falls back to the

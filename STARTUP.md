@@ -206,6 +206,18 @@ still selectable — put it in `single`/`side`, not the default wall.
   line disappears and the analyser header flips to "no events", while tally keeps working via the
   fallback.
 
+### IS-05 (receiver-side)
+- **Program Out is a full IS-05 receiver** (`program-out.py`, `:8092`, registered in IS-04). A
+  controller PATCHes `/staged` and activates; the `program` layout renders whatever it's connected to.
+  Three ways to route it: **transport_params** (multicast_ip+port), **sender_id** (names a discovered
+  sender — resolved via the registry Query API + the sender's SDP `manifest_href`), and the three
+  **activation modes** (`activate_immediate`, `activate_scheduled_relative`, `activate_scheduled_absolute`;
+  scheduled ones fire on a timer). On activate/deactivate it updates the receiver's IS-04 `subscription`
+  and re-registers, so controllers/registry see the connection (two-way IS-05). Panel: per-flow route
+  buttons + a **"Schedule +5s"** toggle (armed routes fire on the clock, with a pending badge).
+- Quick check: `curl -s :8092/programout` shows the active essence, sender_id, transport_params and any
+  pending scheduled activation; `curl :8080/x-nmos/query/v1.3/receivers/<id>` shows the live subscription.
+
 ### IS-09
 - Every Atoll node discovers the **System API** and honours its global config. `atoll_system.py`
   (shared by `is07-tally.py`, `program-out.py`, `music-nmos.py`) browses `_nmos-system._tcp` over

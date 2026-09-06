@@ -97,7 +97,7 @@ async function poll(){
     const se=document.getElementById('state');
     const oe=document.getElementById('offset');
     let cls='cold';
-    if(st==='SLAVE'){ cls=(off!==null&&Math.abs(off)<100000)?'locked':'warm'; }
+    if(st==='SLAVE'){ cls=(off!==null&&Math.abs(off)<2000000)?'locked':'warm'; }
     else if(st==='UNCALIBRATED'){ cls='warm'; }
     se.textContent = st==='SLAVE' ? (cls==='locked'?'LOCKED':'SLAVE') : st;
     se.className=cls;

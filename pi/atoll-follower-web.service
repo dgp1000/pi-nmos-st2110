@@ -1,0 +1,13 @@
+[Unit]
+Description=Atoll PTP follower web readout (offset/lock convergence) -> :8000
+After=atoll-follower.service
+Wants=atoll-follower.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/dgperkins/follower-clock-web.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

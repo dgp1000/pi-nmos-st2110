@@ -1,0 +1,15 @@
+[Unit]
+Description=Atoll PTP follower — lock this Pi's clock to the Pi 5 grandmaster (hybrid E2E)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# PTP is the sole clock authority on the follower; stop NTP fighting it.
+ExecStartPre=-/usr/bin/timedatectl set-ntp false
+ExecStart=/usr/sbin/ptp4l -f /home/dgperkins/follower-ptp.cfg -i eth0 -m
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

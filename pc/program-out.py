@@ -10,8 +10,17 @@ IS-05 connection actually drives the picture, which is the point.
 
 Two-way NMOS: this receiver registers in IS-04 (node/device/receiver + heartbeat) so it is
 discoverable, and serves the IS-05 v1.1 Connection API for a single receiver on PROGRAMOUT_PORT.
-The essence/codec is derived from WHICH known flow the (address, port) belongs to (CATALOG below),
-so a plain transport_params PATCH is enough -- no non-standard hints required.
+
+Receiver-side IS-05, three ways a controller can drive it:
+  * **transport_params** -- PATCH a multicast_ip + destination_port directly.
+  * **sender_id** -- PATCH the id of a discovered NMOS sender; we look it up in the registry Query
+    API, fetch its SDP (manifest_href), parse the multicast/port, and route to it. Canonical NMOS
+    "connect this receiver to that sender".
+  * **scheduled activation** -- activate_immediate, activate_scheduled_relative ("in N seconds") and
+    activate_scheduled_absolute (at a TAI time); a timer fires the staged->active move on schedule.
+On activation we also update the receiver's IS-04 `subscription` (sender_id + active) and re-register,
+so an external controller/registry sees the connection -- genuinely two-way. The essence/codec is
+derived from WHICH known flow the (address, port) belongs to (CATALOG below).
 """
 import http.server, socketserver, json, time, uuid, threading, urllib.request, urllib.error, os, subprocess
 from urllib.parse import urlparse
@@ -28,8 +37,6 @@ PORT = int(CFG.get("PROGRAMOUT_PORT") or 8092)
 KNOB = os.path.join(RUN, "programout")
 
 # Routable island flows: (multicast, port) -> (essence key output-render knows, label, media_type).
-# The essence is how the renderer decodes it; deriving it from the wire address means a plain IS-05
-# transport_params PATCH (multicast_ip + destination_port) is a complete, standards-clean connection.
 def _grp(k):
     return (CFG.get(f"{k}_GRP") or "").strip(), (CFG.get(f"{k}_PORT") or "").strip()
 CATALOG = {}   # (ip, port) -> dict
@@ -60,6 +67,7 @@ REGISTRY = (CFG.get("NMOS_REGISTRY") or "").strip() or "http://localhost:8080"
 from atoll_system import SystemAPI   # IS-09 System API client
 SYS = SystemAPI(REGISTRY)   # IS-09: discover + honour the System API (heartbeat interval, ptp)
 REG = f"{REGISTRY}/x-nmos/registration/v1.3"
+QUERY = f"{REGISTRY}/x-nmos/query/v1.3"
 
 # ---- IS-05 connection state ----------------------------------------------------------------------
 def _blank_params():
@@ -72,10 +80,58 @@ STATE = {
                 "transport_params": _blank_params()},
     "essence": None, "label": None,   # what the active params resolve to (for the renderer + readout)
 }
-_lock = threading.Lock()
+_lock = threading.RLock()
+_pending = {"timer": None}      # a scheduled activation waiting to fire
+_SUB = (False, None)           # last (active, sender_id) pushed to IS-04, so we only re-register on change
 
 def _tai(when):
     return f"{int(when) + 37}:{int((when % 1) * 1e9):09d}"
+
+def _dur_to_secs(v):
+    """IS-05 'sec:nsec' duration (activate_scheduled_relative requested_time) -> float seconds."""
+    try:
+        if v is None: return 0.0
+        if isinstance(v, (int, float)): return float(v)
+        sec, _, nsec = str(v).partition(":")
+        return int(sec or 0) + int(nsec or 0) / 1e9
+    except Exception:
+        return 0.0
+
+def _tai_to_unix(v):
+    """IS-05 TAI 'sec:nsec' absolute time -> unix seconds (TAI is UTC + 37 leap seconds)."""
+    try:
+        sec, _, nsec = str(v).partition(":")
+        return (int(sec or 0) - 37) + int(nsec or 0) / 1e9
+    except Exception:
+        return time.time()
+
+def _resolve_sender(sender_id):
+    """IS-05 sender_id routing: look the sender up in the registry Query API, fetch its SDP
+    (manifest_href), and return (multicast_ip, port). Canonical 'connect receiver to sender'."""
+    try:
+        with urllib.request.urlopen(f"{QUERY}/senders/{sender_id}", timeout=4) as r:
+            snd = json.load(r)
+        mh = snd.get("manifest_href")
+        if not mh:
+            print(f"  sender {sender_id[:8]} has no manifest_href -- cannot resolve transport", flush=True)
+            return None
+        with urllib.request.urlopen(mh, timeout=4) as r:
+            sdp = r.read().decode("utf-8", "replace")
+        ip = port = None
+        for ln in sdp.splitlines():
+            ln = ln.strip()
+            if ln.startswith("c=IN IP4"):
+                ip = ln.split()[2].split("/")[0]
+            elif ln.startswith("m="):
+                parts = ln.split()
+                if len(parts) >= 2:
+                    port = parts[1]
+        if ip and port:
+            print(f"  resolved sender {sender_id[:8]} -> {ip}:{port} (via SDP)", flush=True)
+            return (ip, port)
+    except Exception as e:
+        print(f"  sender_id resolve failed for {sender_id}: {e}", flush=True)
+    return None
 
 def _resolve_and_write():
     """Derive the essence from the active transport_params and publish the knob the renderer reads."""
@@ -95,11 +151,25 @@ def _resolve_and_write():
     os.replace(tmp, KNOB)
     print(f"{time.strftime('%T')} program-out -> {line.strip()}", flush=True)
 
-def _apply_activation(staged):
-    """Move staged -> active on an immediate activation, filling activation_time."""
-    now = time.time()
+def _update_subscription():
+    """Reflect the active connection into the IS-04 receiver's `subscription` and re-register (bump
+    version) so a controller/registry sees this receiver is connected -- the two-way half of IS-05."""
+    global _SUB
+    active = bool(STATE["active"]["master_enable"])
+    sid = STATE["active"]["sender_id"] if active else None
+    if (active, sid) == _SUB:
+        return
+    _SUB = (active, sid)
+    try:
+        _post("receiver", _receiver_resource())
+        print(f"  IS-04 subscription -> active={active} sender={ (sid[:8] if sid else None) }", flush=True)
+    except Exception as e:
+        print(f"  subscription re-register failed: {e}", flush=True)
+
+def _apply_activation(staged, activation_time=None):
+    """Move staged -> active, fill activation_time, resolve essence, push the IS-04 subscription."""
     act = dict(staged.get("activation") or {})
-    act["activation_time"] = _tai(now)
+    act["activation_time"] = activation_time or _tai(time.time())
     STATE["active"] = {
         "master_enable": bool(staged.get("master_enable")),
         "sender_id": staged.get("sender_id"),
@@ -107,6 +177,27 @@ def _apply_activation(staged):
         "transport_params": staged.get("transport_params") or _blank_params(),
     }
     _resolve_and_write()
+    _update_subscription()
+
+def _cancel_pending():
+    t = _pending.get("timer")
+    if t is not None:
+        t.cancel()
+        _pending["timer"] = None
+
+def _schedule_activation(fire_at_unix):
+    """Arm a timer to fire the staged->active move at fire_at_unix (a scheduled IS-05 activation)."""
+    _cancel_pending()
+    delay = max(0.0, fire_at_unix - time.time())
+    def _fire():
+        with _lock:
+            _pending["timer"] = None
+            at = STATE["staged"]["activation"].get("activation_time")
+            _apply_activation(STATE["staged"], at)
+    t = threading.Timer(delay, _fire)
+    t.daemon = True
+    _pending["timer"] = t
+    t.start()
 
 # ---- HTTP: IS-05 Connection API (single receiver) ------------------------------------------------
 CONN_BASE = "/x-nmos/connection/v1.1"
@@ -148,11 +239,12 @@ class H(http.server.BaseHTTPRequestHandler):
             if p == f"{CONN_BASE}/single/receivers/{RX_ID}/transporttype":
                 return self._send(200, "urn:x-nmos:transport:rtp")
             if p == "/programout":   # convenience readout for the panel
+                pend = STATE["staged"]["activation"] if _pending.get("timer") is not None else None
                 return self._send(200, {"receiver_id": RX_ID, "master_enable": STATE["active"]["master_enable"],
                                         "essence": STATE["essence"], "label": STATE["label"],
                                         "sender_id": STATE["active"]["sender_id"],
                                         "transport_params": STATE["active"]["transport_params"],
-                                        "catalog": CATALOG_BY_ESSENCE})
+                                        "pending": pend, "catalog": CATALOG_BY_ESSENCE})
         self._send(404, {"code": 404, "error": "Not Found", "debug": p})
 
     def do_PATCH(self):
@@ -168,13 +260,41 @@ class H(http.server.BaseHTTPRequestHandler):
             s = STATE["staged"]
             if "master_enable" in patch: s["master_enable"] = bool(patch["master_enable"])
             if "sender_id" in patch: s["sender_id"] = patch["sender_id"]
-            if "transport_params" in patch: s["transport_params"] = _norm_params(patch["transport_params"])
+            patch_has_mcast = False
+            if "transport_params" in patch:
+                s["transport_params"] = _norm_params(patch["transport_params"])
+                patch_has_mcast = bool(s["transport_params"][0].get("multicast_ip"))
+                # routing by raw transport without naming a sender clears any prior sender association
+                if patch_has_mcast and "sender_id" not in patch:
+                    s["sender_id"] = None
+            # IS-05 sender_id routing: a sender is named in THIS patch and no multicast is given in
+            # THIS patch -> resolve the sender's SDP for its transport (ignoring any stale staged tp).
+            if patch.get("sender_id") and not patch_has_mcast:
+                res = _resolve_sender(patch["sender_id"])
+                if res:
+                    s["transport_params"] = _blank_params()
+                    s["transport_params"][0]["multicast_ip"] = res[0]
+                    s["transport_params"][0]["destination_port"] = res[1]
+                else:
+                    return self._send(400, {"code": 400, "error": "Bad Request",
+                                            "debug": f"could not resolve sender_id {patch['sender_id']}"})
             act = patch.get("activation") or {}
             mode = act.get("mode")
-            s["activation"] = {"mode": mode, "requested_time": act.get("requested_time"), "activation_time": None}
+            req_t = act.get("requested_time")
+            s["activation"] = {"mode": mode, "requested_time": req_t, "activation_time": None}
+            _cancel_pending()   # any new PATCH supersedes a pending scheduled activation
             if mode == "activate_immediate":
                 _apply_activation(s)
                 s["activation"]["activation_time"] = STATE["active"]["activation"]["activation_time"]
+            elif mode == "activate_scheduled_relative":
+                fire = time.time() + _dur_to_secs(req_t)
+                s["activation"]["activation_time"] = _tai(fire)
+                _schedule_activation(fire)
+            elif mode == "activate_scheduled_absolute":
+                fire = _tai_to_unix(req_t)
+                s["activation"]["activation_time"] = req_t
+                _schedule_activation(fire)
+            # mode None -> stage only (and any pending scheduled activation was cancelled above)
             return self._send(200, s)
 
     def do_OPTIONS(self):
@@ -195,6 +315,14 @@ def _post(kind, data):
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=5) as r:
         return r.status
+def _receiver_resource():
+    return {"id": RX_ID, "version": _ver(), "label": "Program Out",
+            "description": "Route any island flow here over IS-05", "tags": {},
+            "device_id": DEVICE_ID, "transport": "urn:x-nmos:transport:rtp",
+            "interface_bindings": [], "format": "urn:x-nmos:format:video",
+            "caps": {"media_types": sorted({f[3] for f in _FLOWS})},
+            "subscription": {"sender_id": STATE["active"]["sender_id"] if STATE["active"]["master_enable"] else None,
+                             "active": bool(STATE["active"]["master_enable"])}}
 def _resources():
     node = {"id": NODE_ID, "version": _ver(), "label": "atoll-program-out",
             "description": "Atoll Program Out -- routable software receiver", "tags": {},
@@ -207,13 +335,7 @@ def _resources():
               "senders": [], "receivers": [RX_ID],
               "controls": [{"href": f"http://{ADVERTISE_HOST}:{PORT}{CONN_BASE}",
                             "type": "urn:x-nmos:control:sr-ctrl/v1.1", "authorization": False}]}
-    receiver = {"id": RX_ID, "version": _ver(), "label": "Program Out",
-                "description": "Route any island flow here over IS-05", "tags": {},
-                "device_id": DEVICE_ID, "transport": "urn:x-nmos:transport:rtp",
-                "interface_bindings": [], "format": "urn:x-nmos:format:video",
-                "caps": {"media_types": sorted({f[3] for f in _FLOWS})},
-                "subscription": {"sender_id": None, "active": False}}
-    return [("node", node), ("device", device), ("receiver", receiver)]
+    return [("node", node), ("device", device), ("receiver", _receiver_resource())]
 _registered = {"ok": False}
 def register_all():
     try:

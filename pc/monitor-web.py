@@ -71,18 +71,22 @@ def _programout_state():
     with urllib.request.urlopen(f"{PROGRAMOUT}/programout", timeout=3) as r:
         return json.loads(r.read())
 
-def programout_route(essence):
+def programout_route(essence, secs=0):
     """PATCH the Program Out receiver's IS-05 /staged to the chosen flow and activate. essence
-    "none" (or unknown) disconnects. The multicast/port come from the receiver's own catalog."""
+    "none" (or unknown) disconnects. secs>0 uses activate_scheduled_relative (fires in N seconds)
+    instead of activate_immediate. The multicast/port come from the receiver's own catalog."""
     st = _programout_state()
     rid = st["receiver_id"]; cat = st.get("catalog") or {}
     if essence in cat:
         f = cat[essence]
         body = {"master_enable": True,
-                "transport_params": [{"multicast_ip": f["ip"], "destination_port": int(f["port"])}],
-                "activation": {"mode": "activate_immediate"}}
+                "transport_params": [{"multicast_ip": f["ip"], "destination_port": int(f["port"])}]}
     else:
-        body = {"master_enable": False, "activation": {"mode": "activate_immediate"}}
+        body = {"master_enable": False}
+    if secs and int(secs) > 0:
+        body["activation"] = {"mode": "activate_scheduled_relative", "requested_time": f"{int(secs)}:0"}
+    else:
+        body["activation"] = {"mode": "activate_immediate"}
     req = urllib.request.Request(f"{PROGRAMOUT}/x-nmos/connection/v1.1/single/receivers/{rid}/staged",
                                  data=json.dumps(body).encode(), method="PATCH",
                                  headers={"Content-Type": "application/json"})
@@ -490,6 +494,9 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #progbtns{display:flex;flex-wrap:wrap;justify-content:center;margin-left:.6vw}
  #progbtns button{font-size:min(2vw,2.3vh);padding:.35em .7em;margin:.3vh .3vw;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
  #progbtns button.on{background:#093;color:#000;border-color:#0f0;font-weight:bold}
+ #schedtog{font-size:min(1.8vw,2.1vh);padding:.35em .7em;margin:.3vh .5vw;background:#141410;border:1px solid #3a3a1a;color:#cc9;border-radius:6px}
+ #schedtog.on{background:#fc0;color:#000;border-color:#fc0;font-weight:bold}
+ #progpend{font-size:min(1.8vw,2.1vh);color:#fc0;margin-left:.5vw;font-weight:bold}
  .l2{color:#5a5;font-size:min(1.7vw,2vh);letter-spacing:.12em;margin-right:.6vw}
  #music{margin-top:.8vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
  #music button{font-size:min(3vw,3.4vh);padding:.3em .7em;margin:.3vh .4vw}
@@ -585,6 +592,8 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   <div id="progwrap">
    <span class="l2">PROGRAM OUT &middot; IS-05 ROUTE</span>
    <div id="progbtns"></div>
+   <button id="schedtog" onclick="toggleSched(this)">&#9201; Schedule +5s: off</button>
+   <span id="progpend"></span>
   </div>
   <div id="music">
    <span class="l2">MUSIC</span>
@@ -694,10 +703,19 @@ async function loadProgramOut(){
     html+=`<button data-ess="none" class="${(!cur)?'on':''}">Clear</button>`;
     box.innerHTML=html;
     box.querySelectorAll("button").forEach(b=>b.onclick=function(){routeProgram(b.getAttribute("data-ess"));});
+    const pend=document.getElementById("progpend");
+    if(pend) pend.textContent = d.pending ? "\u23F3 scheduled activation pending\u2026" : "";
   }catch(e){}
 }
+let SCHED=0;
+function toggleSched(btn){
+  SCHED = SCHED ? 0 : 5;
+  btn.textContent = SCHED ? ('\u23F1 Schedule +'+SCHED+'s: ON') : '\u23F1 Schedule +5s: off';
+  btn.classList.toggle('on', !!SCHED);
+}
 async function routeProgram(ess){
-  try{await fetch("/programout/route?essence="+encodeURIComponent(ess),{cache:"no-store"});}catch(e){}
+  const q = "/programout/route?essence="+encodeURIComponent(ess)+(SCHED?("&secs="+SCHED):"");
+  try{await fetch(q,{cache:"no-store"});}catch(e){}
   setTimeout(loadProgramOut,300);
 }
 function hlLayout(m){ document.querySelectorAll('#lay button').forEach(b=>b.classList.remove('on')); const b=document.getElementById(LAYBTN[m]); if(b) b.classList.add('on'); }
@@ -806,7 +824,7 @@ refreshState(); setInterval(refreshState,5000);
 loadNmos();     setInterval(loadNmos,6000);
 musicState();   setInterval(musicState,4000);
 loadTv();       // populate the favorites row on load (no interval — avoids hammering the HDHR)
-loadProgramOut(); setInterval(loadProgramOut,5000);
+loadProgramOut(); setInterval(loadProgramOut,2000);
 fecRefresh();   setInterval(fecRefresh,4000);
 spsRefresh();   setInterval(spsRefresh,4000);
 async function followerSync(){
@@ -854,6 +872,7 @@ async function runDemo(){
     await step("Take another source \u2014 the tally moves with it.", function(){ return go("/take?src=jxs"); }, 6000);
     await step("Program Out: a software NMOS receiver you route any flow to over IS-05. The picture follows the connection \u2014 here, Live TV.", async function(){ await go("/layout?mode=program"); await go("/programout/route?essence=hevc"); }, 8000);
     await step("Route a different flow over the same IS-05 connection \u2014 Home videos now.", function(){ return go("/programout/route?essence=jxs"); }, 7000);
+    await step("IS-05 activations can be scheduled, not just immediate \u2014 arming a take for +5s; the connection fires on the clock.", function(){ return go("/programout/route?essence=hevc&secs=5"); }, 9000);
     await step("Live TV: changing channel opens the new channel on a second tuner first, then cuts \u2014 no black frame.", async function(){ await go("/layout?mode=single"); await go("/take?src=hevc"); }, 5000);
     let chans=[];
     try{ const d=await(await fetch("/tv/lineup",{cache:"no-store"})).json(); chans=((d.favorites&&d.favorites.length?d.favorites:d.channels)||[]).map(function(c){return c.num;}); }catch(e){}
@@ -915,10 +934,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json(json.dumps({"error": str(e)}).encode(), 502)
         elif parsed.path == "/programout/route":
-            ess = parse_qs(parsed.query).get("essence", ["none"])[0]
+            _q = parse_qs(parsed.query)
+            ess = _q.get("essence", ["none"])[0]
             try:
-                programout_route(ess)
-                self._send_json(json.dumps({"routed": ess}).encode())
+                secs = int(_q.get("secs", ["0"])[0] or 0)
+            except ValueError:
+                secs = 0
+            try:
+                programout_route(ess, secs)
+                self._send_json(json.dumps({"routed": ess, "secs": secs}).encode())
             except Exception as e:
                 self._send_json(json.dumps({"error": str(e)}).encode(), 502)
         elif parsed.path == "/demo/caption":

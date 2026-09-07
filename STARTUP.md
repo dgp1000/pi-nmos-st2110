@@ -238,6 +238,18 @@ still selectable — put it in `single`/`side`, not the default wall.
   (`2110TPW`), not Narrow. Change `TP=` in `pi-nmos.py` only if the pacing actually changes.
 - Quick check: `curl :8095/sdp/pi-video.sdp` and `curl :8095/sdp/pi-audio.sdp`; `curl :8095/status`.
 
+### Production switcher
+- **`switcher` layout** (`switcher-view.py`) is a PROGRAM/PREVIEW vision mixer on monitor 2: PROGRAM
+  fullscreen (red), the cued PREVIEW as an inset (green), with **Cut** and **Dissolve** takes. The
+  display is **decoupled** from the sources (persistent compositor + window pulling the two buses over
+  `intervideosrc`; each source is its own pipeline via `intervideosink`), so **changing the PREVIEW
+  source never disturbs PROGRAM** and a TAKE is a seamless alpha animation. Panel SWITCHER row: pick a
+  PREVIEW source, toggle Cut/Dissolve, hit TAKE. Knob: `~/atoll-run/switcher`
+  (`srcA srcB transition rate take_seq`; take_seq parity = which bus is PGM).
+- Gotchas: only one source per bus is decoded, so PROGRAM audio is program-follow (switched on take,
+  not on preview change). `switcher-view.py` logs a 5 s `DIAG` line (frames/5s + pad alphas) to
+  `/tmp/output-view.log` for debugging without the display.
+
 ### Loudness (EBU R128)
 - **`loudness.py` (`atoll-loudness`, `:8104`)** measures the **program** audio (follows the panel's
   active source, and Program Out in program layout) to ITU-R BS.1770-4 / EBU R128: Momentary,

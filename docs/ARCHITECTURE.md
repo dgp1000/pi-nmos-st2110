@@ -675,6 +675,27 @@ Four engineering choices to know about:
   4-up is compressed tiles only -- the CPU-decoded Pi `raw` tile oversubscribes the wall too; see
   STARTUP.)
 
+### 7.3a `switcher-view.py` — production switcher (PROGRAM / PREVIEW)
+
+A vision-mixer layout for monitor 2, decoupled so cueing a preview never touches what is on air —
+the way a real switcher must behave. It is two parts bridged by `intervideosrc`/`intervideosink`:
+
+- a **persistent display pipeline** that owns the compositor, the cairo PROGRAM/PREVIEW overlay and
+  the `glimagesink` window and **never restarts**. It pulls the two buses over `intervideosrc`
+  (channels `busA`/`busB`), tees each to a **fullscreen** and an **inset** compositor pad, so PROGRAM
+  (fullscreen, red border) and PREVIEW (inset, green border) are just which pads are shown. A **TAKE**
+  is a pure alpha/zorder animation: **CUT** is instant, **DISSOLVE** fades the incoming fullscreen up
+  over `rate` seconds. Seamless — the picture never drops.
+- two **independent source pipelines** (`decode -> intervideosink channel=busA/busB`). Changing a
+  source restarts **only that source pipeline**; the display and the on-air PROGRAM keep running, and
+  `intervideosrc` shows black for that one bus until the new source arrives.
+
+Driven by `~/atoll-run/switcher` = `"<srcA> <srcB> <transition> <rate> <take_seq>"`; the take-seq
+**parity** picks PGM (even=A, odd=B), so a TAKE just bumps the seq (animate) while the two source
+identities stay put. PROGRAM audio follows the on-air source via a subprocess, switched only when the
+PGM source changes. The panel's SWITCHER row picks the PREVIEW source, toggles Cut/Dissolve and fires
+TAKE (`/switcher/{state,pvw,take,trans}`). Sources: Live TV, Home videos, Music, TS-over-RTP, H.264.
+
 ### 7.3 `meter-view.py` — single view
 
 Same construction as the wall for one source: `build()` returns a pipeline string per source key

@@ -527,6 +527,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #info{color:#777;font-size:min(1.9vw,2.2vh);margin-top:1vh;line-height:1.5}
  .gm{color:#fc0;font-weight:bold}
  #finfo{font-size:min(1.7vw,2vh);margin-top:.4vh;line-height:1.4;color:#777}
+ #loud{font-size:min(1.7vw,2vh);margin-top:.4vh;line-height:1.4;color:#777}
  #fresync{margin-top:.6vh} #resyncbtn{font-size:min(1.6vw,1.9vh);padding:.35em .8em;cursor:pointer}
  .flock{color:#3c9;font-weight:bold} .fwarn{color:#fc0;font-weight:bold} .foff{color:#c84;font-weight:bold}
  #lay{margin-top:1vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
@@ -632,6 +633,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   <div id="tvwrap"><div id="tvfav"></div><button id="tvtoggle" onclick="toggleTv()">&#128250; TV Channels</button><div id="tvchan"></div></div>
   <div id="info"></div>
   <div id="finfo"></div>
+  <div id="loud"></div>
   <div id="fresync"><button id="resyncbtn" onclick="resyncFollower(this)">&#8635; Re-sync follower</button></div>
   <div id="demo"><button id="demobtn" onclick="runDemo()">&#9654; Guided demo</button></div>
   <div id="lay">
@@ -922,6 +924,18 @@ musicState();   setInterval(musicState,4000);
 loadAudiomap(); setInterval(loadAudiomap,3000);
 loadTv();       // populate the favorites row on load (no interval — avoids hammering the HDHR)
 loadProgramOut(); setInterval(loadProgramOut,2000);
+async function loadLoud(){
+  const el=document.getElementById('loud'); if(!el) return;
+  try{
+    const d=await(await fetch('http://'+location.hostname+':8104/loudness',{cache:'no-store'})).json();
+    if(d.short_term==null){ el.innerHTML='PROGRAM LOUDNESS &middot; <span class="foff">no audio</span>'; return; }
+    const cls=d.in_spec?'flock':'fwarn';
+    const tp = d.true_peak!=null ? (' &middot; peak '+d.true_peak.toFixed(1)+' dBTP'+(d.tp_over?' \u26a0':'')) : '';
+    el.innerHTML='PROGRAM LOUDNESS &middot; <span class="'+cls+'">'+d.short_term.toFixed(1)+' LUFS</span>'
+      +' <span class="foff">(R128 '+d.target+' \u00b1'+d.tolerance+', I '+(d.integrated==null?'\u2014':d.integrated.toFixed(1))+', LRA '+d.lra.toFixed(1)+')</span>'+tp;
+  }catch(e){ el.innerHTML=''; }
+}
+loadLoud(); setInterval(loadLoud,1000);
 loadSwitcher(); setInterval(loadSwitcher,2000);
 fecRefresh();   setInterval(fecRefresh,4000);
 spsRefresh();   setInterval(spsRefresh,4000);

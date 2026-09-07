@@ -552,6 +552,9 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #schedtog.on{background:#fc0;color:#000;border-color:#fc0;font-weight:bold}
  #progpend{font-size:min(1.8vw,2.1vh);color:#fc0;margin-left:.5vw;font-weight:bold}
  .l2{color:#5a5;font-size:min(1.7vw,2vh);letter-spacing:.12em;margin-right:.6vw}
+ .grp{margin-top:1.3vh;padding-top:.7vh;border-top:1px solid #12352a;display:flex;flex-direction:column;align-items:center;width:100%}
+ .grphdr{color:#6cba90;font-size:min(1.55vw,1.85vh);letter-spacing:.14em;text-transform:uppercase;font-weight:600;margin-bottom:.35vh;opacity:.85}
+ .modegrp.modehide{display:none}
  #music{margin-top:.8vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
  #music button{font-size:min(3vw,3.4vh);padding:.3em .7em;margin:.3vh .4vw}
  #mnp{color:#9c9;font-size:min(1.9vw,2.2vh);margin-left:.8vw;max-width:62vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -613,6 +616,11 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  <div id="top">
   <div id="brand">ATOLL<span>ST&nbsp;2110 &middot; NMOS island monitor &middot; <a href="#" id="anlink" style="color:#3c9;text-decoration:none">analyser &#8599;</a></span></div>
   <div id="tc">--:--:--:--</div>
+  <div id="info"></div>
+  <div id="finfo"></div>
+  <div id="loud"></div>
+
+  <section class="grp"><div class="grphdr">Sources &middot; take to output</div>
   <div id="ctrl">
    <button id="bjxs" onclick="take('jxs',this)">Home videos</button>
    <button id="braw" onclick="take('raw',this)">Pi raw 2110-20</button>
@@ -628,16 +636,10 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="bfec" onclick="take('fec',this)">ST 2022-1 FEC</button>
    <button id="bsps" onclick="take('sps',this)">ST 2022-7 SPS</button>
   </div>
-  <div id="fecwrap" style="gap:.6vw"><label>ST&nbsp;2022-7 paths</label><button id="spsa" class="pathbtn" onclick="spsToggle('a')">A</button><button id="spsb" class="pathbtn" onclick="spsToggle('b')">B</button><span class="sub2">pull a path &mdash; the picture must not flinch</span></div>
-  <div id="fecwrap"><label>ST&nbsp;2022-1 loss</label><input id="fecloss" type="range" min="0" max="10" step="0.5" value="0" oninput="fecLoss(this.value)"><span id="fecval">0.0%</span><button id="fectog" onclick="fecToggle()">FEC</button></div>
-  <div id="tvwrap"><div id="tvfav"></div><button id="tvtoggle" onclick="toggleTv()">&#128250; TV Channels</button><div id="tvchan"></div></div>
-  <div id="info"></div>
-  <div id="finfo"></div>
-  <div id="loud"></div>
-  <div id="fresync"><button id="resyncbtn" onclick="resyncFollower(this)">&#8635; Re-sync follower</button></div>
-  <div id="demo"><button id="demobtn" onclick="runDemo()">&#9654; Guided demo</button></div>
+  </section>
+
+  <section class="grp"><div class="grphdr">Output &middot; Monitor 2</div>
   <div id="lay">
-   <span class="l2">OUTPUT &middot; MON 2</span>
    <button id="lsingle" onclick="setLayout('single')">Follow take</button>
    <button id="lside" onclick="setLayout('side')">Side &times; 2</button>
    <button id="lwall" onclick="setLayout('wall')">Wall +tally</button>
@@ -645,37 +647,28 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="lprogram" onclick="setLayout('program')">&#127909; Program Out</button>
    <button id="lswitcher" onclick="setLayout('switcher')">&#127899; Switcher</button>
   </div>
-  <div id="progwrap">
-   <span class="l2">PROGRAM OUT &middot; IS-05 ROUTE</span>
-   <div id="progbtns"></div>
-   <button id="schedtog" onclick="toggleSched(this)">&#9201; Schedule +5s: off</button>
-   <span id="progpend"></span>
-  </div>
+  </section>
+
+  <section class="grp modegrp modehide" data-mode="switcher"><div class="grphdr">Production Switcher</div>
   <div id="switchwrap">
-   <span class="l2">SWITCHER</span>
    <span id="sw-pgm" class="sw-pgm">PROGRAM &middot; &mdash;</span>
    <span class="sw-lbl">PREVIEW</span>
    <div id="sw-pvw"></div>
    <button id="sw-trans" onclick="toggleSwTrans()">Dissolve</button>
    <button id="sw-take" class="sw-take" onclick="swTake()">TAKE</button>
   </div>
-  <div id="music">
-   <span class="l2">MUSIC</span>
-   <button onclick="music('prev')" title="previous">&#9198;</button>
-   <button id="mpp" onclick="music('playpause')" title="play/pause">&#9208;</button>
-   <button onclick="music('next')" title="next">&#9197;</button>
-   <button id="mshuf" onclick="music('shuffle')" title="shuffle">&#128256;</button>
-   <span id="mnp">&mdash;</span>
+  </section>
+
+  <section class="grp modegrp modehide" data-mode="program"><div class="grphdr">Program Out &middot; IS-05 route</div>
+  <div id="progwrap">
+   <div id="progbtns"></div>
+   <button id="schedtog" onclick="toggleSched(this)">&#9201; Schedule +5s: off</button>
+   <span id="progpend"></span>
   </div>
-  <div id="amapwrap">
-   <span class="l2">MUSIC AUDIO &middot; IS-08 CHANNEL MAP</span>
-   <button data-amap="stereo" onclick="setAudiomap('stereo')">Stereo</button>
-   <button data-amap="swap" onclick="setAudiomap('swap')">Swap L&harr;R</button>
-   <button data-amap="monoL" onclick="setAudiomap('monoL')">Mono (L)</button>
-   <button data-amap="muteR" onclick="setAudiomap('muteR')">Mute R</button>
-  </div>
+  </section>
+
+  <section class="grp modegrp modehide" data-mode="multi wall"><div class="grphdr">Multiview tiles</div>
   <div id="slotwrap">
-   <span class="l2">MULTIVIEW TILES</span>
    <div id="slots">
     <button class="slot" id="slot0" onclick="selSlotFn(0)">&mdash;</button>
     <button class="slot" id="slot1" onclick="selSlotFn(1)">&mdash;</button>
@@ -684,6 +677,38 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    </div>
    <span id="slothint" class="mut">tap a tile, then a source</span>
   </div>
+  </section>
+
+  <section class="grp"><div class="grphdr">Music</div>
+  <div id="music">
+   <button onclick="music('prev')" title="previous">&#9198;</button>
+   <button id="mpp" onclick="music('playpause')" title="play/pause">&#9208;</button>
+   <button onclick="music('next')" title="next">&#9197;</button>
+   <button id="mshuf" onclick="music('shuffle')" title="shuffle">&#128256;</button>
+   <span id="mnp">&mdash;</span>
+  </div>
+  <div id="amapwrap">
+   <span class="sw-lbl">IS-08 channel map</span>
+   <button data-amap="stereo" onclick="setAudiomap('stereo')">Stereo</button>
+   <button data-amap="swap" onclick="setAudiomap('swap')">Swap L&harr;R</button>
+   <button data-amap="monoL" onclick="setAudiomap('monoL')">Mono (L)</button>
+   <button data-amap="muteR" onclick="setAudiomap('muteR')">Mute R</button>
+  </div>
+  </section>
+
+  <section class="grp"><div class="grphdr">Resilience &middot; ST 2022</div>
+  <div id="fecwrap" style="gap:.6vw"><label>ST&nbsp;2022-7 paths</label><button id="spsa" class="pathbtn" onclick="spsToggle('a')">A</button><button id="spsb" class="pathbtn" onclick="spsToggle('b')">B</button><span class="sub2">pull a path &mdash; the picture must not flinch</span></div>
+  <div id="fecwrap"><label>ST&nbsp;2022-1 loss</label><input id="fecloss" type="range" min="0" max="10" step="0.5" value="0" oninput="fecLoss(this.value)"><span id="fecval">0.0%</span><button id="fectog" onclick="fecToggle()">FEC</button></div>
+  </section>
+
+  <section class="grp"><div class="grphdr">Live TV</div>
+  <div id="tvwrap"><div id="tvfav"></div><button id="tvtoggle" onclick="toggleTv()">&#128250; TV Channels</button><div id="tvchan"></div></div>
+  </section>
+
+  <section class="grp"><div class="grphdr">Demo &middot; tools</div>
+  <div id="demo"><button id="demobtn" onclick="runDemo()">&#9654; Guided demo</button></div>
+  <div id="fresync"><button id="resyncbtn" onclick="resyncFollower(this)">&#8635; Re-sync follower</button></div>
+  </section>
  </div>
  <div id="nmos">loading IS-04/IS-05&hellip;</div>
  <div id="ov"><div id="ovbar"><b id="ovttl">resource</b><button onclick="document.getElementById('ov').style.display='none'">&times; close</button></div><pre id="ovpre"></pre></div>
@@ -800,7 +825,7 @@ async function routeProgram(ess){
   try{await fetch(q,{cache:"no-store"});}catch(e){}
   setTimeout(loadProgramOut,300);
 }
-function hlLayout(m){ document.querySelectorAll('#lay button').forEach(b=>b.classList.remove('on')); const b=document.getElementById(LAYBTN[m]); if(b) b.classList.add('on'); }
+function hlLayout(m){ document.querySelectorAll('#lay button').forEach(b=>b.classList.remove('on')); const b=document.getElementById(LAYBTN[m]); if(b) b.classList.add('on'); document.querySelectorAll('.modegrp').forEach(function(g){ var md=(g.getAttribute('data-mode')||'').split(' '); g.classList.toggle('modehide', md.indexOf(m)<0); }); }
 let SW={trans:'dissolve',rate:1.0};
 function swLabelOf(d,k){const s=d.sources.find(x=>x.key===k);return s?s.label:k;}
 async function loadSwitcher(){

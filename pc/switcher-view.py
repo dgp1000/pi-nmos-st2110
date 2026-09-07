@@ -157,7 +157,20 @@ class Switcher:
                 return Gst.PadProbeReturn.OK
             ovpad.add_probe(Gst.PadProbeType.BUFFER, _count)
         GLib.timeout_add_seconds(5, self._diag)
+        if CFG.get("WAYLAND_DISPLAY"):
+            GLib.timeout_add_seconds(2, self._snap)   # re-snap the (re)created GL window to monitor 2
         print(f"switcher: PGM={a} PVW={b}", flush=True)
+
+    def _snap(self):
+        try:
+            ps = os.path.join(HERE, "snap-window-screen.ps1")
+            pw = subprocess.run(["bash", "-c", "command -v powershell.exe || echo /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"], capture_output=True, text=True).stdout.strip()
+            win = subprocess.check_output(["wslpath", "-w", ps], text=True).strip()
+            subprocess.Popen([pw, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", win, "-Screen", SCREEN, "-TimeoutSec", "10"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            print("snap failed:", e, flush=True)
+        return False
 
     def _diag(self):
         al = {k: round(self.pads[k].get_property("alpha"), 2) for k in ("Afull", "Bfull", "Ains", "Bins")}
@@ -280,19 +293,7 @@ if __name__ == "__main__":
     os.makedirs(RUN, exist_ok=True)
     if not os.path.exists(KNOB):
         open(KNOB, "w").write("hevc music cut 1.0 0\n")
-    sw = Switcher()
-    # move the GL window to monitor 2 (WSL), same helper the other renderers use
-    def mover():
-        ps = os.path.join(HERE, "snap-window-screen.ps1")
-        pw = subprocess.run(["bash", "-c", "command -v powershell.exe || echo /mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"], capture_output=True, text=True).stdout.strip()
-        try:
-            win = subprocess.check_output(["wslpath", "-w", ps], text=True).strip()
-            subprocess.Popen([pw, "-ExecutionPolicy", "Bypass", "-File", win, SCREEN], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception as e:
-            print("snap failed:", e, flush=True)
-        return False
-    if CFG.get("WAYLAND_DISPLAY"):
-        GLib.timeout_add_seconds(2, mover)
+    sw = Switcher()   # build() schedules the window snap to monitor 2 after each (re)build
     loop = GLib.MainLoop()
     def _shutdown(*_):
         # runs on SIGTERM/SIGINT (output-render layout switch, pkill). Without this the PGM audio

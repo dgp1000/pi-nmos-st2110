@@ -238,6 +238,14 @@ still selectable — put it in `single`/`side`, not the default wall.
   (`2110TPW`), not Narrow. Change `TP=` in `pi-nmos.py` only if the pacing actually changes.
 - Quick check: `curl :8095/sdp/pi-video.sdp` and `curl :8095/sdp/pi-audio.sdp`; `curl :8095/status`.
 
+### Loudness (EBU R128)
+- **`loudness.py` (`atoll-loudness`, `:8104`)** measures the **program** audio (follows the panel's
+  active source, and Program Out in program layout) to ITU-R BS.1770-4 / EBU R128: Momentary,
+  Short-term and gated Integrated LUFS, with an in-spec check against −23 LUFS ±1 LU. numpy-only
+  (K-weighting done as a FIR of the BS.1770 biquads — needs `python3-numpy`, apt). Open
+  `http://<pc>:8104` for the broadcast readout; the analyser header also shows the short-term LUFS.
+- Quick check: `curl :8104/loudness` → `{source, momentary, short_term, integrated, in_spec, …}`.
+
 ### IS-08 (audio channel mapping)
 - **Music audio has an IS-08 Channel Mapping API** (`audiomap-nmos.py`, `:8094`, IS-04-registered with
   a cm-ctrl control). A controller maps the output's 2 channels to the input's — straight stereo, swap

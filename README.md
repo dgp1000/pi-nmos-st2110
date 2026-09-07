@@ -239,6 +239,7 @@ deploy `pi/` and run `sudo bash ~/launch-all.sh` (with `pi/atoll-pi.conf` alongs
 | `8093` | **Music** NMOS source (IS-04 + SDPs)                                |
 | `8094` | **IS-08** audio channel mapping (music audio)                       |
 | `8095` | **Pi ST 2110** NMOS source (IS-04 + -20/-21/-30 SDPs)               |
+| `8104` | **Loudness** meter — EBU R128 / BS.1770 on the program audio      |
 | `8098` | Standalone TV channel picker (also built into the panel)            |
 | `8099` | Browser multiview · `8100` JPEG XS view · `5000` AMWA testing tool   |
 | `8000` | PTP web clock (Pi 5 grandmaster) · PTP follower readout (Pi 2)      |

@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """Atoll production switcher -- a PROGRAM / PREVIEW vision-mixer view on monitor 2.
 
-Two selected sources are decoded and each tee'd to a FULLSCREEN compositor pad and a small INSET
-pad, so the on-air PROGRAM (fullscreen) and the cued PREVIEW (inset) are just which pads are shown.
-A TAKE swaps the buses; it is a pure alpha/zorder animation on the one compositor -- CUT is instant,
-DISSOLVE crossfades the fullscreen over `rate` seconds -- so it never rebuilds the pipeline and the
-picture never drops. Only CHANGING which two sources are loaded rebuilds (like changing a wall tile).
+DECOUPLED design (a real switcher must never interrupt PROGRAM to cue a preview):
+ * a PERSISTENT display pipeline owns the compositor + overlay + the glimagesink window and never
+   restarts. It pulls the two buses over intervideosrc (channels busA / busB), tees each to a
+   FULLSCREEN and an INSET compositor pad -- so PROGRAM (fullscreen) and PREVIEW (inset) are just
+   which pads are shown, and a TAKE is a pure alpha/zorder animation (CUT instant, DISSOLVE fades
+   the incoming fullscreen up over `rate` s).
+ * two INDEPENDENT source pipelines (decode -> intervideosink channel=busA/busB) feed the buses.
+   Changing a source restarts ONLY that source pipeline; the display (and the on-air PROGRAM) keep
+   running, and intervideosrc shows black for that bus only until the new source arrives.
 
-Driven by ~/atoll-run/switcher:  "<pgm_src> <pvw_src> <transition> <rate> <take_seq>"
-  e.g.  "hevc music dissolve 1.0 7"
-The panel writes it: picking PVW changes a source (rebuild); TAKE bumps take_seq (animate) and swaps
-pgm/pvw. PROGRAM audio follows the on-air source via a small subprocess, restarted on take.
+Driven by ~/atoll-run/switcher:  "<srcA> <srcB> <transition> <rate> <take_seq>". take_seq PARITY
+picks PGM (even=A, odd=B) so a TAKE just bumps the seq (animate); the source identities stay put.
+PROGRAM audio follows the on-air source via a subprocess, switched only when the PGM source changes.
 """
 import gi, os, sys, subprocess, time, signal
 gi.require_version("Gst", "1.0")
@@ -38,33 +41,31 @@ WINW = int(os.environ.get("ATOLL_TV_W", "3840"))
 WINH = int(os.environ.get("ATOLL_TV_H", "2160"))
 SINK = ("fakesink sync=true" if os.environ.get("ATOLL_SINK_TEST")
         else f"glupload ! glcolorscale ! video/x-raw(memory:GLMemory),width={WINW},height={WINH} ! glimagesink sync=true")
-# PREVIEW inset: bottom-right quarter-ish, with a margin
-IW, IH = 600, 338
-IX, IY = W - IW - 48, H - IH - 48
+IW, IH = 600, 338                       # PREVIEW inset size
+IX, IY = W - IW - 48, H - IH - 48       # bottom-right, with a margin
+RAWCAPS = f"video/x-raw,format=I420,width={W},height={H},framerate=30/1"
 LABEL = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "tsrtp": "TS over RTP", "h264": "H.264 RTP"}
 
 def _g(k): return CFG[f"{k}_GRP"], CFG[f"{k}_PORT"]
 
-# Video decode fragment for a source key, ending at a named tee (video/x-raw, W x H, 30fps).
-def vsrc(key, tee):
+# Decode a source key to raw I420 W x H 30 fps (a source pipeline appends `! intervideosink channel=..`).
+def decode(key):
     if key == "hevc":
-        g, p = _g("HEVC"); dec = f"udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=d_{tee} d_{tee}. ! h265parse ! queue ! nvh265dec ! cudadownload"
+        g, p = _g("HEVC"); dec = f"udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=d d. ! h265parse ! queue ! nvh265dec ! cudadownload"
     elif key == "jxs":
-        g, p = _g("HOME"); dec = f"udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=d_{tee} d_{tee}. ! h265parse ! queue ! nvh265dec ! cudadownload"
+        g, p = _g("HOME"); dec = f"udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=d d. ! h265parse ! queue ! nvh265dec ! cudadownload"
     elif key == "music":
-        g, p = _g("MUSIC"); dec = f"udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=d_{tee} d_{tee}. ! h265parse ! queue ! nvh265dec ! cudadownload"
+        g, p = _g("MUSIC"); dec = f"udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=d d. ! h265parse ! queue ! nvh265dec ! cudadownload"
     elif key == "tsrtp":
-        g, p = _g("TSRTP"); dec = f"udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"application/x-rtp,media=video,clock-rate=90000,encoding-name=MP2T,payload=33\" ! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name=d_{tee} d_{tee}. ! h264parse ! queue ! nvh264dec ! cudadownload"
+        g, p = _g("TSRTP"); dec = f'udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=MP2T,payload=33" ! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name=d d. ! h264parse ! queue ! nvh264dec ! cudadownload'
     elif key == "h264":
-        g, p = _g("H264"); dec = f"udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps=\"application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96\" ! rtpjitterbuffer latency=100 ! rtph264depay ! h264parse ! queue ! nvh264dec ! cudadownload"
+        g, p = _g("H264"); dec = f'udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96" ! rtpjitterbuffer latency=100 ! rtph264depay ! h264parse ! queue ! nvh264dec ! cudadownload'
     else:
-        # unknown -> a flat colour so the compositor pad always has data
         dec = "videotestsrc pattern=black is-live=true"
-    return (f"{dec} ! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale "
-            f"! video/x-raw,width={W},height={H} ! queue leaky=downstream max-size-time=700000000 "
-            f"max-size-buffers=0 max-size-bytes=0 ! tee name={tee}")
+    return (f"{dec} ! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! {RAWCAPS} "
+            f"! queue leaky=downstream max-size-time=700000000 max-size-buffers=0 max-size-bytes=0")
 
-# PROGRAM-follow audio pipeline for a source (subprocess; restarted on take).
+# PROGRAM-follow audio (subprocess; switched only when the PGM source changes).
 def audio_cmd(key):
     gain_h = CFG.get("AUDIO_GAIN_HEVC") or "1.0"; gain_j = CFG.get("AUDIO_GAIN_JXS") or "1.0"; gain_m = CFG.get("AUDIO_GAIN_MUSIC") or "1.0"
     if key in ("hevc", "jxs", "tsrtp"):
@@ -89,7 +90,6 @@ def audio_cmd(key):
                 f'! rtpopusdepay ! opusdec ! audioconvert ! audioresample ! queue max-size-time=2000000000 ! autoaudiosink sync=true')
     return None
 
-# ---- switcher state -----------------------------------------------------------------------------
 def read_knob():
     try:
         parts = open(KNOB).read().split()
@@ -100,30 +100,50 @@ def read_knob():
 
 class Switcher:
     def __init__(self):
-        self.pipe = None
-        self.mix = None
-        self.pads = {}          # name -> compositor pad
-        self.audio_proc = None
-        self.src_set = None      # (a, b) currently loaded
-        self.pgm = "A"          # which fullscreen is on air
-        self.take_seq = -1
-        self._anim = None
-        self.build()
-        GLib.timeout_add(300, self.poll)
-
-    def build(self):
+        self.disp = None; self.mix = None; self.pads = {}
+        self.srcpipe = {"A": None, "B": None}
+        self.srckey = {"A": None, "B": None}
+        self.audio_proc = None; self.audio_key = None
+        self.pgm = "A"; self.take_seq = -1; self._anim = None; self._frames = 0
         a, b, trans, rate, seq = read_knob()
-        self.src_set = (a, b); self.take_seq = seq; self.pgm = "A" if seq % 2 == 0 else "B"
+        self.take_seq = seq; self.pgm = "A" if seq % 2 == 0 else "B"
+        self.set_source("A", a); self.set_source("B", b)   # source pipelines up first
+        self.build_display()                                # persistent display consumes busA/busB
+        self.start_audio()
+        GLib.timeout_add(300, self.poll)
+        GLib.timeout_add_seconds(5, self._diag)
+        if CFG.get("WAYLAND_DISPLAY"):
+            GLib.timeout_add_seconds(2, self._snap)
+        print(f"switcher: PGM(bus {self.pgm})={self._pgm_key()} PVW={self._pvw_key()}", flush=True)
+
+    # --- independent source pipelines (one per bus) -----------------------------------------------
+    def set_source(self, bus, key):
+        ch = "busA" if bus == "A" else "busB"
+        old = self.srcpipe.get(bus)
+        if old:
+            old.set_state(Gst.State.NULL)
+        pipe = Gst.parse_launch(decode(key) + f" ! intervideosink channel={ch} sync=false")
+        b = pipe.get_bus(); b.add_signal_watch()
+        b.connect("message", lambda _b, m, bs=bus: self._src_msg(m, bs))
+        pipe.set_state(Gst.State.PLAYING)
+        self.srcpipe[bus] = pipe; self.srckey[bus] = key
+        print(f"{time.strftime('%T')} switcher: bus {bus} <- {key} (channel {ch})", flush=True)
+
+    def _src_msg(self, msg, bus):
+        if msg.type == Gst.MessageType.ERROR:
+            err, dbg = msg.parse_error()
+            print(f"switcher SRC {bus} ERROR: {err} :: {dbg}", flush=True)
+
+    # --- persistent display pipeline (never restarts) ---------------------------------------------
+    def build_display(self):
         desc = (
-            f"compositor name=mix background=black "
-            f"! video/x-raw,width={W},height={H} ! videoconvert ! cairooverlay name=ov ! videoconvert ! {SINK} "
-            f"{vsrc(a,'ta')} ta. ! queue ! mix. ta. ! queue ! mix. "
-            f"{vsrc(b,'tb')} tb. ! queue ! mix. tb. ! queue ! mix. "
+            f"compositor name=mix background=black ! video/x-raw,width={W},height={H} "
+            f"! videoconvert ! cairooverlay name=ov ! videoconvert ! {SINK} "
+            f"intervideosrc channel=busA ! {RAWCAPS} ! tee name=ta ta. ! queue ! mix. ta. ! queue ! mix. "
+            f"intervideosrc channel=busB ! {RAWCAPS} ! tee name=tb tb. ! queue ! mix. tb. ! queue ! mix. "
         )
-        self.pipe = Gst.parse_launch(desc)
-        self.mix = self.pipe.get_by_name("mix")
-        # parse-launch created 4 request sink pads (link order ta,ta,tb,tb -> sink_0..sink_3).
-        # Fetch them by iterating and map by name.
+        self.disp = Gst.parse_launch(desc)
+        self.mix = self.disp.get_by_name("mix")
         byname = {}
         it = self.mix.iterate_sink_pads()
         while True:
@@ -142,24 +162,16 @@ class Switcher:
             p = self.pads[nm]
             p.set_property("xpos", x); p.set_property("ypos", y)
             p.set_property("width", w); p.set_property("height", h); p.set_property("zorder", z)
-        self.apply_bus(instant=True)
-        ov = self.pipe.get_by_name("ov")
-        ov.connect("draw", self.on_draw)
-        self.pipe.get_bus().add_signal_watch(); self.pipe.get_bus().connect("message", self.on_msg)
-        self.pipe.set_state(Gst.State.PLAYING)
-        self.start_audio()
-        # frame-flow probe on the overlay src pad, so the log shows if frames actually reach the sink
-        self._frames = 0
-        ovpad = self.pipe.get_by_name("ov").get_static_pad("src")
+        self.apply_bus()
+        self.disp.get_by_name("ov").connect("draw", self.on_draw)
+        self.disp.get_bus().add_signal_watch(); self.disp.get_bus().connect("message", self.on_msg)
+        self.disp.set_state(Gst.State.PLAYING)
+        ovpad = self.disp.get_by_name("ov").get_static_pad("src")
         if ovpad:
             def _count(_pad, _info):
                 self._frames += 1
                 return Gst.PadProbeReturn.OK
             ovpad.add_probe(Gst.PadProbeType.BUFFER, _count)
-        GLib.timeout_add_seconds(5, self._diag)
-        if CFG.get("WAYLAND_DISPLAY"):
-            GLib.timeout_add_seconds(2, self._snap)   # re-snap the (re)created GL window to monitor 2
-        print(f"switcher: PGM={a} PVW={b}", flush=True)
 
     def _snap(self):
         try:
@@ -178,15 +190,10 @@ class Switcher:
         self._frames = 0
         return True
 
-    def _pgm_key(self):
-        a, b = self.src_set
-        return a if self.pgm == "A" else b
-    def _pvw_key(self):
-        a, b = self.src_set
-        return b if self.pgm == "A" else a
+    def _pgm_key(self): return self.srckey["A"] if self.pgm == "A" else self.srckey["B"]
+    def _pvw_key(self): return self.srckey["B"] if self.pgm == "A" else self.srckey["A"]
 
-    def apply_bus(self, instant=True):
-        # fullscreen: pgm alpha 1 on top, other alpha 0; inset: pvw visible, pgm hidden
+    def apply_bus(self):
         onair, off = ("Afull", "Bfull") if self.pgm == "A" else ("Bfull", "Afull")
         pvwins, pgmins = ("Bins", "Ains") if self.pgm == "A" else ("Ains", "Bins")
         self.pads[onair].set_property("zorder", 6); self.pads[onair].set_property("alpha", 1.0)
@@ -195,31 +202,26 @@ class Switcher:
         self.pads[pgmins].set_property("alpha", 0.0)
 
     def take(self, newpgm, trans, rate):
-        # move to bus `newpgm` ("A"/"B"); CUT = instant, DISSOLVE = fade the incoming fullscreen up
         if self._anim:
             GLib.source_remove(self._anim); self._anim = None
         inc = "Bfull" if newpgm == "B" else "Afull"
         if trans == "dissolve" and rate > 0.05:
             self.pads[inc].set_property("zorder", 7)      # incoming rides on top during the mix
             self.pads[inc].set_property("alpha", 0.0)
-            steps = max(2, int(rate / 0.033))
-            state = {"i": 0}
+            steps = max(2, int(rate / 0.033)); state = {"i": 0}
             def step():
                 state["i"] += 1
-                fr = state["i"] / steps
-                self.pads[inc].set_property("alpha", min(1.0, fr))
+                self.pads[inc].set_property("alpha", min(1.0, state["i"] / steps))
                 if state["i"] >= steps:
-                    self.pgm = newpgm; self.apply_bus(instant=True); self._anim = None
+                    self.pgm = newpgm; self.apply_bus(); self.start_audio(); self._anim = None
                     return False
                 return True
             self._anim = GLib.timeout_add(33, step)
         else:
-            self.pgm = newpgm; self.apply_bus(instant=True)
-        self.start_audio()
+            self.pgm = newpgm; self.apply_bus(); self.start_audio()
 
+    # --- PROGRAM audio (switched only when the PGM source changes) --------------------------------
     def _stop_audio(self):
-        # shell=True + start_new_session puts sh AND its gst-launch child in one process group; kill
-        # the whole GROUP or the gst-launch child is orphaned and keeps playing (audio stacks per take).
         if not self.audio_proc:
             return
         try:
@@ -237,40 +239,34 @@ class Switcher:
         self.audio_proc = None
 
     def start_audio(self):
-        cmd = audio_cmd(self._pgm_key())
+        key = self._pgm_key()
+        cmd = audio_cmd(key)
         self._stop_audio()
+        self.audio_key = key
         if cmd:
-            # `exec` so sh replaces itself with gst-launch (one PID); start_new_session so the whole
-            # thing is its own process group for a clean group-kill on the next take.
             self.audio_proc = subprocess.Popen("exec " + cmd, shell=True, start_new_session=True,
                                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    def rebuild(self):
-        if self._anim: GLib.source_remove(self._anim); self._anim = None
-        if self.pipe: self.pipe.set_state(Gst.State.NULL)
-        self._stop_audio()
-        self.build()
-
     def poll(self):
         a, b, trans, rate, seq = read_knob()
-        if (a, b) != self.src_set:
-            print(f"switcher: source set {self.src_set} -> {(a,b)}; rebuilding", flush=True)
-            self.rebuild(); return True
+        if a != self.srckey["A"]:
+            self.set_source("A", a)      # restart ONLY source A; display + PROGRAM keep running
+        if b != self.srckey["B"]:
+            self.set_source("B", b)      # restart ONLY source B
         if seq != self.take_seq:
             self.take_seq = seq
             target = "A" if seq % 2 == 0 else "B"
             if target != self.pgm:
                 print(f"switcher: TAKE ({trans} {rate}s) PGM {self._pgm_key()} -> {self._pvw_key()}", flush=True)
                 self.take(target, trans, rate)
+        if self._pgm_key() != self.audio_key:   # PGM source changed (take completed) -> follow audio
+            self.start_audio()
         return True
 
-    # cairo overlay: PROGRAM (red) border + labels, PREVIEW (green) inset border + label
     def on_draw(self, _ov, ctx, _ts, _dur):
-        # cairooverlay sits on the 1920x1080 compositor output (before the GL upscale to WINWxWINH),
-        # so ALL coordinates here are in W x H space.
-        pgm = LABEL.get(self._pgm_key(), self._pgm_key())
-        pvw = LABEL.get(self._pvw_key(), self._pvw_key())
-        # PROGRAM border (full frame)
+        # cairooverlay sits on the 1920x1080 compositor output (before the GL upscale), so W x H space.
+        pgm = LABEL.get(self._pgm_key(), self._pgm_key() or "—")
+        pvw = LABEL.get(self._pvw_key(), self._pvw_key() or "—")
         ctx.set_source_rgb(0.84, 0.13, 0.16); ctx.set_line_width(6)
         ctx.rectangle(3, 3, W - 6, H - 6); ctx.stroke()
         def tag(x, y, text, rgb, big=True):
@@ -280,36 +276,35 @@ class Switcher:
             ctx.set_source_rgba(0, 0, 0, 0.6); ctx.rectangle(x, y, ext.width + 24, fs + 16); ctx.fill()
             ctx.set_source_rgb(*rgb); ctx.move_to(x + 12, y + fs + 2); ctx.show_text(text)
         tag(24, 24, "PROGRAM  ·  " + pgm, (1, 0.3, 0.32))
-        # PREVIEW inset border + label (IX/IY/IW/IH are already in W x H space)
         ctx.set_source_rgb(0.15, 0.8, 0.4); ctx.set_line_width(5)
         ctx.rectangle(IX, IY, IW, IH); ctx.stroke()
         tag(IX, IY - 46 if IY > 50 else IY + 6, "PREVIEW  ·  " + pvw, (0.4, 1, 0.6), big=False)
 
     def on_msg(self, _b, msg):
         if msg.type == Gst.MessageType.ERROR:
-            err, dbg = msg.parse_error(); print(f"switcher ERROR: {err} :: {dbg}", flush=True)
+            err, dbg = msg.parse_error(); print(f"switcher DISPLAY ERROR: {err} :: {dbg}", flush=True)
+
+    def stop(self):
+        if self._anim:
+            GLib.source_remove(self._anim); self._anim = None
+        self._stop_audio()
+        for pipe in (self.disp, self.srcpipe.get("A"), self.srcpipe.get("B")):
+            try:
+                if pipe: pipe.set_state(Gst.State.NULL)
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     os.makedirs(RUN, exist_ok=True)
     if not os.path.exists(KNOB):
         open(KNOB, "w").write("hevc music cut 1.0 0\n")
-    sw = Switcher()   # build() schedules the window snap to monitor 2 after each (re)build
+    sw = Switcher()
     loop = GLib.MainLoop()
     def _shutdown(*_):
-        # runs on SIGTERM/SIGINT (output-render layout switch, pkill). Without this the PGM audio
-        # subprocess -- which is in its own session for clean take-replacement -- would outlive us
-        # and orphan (audio keeps playing after leaving the switcher layout).
-        try: sw._stop_audio()
-        except Exception: pass
-        try: sw.pipe.set_state(Gst.State.NULL)
-        except Exception: pass
-        loop.quit()
-        return False
+        sw.stop(); loop.quit(); return False
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, _shutdown)
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, _shutdown)
     try:
         loop.run()
     finally:
-        try: sw.pipe.set_state(Gst.State.NULL)
-        except Exception: pass
-        sw._stop_audio()
+        sw.stop()

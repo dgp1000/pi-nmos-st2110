@@ -486,7 +486,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  th[title]{cursor:help;text-decoration:underline dotted rgba(120,140,130,.5);text-underline-offset:3px}
 </style></head><body>
 <header><h1>ATOLL</h1><span class="sub">island flow analyser &middot; 10.10.10.0/24</span>
- <span id="ptp" class="sub"></span><span id="is07" class="sub"></span><span id="pgm" class="sub"></span><span id="take" class="sub"></span><span id="fec" class="sub"></span><span class="tot" id="tot"></span></header>
+ <span id="ptp" class="sub"></span><span id="is07" class="sub"></span><span id="pgm" class="sub"></span><span id="take" class="sub"></span><span id="fec" class="sub"></span><span id="lufs" class="sub"></span><span class="tot" id="tot"></span></header>
 <div class="wrap"><table><thead><tr>
  <th title="The island multicast flow (source), by friendly name">flow</th><th title="IS-07 on-air state: ON AIR (red) when this source is taken. A dash means the flow has no tally source.">tally</th><th title="PROGRAM: this flow is the one currently routed to Program Out over IS-05.">pgm</th><th title="Where this flow appears on monitor 2 right now (wall/multi quadrant TL/TR/BL/BR, side L/R, single, or program).">output</th><th title="Destination multicast group address and UDP port.">group : port</th><th class="n" title="Packets per second. The island's real ceiling is packet RATE, not bandwidth (WSL multicast receive caps at ~12-15k pps).">pps</th><th class="n" title="Flow bitrate in megabits per second.">Mbit/s</th>
  <th class="n" title="Average datagram size in bytes. Under ~400 B means one 188-byte TS packet per datagram, which burns packet rate for no bandwidth gain (see mpegtsmux alignment=7).">avg pkt</th><th title="For RTP flows: payload type + SSRC. 'raw UDP' = bare MPEG-TS straight over UDP (no RTP header).">transport</th><th class="n" title="Cumulative RTP packets lost (forward sequence-number gaps) since start.">lost</th><th class="n" title="Packet loss over the last second, as a percentage of expected packets.">loss %</th><th title="The SMPTE ST / AMWA / RFC standard this flow implements.">standard</th>
@@ -561,6 +561,16 @@ async function load(){
  document.getElementById('ft').textContent='updated '+d.ts+
    '  \\u00b7  avg pkt under ~400 B is highlighted: that is one 188-byte TS packet per datagram, which burns packet rate (the island\\u2019s real ceiling) for no bandwidth gain.';
 }
+async function loadLufs(){
+ try{
+  const d=await(await fetch('http://'+location.hostname+':8104/loudness',{cache:'no-store'})).json();
+  const el=document.getElementById('lufs');
+  if(d.short_term==null){ el.innerHTML='LUFS <span class="std">\u2014</span>'; return; }
+  const cls=d.in_spec?'ok':'bad';
+  el.innerHTML='Loudness <span class="'+cls+'">'+d.short_term.toFixed(1)+' LUFS</span> <span class="std">S \u00b7 target '+d.target+'</span>';
+ }catch(e){ const el=document.getElementById('lufs'); if(el) el.innerHTML=''; }
+}
+loadLufs(); setInterval(loadLufs,1000);
 load(); setInterval(load,1000);
 </script></body></html>"""
 

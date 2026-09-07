@@ -109,10 +109,13 @@ class Meter:
     def snapshot(self):
         with self._lock:
             mo, st, it = self.m.momentary(), self.m.short_term(), self.m.integrated()
+            pk, tp, lra = self.m.peak_dbfs(), self.m.true_peak_dbtp(), self.m.lra()
         def f(x): return round(float(x), 1) if np.isfinite(x) else None
-        st_v = f(st)
+        st_v = f(st); tp_v = f(tp)
         return {"source": self.src, "momentary": f(mo), "short_term": st_v, "integrated": f(it),
-                "max_short_term": f(self.max_st), "target": TARGET, "tolerance": TOL,
+                "max_short_term": f(self.max_st), "peak": f(pk), "true_peak": tp_v,
+                "lra": round(float(lra), 1), "target": TARGET, "tolerance": TOL,
+                "tp_max": -1.0, "tp_over": (tp_v is not None and tp_v > -1.0),
                 "in_spec": (st_v is not None and abs(st_v - TARGET) <= TOL),
                 "ts": time.strftime("%H:%M:%S")}
 
@@ -141,6 +144,8 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
   <div class="kv"><div class="k">MOMENTARY</div><div class="v" id="mo">--</div></div>
   <div class="kv"><div class="k">INTEGRATED</div><div class="v" id="it">--</div></div>
   <div class="kv"><div class="k">MAX S-T</div><div class="v" id="mx">--</div></div>
+  <div class="kv"><div class="k">TRUE PEAK</div><div class="v" id="tp">--</div></div>
+  <div class="kv"><div class="k">LRA</div><div class="v" id="lra">--</div></div>
  </div>
  <div id="spec" class="na">&mdash;</div>
 </div>
@@ -152,6 +157,8 @@ async function tick(){
  const fmt=v=>v==null?'--':v.toFixed(1);
  g('stv').textContent=fmt(d.short_term); g('mo').textContent=fmt(d.momentary);
  g('it').textContent=fmt(d.integrated); g('mx').textContent=fmt(d.max_short_term);
+ g('tp').textContent=d.true_peak==null?'--':d.true_peak.toFixed(1); g('tp').style.color=d.tp_over?'#f55':'';
+ g('lra').textContent=d.lra==null?'--':d.lra.toFixed(1);
  const sp=g('spec');
  if(d.short_term==null){sp.className='na';sp.textContent='\\u2014 no audio';}
  else if(d.in_spec){sp.className='ok';sp.textContent='\\u2713 EBU R128 in spec ('+d.target+' \\u00b1'+d.tolerance+' LU)';}

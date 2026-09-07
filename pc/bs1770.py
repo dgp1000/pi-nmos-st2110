@@ -53,12 +53,34 @@ class Loudness:
         self.buf = np.zeros((0, channels), dtype=np.float32)   # rolling raw samples, last ~3 s
         self._blocks = []          # (mean_square_sum) of 400 ms gating blocks, for integrated
         self._since_block = 0      # samples since the last 100 ms gating step (75% overlap of 400ms)
+        self._st_hist = []         # short-term (3 s) loudness samples, ~1 Hz, for LRA (EBU 3342)
+        self._since_st = 0
+        self._peak = 0.0           # max |sample| seen (sample peak, dBFS)
+        self._tpeak = 0.0          # max 4x-oversampled |sample| (true-peak estimate, dBTP)
 
     def add(self, frames):
         """frames: np.ndarray shape (n, channels) float in [-1,1]."""
         if frames.ndim == 1:
             frames = frames.reshape(-1, 1)
+        # peak + 4x-oversampled true-peak estimate (per channel, over this block)
+        af = np.abs(frames)
+        if af.size:
+            self._peak = max(self._peak, float(af.max()))
+            for c in range(frames.shape[1]):
+                x = frames[:, c]
+                if len(x) > 1:
+                    xi = np.interp(np.arange(0, len(x) - 1, 0.25), np.arange(len(x)), x)
+                    self._tpeak = max(self._tpeak, float(np.abs(xi).max()))
         self.buf = np.concatenate([self.buf, frames.astype(np.float32)])[-3 * self.fs - len(_KFIR):]
+        # short-term history for LRA: sample the 3 s loudness ~once/sec
+        self._since_st += len(frames)
+        if self._since_st >= self.fs:
+            self._since_st = 0
+            stv = self.short_term()
+            if np.isfinite(stv):
+                self._st_hist.append(stv)
+                if len(self._st_hist) > 7200:
+                    self._st_hist = self._st_hist[-7200:]
         # integrated: accumulate 400 ms blocks stepped every 100 ms (75% overlap)
         self._since_block += len(frames)
         step = self.fs // 10
@@ -96,6 +118,26 @@ class Loudness:
             return -np.inf
         return -0.691 + 10.0 * np.log10(np.mean(keep2))
 
+    def peak_dbfs(self):
+        return 20.0 * np.log10(self._peak) if self._peak > 0 else -np.inf
+    def true_peak_dbtp(self):
+        return 20.0 * np.log10(self._tpeak) if self._tpeak > 0 else -np.inf
+
+    def lra(self):
+        """EBU Tech 3342 Loudness Range from the short-term distribution (abs -70, rel -20 LU gates)."""
+        if len(self._st_hist) < 2:
+            return 0.0
+        st = np.array(self._st_hist)
+        st = st[st > -70.0]                       # absolute gate
+        if len(st) < 2:
+            return 0.0
+        pmean = 10.0 * np.log10(np.mean(10.0 ** (st / 10.0)))   # power mean of the distribution
+        st = st[st > pmean - 20.0]                # relative gate, -20 LU
+        if len(st) < 2:
+            return 0.0
+        return float(np.percentile(st, 95) - np.percentile(st, 10))
+
+
 if __name__ == "__main__":
     # self-test: a stereo 1 kHz sine at -20 dBFS should read ~ -20 to -21 LUFS; halving amplitude -> -6 LU
     def tone(dbfs, secs=4.0, f=1000.0):
@@ -108,7 +150,7 @@ if __name__ == "__main__":
         sig = tone(db)
         for i in range(0, len(sig), 4800):
             m.add(sig[i:i + 4800])
-        print(f"  1kHz stereo @ {db:+.0f} dBFS -> momentary {m.momentary():.2f}  short-term {m.short_term():.2f}  integrated {m.integrated():.2f} LUFS")
+        print(f"  1kHz stereo @ {db:+.0f} dBFS -> M {m.momentary():.2f}  S {m.short_term():.2f}  I {m.integrated():.2f} LUFS  peak {m.peak_dbfs():.2f} dBFS  truepeak {m.true_peak_dbtp():.2f} dBTP  LRA {m.lra():.2f} LU")
     # silence -> -inf
     ms = Loudness(); ms.add(np.zeros((FS * 2, 2), dtype=np.float32))
     print(f"  silence -> momentary {ms.momentary():.1f} LUFS (expect -inf)")

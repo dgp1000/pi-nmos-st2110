@@ -12,7 +12,7 @@ Driven by ~/atoll-run/switcher:  "<pgm_src> <pvw_src> <transition> <rate> <take_
 The panel writes it: picking PVW changes a source (rebuild); TAKE bumps take_seq (animate) and swaps
 pgm/pvw. PROGRAM audio follows the on-air source via a small subprocess, restarted on take.
 """
-import gi, os, sys, subprocess, time
+import gi, os, sys, subprocess, time, signal
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst, GLib
 import cairo
@@ -148,7 +148,22 @@ class Switcher:
         self.pipe.get_bus().add_signal_watch(); self.pipe.get_bus().connect("message", self.on_msg)
         self.pipe.set_state(Gst.State.PLAYING)
         self.start_audio()
+        # frame-flow probe on the overlay src pad, so the log shows if frames actually reach the sink
+        self._frames = 0
+        ovpad = self.pipe.get_by_name("ov").get_static_pad("src")
+        if ovpad:
+            def _count(_pad, _info):
+                self._frames += 1
+                return Gst.PadProbeReturn.OK
+            ovpad.add_probe(Gst.PadProbeType.BUFFER, _count)
+        GLib.timeout_add_seconds(5, self._diag)
         print(f"switcher: PGM={a} PVW={b}", flush=True)
+
+    def _diag(self):
+        al = {k: round(self.pads[k].get_property("alpha"), 2) for k in ("Afull", "Bfull", "Ains", "Bins")}
+        print(f"switcher DIAG: pgm={self._pgm_key()} pvw={self._pvw_key()} frames/5s={self._frames} alphas={al}", flush=True)
+        self._frames = 0
+        return True
 
     def _pgm_key(self):
         a, b = self.src_set
@@ -168,6 +183,8 @@ class Switcher:
 
     def take(self, newpgm, trans, rate):
         # move to bus `newpgm` ("A"/"B"); CUT = instant, DISSOLVE = fade the incoming fullscreen up
+        if self._anim:
+            GLib.source_remove(self._anim); self._anim = None
         inc = "Bfull" if newpgm == "B" else "Afull"
         if trans == "dissolve" and rate > 0.05:
             self.pads[inc].set_property("zorder", 7)      # incoming rides on top during the mix
@@ -187,24 +204,38 @@ class Switcher:
             self.pgm = newpgm; self.apply_bus(instant=True)
         self.start_audio()
 
+    def _stop_audio(self):
+        # shell=True + start_new_session puts sh AND its gst-launch child in one process group; kill
+        # the whole GROUP or the gst-launch child is orphaned and keeps playing (audio stacks per take).
+        if not self.audio_proc:
+            return
+        try:
+            os.killpg(os.getpgid(self.audio_proc.pid), signal.SIGTERM)
+        except Exception:
+            try: self.audio_proc.terminate()
+            except Exception: pass
+        try:
+            self.audio_proc.wait(timeout=2)
+        except Exception:
+            try: os.killpg(os.getpgid(self.audio_proc.pid), signal.SIGKILL)
+            except Exception:
+                try: self.audio_proc.kill()
+                except Exception: pass
+        self.audio_proc = None
+
     def start_audio(self):
         cmd = audio_cmd(self._pgm_key())
-        if self.audio_proc:
-            self.audio_proc.terminate()
-            try: self.audio_proc.wait(timeout=2)
-            except Exception: self.audio_proc.kill()
-            self.audio_proc = None
+        self._stop_audio()
         if cmd:
-            self.audio_proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # `exec` so sh replaces itself with gst-launch (one PID); start_new_session so the whole
+            # thing is its own process group for a clean group-kill on the next take.
+            self.audio_proc = subprocess.Popen("exec " + cmd, shell=True, start_new_session=True,
+                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def rebuild(self):
         if self._anim: GLib.source_remove(self._anim); self._anim = None
         if self.pipe: self.pipe.set_state(Gst.State.NULL)
-        if self.audio_proc:
-            self.audio_proc.terminate()
-            try: self.audio_proc.wait(timeout=2)
-            except Exception: self.audio_proc.kill()
-            self.audio_proc = None
+        self._stop_audio()
         self.build()
 
     def poll(self):
@@ -222,24 +253,24 @@ class Switcher:
 
     # cairo overlay: PROGRAM (red) border + labels, PREVIEW (green) inset border + label
     def on_draw(self, _ov, ctx, _ts, _dur):
-        S = WINW / 1920.0
+        # cairooverlay sits on the 1920x1080 compositor output (before the GL upscale to WINWxWINH),
+        # so ALL coordinates here are in W x H space.
         pgm = LABEL.get(self._pgm_key(), self._pgm_key())
         pvw = LABEL.get(self._pvw_key(), self._pvw_key())
         # PROGRAM border (full frame)
-        ctx.set_source_rgb(0.84, 0.13, 0.16); ctx.set_line_width(6 * S)
-        ctx.rectangle(3 * S, 3 * S, WINW - 6 * S, WINH - 6 * S); ctx.stroke()
+        ctx.set_source_rgb(0.84, 0.13, 0.16); ctx.set_line_width(6)
+        ctx.rectangle(3, 3, W - 6, H - 6); ctx.stroke()
         def tag(x, y, text, rgb, big=True):
             ctx.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-            fs = (34 if big else 26) * S; ctx.set_font_size(fs)
+            fs = 40 if big else 30; ctx.set_font_size(fs)
             ext = ctx.text_extents(text)
-            ctx.set_source_rgba(0, 0, 0, 0.6); ctx.rectangle(x, y, ext.width + 20 * S, fs + 14 * S); ctx.fill()
-            ctx.set_source_rgb(*rgb); ctx.move_to(x + 10 * S, y + fs + 2 * S); ctx.show_text(text)
-        tag(20 * S, 20 * S, "PROGRAM  ·  " + pgm, (1, 0.3, 0.32))
-        # PREVIEW inset border + label
-        ix, iy, iw, ih = IX * S, IY * S, IW * S, IH * S
-        ctx.set_source_rgb(0.15, 0.8, 0.4); ctx.set_line_width(5 * S)
-        ctx.rectangle(ix, iy, iw, ih); ctx.stroke()
-        tag(ix + 6 * S, iy - 40 * S if iy > 44 * S else iy + 6 * S, "PREVIEW  ·  " + pvw, (0.4, 1, 0.6), big=False)
+            ctx.set_source_rgba(0, 0, 0, 0.6); ctx.rectangle(x, y, ext.width + 24, fs + 16); ctx.fill()
+            ctx.set_source_rgb(*rgb); ctx.move_to(x + 12, y + fs + 2); ctx.show_text(text)
+        tag(24, 24, "PROGRAM  ·  " + pgm, (1, 0.3, 0.32))
+        # PREVIEW inset border + label (IX/IY/IW/IH are already in W x H space)
+        ctx.set_source_rgb(0.15, 0.8, 0.4); ctx.set_line_width(5)
+        ctx.rectangle(IX, IY, IW, IH); ctx.stroke()
+        tag(IX, IY - 46 if IY > 50 else IY + 6, "PREVIEW  ·  " + pvw, (0.4, 1, 0.6), big=False)
 
     def on_msg(self, _b, msg):
         if msg.type == Gst.MessageType.ERROR:
@@ -263,10 +294,21 @@ if __name__ == "__main__":
     if CFG.get("WAYLAND_DISPLAY"):
         GLib.timeout_add_seconds(2, mover)
     loop = GLib.MainLoop()
+    def _shutdown(*_):
+        # runs on SIGTERM/SIGINT (output-render layout switch, pkill). Without this the PGM audio
+        # subprocess -- which is in its own session for clean take-replacement -- would outlive us
+        # and orphan (audio keeps playing after leaving the switcher layout).
+        try: sw._stop_audio()
+        except Exception: pass
+        try: sw.pipe.set_state(Gst.State.NULL)
+        except Exception: pass
+        loop.quit()
+        return False
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, _shutdown)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, _shutdown)
     try:
         loop.run()
-    except KeyboardInterrupt:
-        pass
     finally:
-        sw.pipe.set_state(Gst.State.NULL)
-        if sw.audio_proc: sw.audio_proc.terminate()
+        try: sw.pipe.set_state(Gst.State.NULL)
+        except Exception: pass
+        sw._stop_audio()

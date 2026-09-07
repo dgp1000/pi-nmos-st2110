@@ -845,6 +845,18 @@ column shows where each flow currently sits on monitor 2 â wall/multi quadr
 side L/R, single, or program â from the panel layout + slots. It is deliberately not GStreamer so it cannot disturb what it measures, and
 its own buffers are sized so it does not report its own overflow as network loss.
 
+A **ST 2110-21 sender-pacing** section measures how each flow's packets actually arrive, using
+`SO_TIMESTAMPNS` **kernel RX timestamps** (via `recvmsg`) rather than when Python drained the socket —
+so it reflects real arrival pacing, not the analyser's own scheduling. Per flow it drains a virtual
+receive buffer at the flow's mean rate and reports the peak occupancy as **Cmax** (the ST 2110-21
+network-compatibility model, in packets), plus the max back-to-back **burst** and mean/max inter-packet
+gap, and a receiver-observed class — **narrow** (≤5), **wide** (≤20), **bursty** (>20). The genuine
+ST 2110 essences show their declared SDP `TP`. The measured numbers back the honest SDPs: the Pi raw
+video bursts a whole frame of packets then idles (Cmax ≈ 230, *bursty*), while the Pi L24 audio at a
+fixed 1 ms ptime paces tight (gap ≈ 1000 µs, Cmax ≈ 11), and low-rate Ancillary/Opus read *narrow* —
+which is exactly why the ST 2110 senders declare `TP=2110TPW`, not Narrow (true `2110TPN` needs a
+hardware-paced NIC).
+
 ---
 
 ## 10. Launch paths, then and now

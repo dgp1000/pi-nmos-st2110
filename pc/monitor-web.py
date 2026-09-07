@@ -377,6 +377,23 @@ def _hdhr_rediscover():
         print(f"HDHomeRun {HDHR_DEVICE_ID} moved {HDHR_HOST} -> {ip}", flush=True)
         HDHR_HOST = ip
 _RUN = _c.get('ATOLL_RUN', '/home/david/atoll-run')
+SWITCHER_KNOB = _RUN + "/switcher"
+_SWITCH_SRCS = ["hevc", "jxs", "music", "tsrtp", "h264"]
+_SWITCH_LABEL = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "tsrtp": "TS over RTP", "h264": "H.264 RTP"}
+_switcher = {"a": "hevc", "b": "music", "trans": "dissolve", "rate": 1.0, "seq": 0}
+def _switch_write():
+    try:
+        with open(SWITCHER_KNOB, "w") as f:
+            f.write(f"{_switcher['a']} {_switcher['b']} {_switcher['trans']} {_switcher['rate']} {_switcher['seq']}\n")
+    except OSError:
+        pass
+def _switch_pgm(): return _switcher["a"] if _switcher["seq"] % 2 == 0 else _switcher["b"]
+def _switch_pvw(): return _switcher["b"] if _switcher["seq"] % 2 == 0 else _switcher["a"]
+def _switch_state():
+    return {"a": _switcher["a"], "b": _switcher["b"], "trans": _switcher["trans"], "rate": _switcher["rate"],
+            "seq": _switcher["seq"], "pgm": _switch_pgm(), "pvw": _switch_pvw(),
+            "sources": [{"key": k, "label": _SWITCH_LABEL[k]} for k in _SWITCH_SRCS]}
+_switch_write()
 TV_STATE = _RUN + '/tv-channel'
 TV_FAVS = _RUN + '/tv-favorites'   # favorite channel numbers, one per line, in the order added
 FEC_LOSS = _RUN + '/fec-loss'      # ST 2022-1 demo: fraction of media packets to drop
@@ -518,6 +535,15 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #progbtns{display:flex;flex-wrap:wrap;justify-content:center;margin-left:.6vw}
  #progbtns button{font-size:min(2vw,2.3vh);padding:.35em .7em;margin:.3vh .3vw;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
  #progbtns button.on{background:#093;color:#000;border-color:#0f0;font-weight:bold}
+ #switchwrap{margin-top:.6vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:.5vw}
+ .sw-pgm{color:#f77;font-weight:700;font-size:min(2vw,2.3vh)}
+ .sw-lbl{color:#7c9;font-size:min(1.6vw,1.9vh);letter-spacing:.08em}
+ #sw-pvw{display:flex;flex-wrap:wrap}
+ #sw-pvw button{font-size:min(1.9vw,2.2vh);padding:.35em .7em;margin:.3vh .3vw;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
+ #sw-pvw button.on{background:#093;color:#000;border-color:#0f0;font-weight:bold}
+ #sw-trans{font-size:min(1.8vw,2.1vh);padding:.35em .7em;background:#141410;border:1px solid #3a3a1a;color:#cc9;border-radius:6px}
+ .sw-take{font-size:min(2.2vw,2.6vh);padding:.4em 1.1em;margin-left:.4vw;background:#c22;color:#fff;font-weight:800;border:1px solid #f55;border-radius:6px;letter-spacing:.06em}
+ .sw-take:active{background:#f33}
  #amapwrap{margin-top:.6vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
  #amapwrap button{font-size:min(2vw,2.3vh);padding:.35em .7em;margin:.3vh .3vw;background:#0a1014;border:1px solid #1a2a3a;color:#9cc;border-radius:6px}
  #amapwrap button.on{background:#39c;color:#000;border-color:#0cf;font-weight:bold}
@@ -615,12 +641,21 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="lwall" onclick="setLayout('wall')">Wall +tally</button>
    <button id="lmulti" onclick="setLayout('multi')">Multiview</button>
    <button id="lprogram" onclick="setLayout('program')">&#127909; Program Out</button>
+   <button id="lswitcher" onclick="setLayout('switcher')">&#127899; Switcher</button>
   </div>
   <div id="progwrap">
    <span class="l2">PROGRAM OUT &middot; IS-05 ROUTE</span>
    <div id="progbtns"></div>
    <button id="schedtog" onclick="toggleSched(this)">&#9201; Schedule +5s: off</button>
    <span id="progpend"></span>
+  </div>
+  <div id="switchwrap">
+   <span class="l2">SWITCHER</span>
+   <span id="sw-pgm" class="sw-pgm">PROGRAM &middot; &mdash;</span>
+   <span class="sw-lbl">PREVIEW</span>
+   <div id="sw-pvw"></div>
+   <button id="sw-trans" onclick="toggleSwTrans()">Dissolve</button>
+   <button id="sw-take" class="sw-take" onclick="swTake()">TAKE</button>
   </div>
   <div id="music">
    <span class="l2">MUSIC</span>
@@ -735,7 +770,7 @@ async function musicState(){
       const sh=document.getElementById('mshuf'); if(sh) sh.classList.toggle('on',!!d.shuffle);
   }catch(e){np.textContent='(offline)';}
 }
-const LAYBTN={single:'lsingle',side:'lside',multi:'lmulti',wall:'lwall',program:'lprogram'};
+const LAYBTN={single:'lsingle',side:'lside',multi:'lmulti',wall:'lwall',program:'lprogram',switcher:'lswitcher'};
 async function loadProgramOut(){
   try{
     const d=await(await fetch("/programout/state",{cache:"no-store"})).json();
@@ -764,6 +799,22 @@ async function routeProgram(ess){
   setTimeout(loadProgramOut,300);
 }
 function hlLayout(m){ document.querySelectorAll('#lay button').forEach(b=>b.classList.remove('on')); const b=document.getElementById(LAYBTN[m]); if(b) b.classList.add('on'); }
+let SW={trans:'dissolve',rate:1.0};
+function swLabelOf(d,k){const s=d.sources.find(x=>x.key===k);return s?s.label:k;}
+async function loadSwitcher(){
+  try{
+    const d=await(await fetch('/switcher/state',{cache:'no-store'})).json();
+    SW.trans=d.trans; SW.rate=d.rate;
+    document.getElementById('sw-pgm').innerHTML='PROGRAM \u00b7 '+esc(swLabelOf(d,d.pgm));
+    const box=document.getElementById('sw-pvw');
+    box.innerHTML=d.sources.map(function(x){return '<button data-sw="'+x.key+'" class="'+(x.key===d.pvw?'on':'')+'">'+esc(x.label)+'</button>';}).join('');
+    box.querySelectorAll('button').forEach(function(b){b.onclick=function(){setPvw(b.getAttribute('data-sw'));};});
+    document.getElementById('sw-trans').textContent = d.trans==='cut' ? 'Cut' : ('Dissolve '+Number(d.rate).toFixed(1)+'s');
+  }catch(e){}
+}
+async function setPvw(src){ try{await fetch('/switcher/pvw?src='+encodeURIComponent(src),{cache:'no-store'});}catch(e){} setTimeout(loadSwitcher,200); }
+async function swTake(){ try{await fetch('/switcher/take',{cache:'no-store'});}catch(e){} setTimeout(loadSwitcher,200); }
+async function toggleSwTrans(){ const t=SW.trans==='cut'?'dissolve':'cut'; try{await fetch('/switcher/trans?type='+t+'&rate='+SW.rate,{cache:'no-store'});}catch(e){} setTimeout(loadSwitcher,200); }
 async function setLayout(m){ hlLayout(m); try{await fetch('/layout?mode='+m,{cache:'no-store'});}catch(e){} }
 async function refreshState(){
   try{const r=await fetch('/state',{cache:'no-store'});const d=await r.json();
@@ -871,6 +922,7 @@ musicState();   setInterval(musicState,4000);
 loadAudiomap(); setInterval(loadAudiomap,3000);
 loadTv();       // populate the favorites row on load (no interval — avoids hammering the HDHR)
 loadProgramOut(); setInterval(loadProgramOut,2000);
+loadSwitcher(); setInterval(loadSwitcher,2000);
 fecRefresh();   setInterval(fecRefresh,4000);
 spsRefresh();   setInterval(spsRefresh,4000);
 async function followerSync(){
@@ -971,10 +1023,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif parsed.path == "/layout":
             qs = parse_qs(parsed.query)
             mode = qs.get("mode", ["single"])[0]
-            if mode not in ("single", "side", "multi", "wall", "program"):
+            if mode not in ("single", "side", "multi", "wall", "program", "switcher"):
                 mode = "single"
             _output["layout"] = mode
             self._send_json(json.dumps({"layout": mode}).encode())
+        elif parsed.path == "/switcher/state":
+            self._send_json(json.dumps(_switch_state()).encode())
+        elif parsed.path == "/switcher/pvw":
+            src = parse_qs(parsed.query).get("src", [""])[0]
+            if src in _SWITCH_SRCS:
+                if _switcher["seq"] % 2 == 0: _switcher["b"] = src
+                else: _switcher["a"] = src
+                _switch_write()
+            self._send_json(json.dumps(_switch_state()).encode())
+        elif parsed.path == "/switcher/take":
+            _switcher["seq"] += 1; _switch_write()
+            self._send_json(json.dumps(_switch_state()).encode())
+        elif parsed.path == "/switcher/trans":
+            _q = parse_qs(parsed.query)
+            _t = _q.get("type", ["dissolve"])[0]
+            if _t in ("cut", "dissolve"): _switcher["trans"] = _t
+            try:
+                _switcher["rate"] = max(0.2, min(3.0, float(_q.get("rate", ["1.0"])[0])))
+            except ValueError:
+                pass
+            _switch_write()
+            self._send_json(json.dumps(_switch_state()).encode())
         elif parsed.path == "/programout/state":
             try:
                 with urllib.request.urlopen(f"{PROGRAMOUT}/programout", timeout=3) as r:

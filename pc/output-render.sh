@@ -137,6 +137,12 @@ build_pipeline() {   # $1=layout  $2=active
         $(tile_full "$m1" 1 960 540) \
         $(tile_full "$m2" 2 960 540) \
         $(tile_full "$m3" 3 960 540)" ;;
+    switcher)
+      # Production switcher: PROGRAM (fullscreen) + PREVIEW (inset), cut/dissolve takes. It reads its
+      # own two sources + take/transition from ~/atoll-run/switcher and manages its own PGM-follow
+      # audio, so output-render just launches it once (source changes + takes happen inside it).
+      echo "python3 \"$DIR/switcher-view.py\" \"$SCREEN\""
+      ;;
   esac
 }
 
@@ -204,7 +210,7 @@ while true; do
   # --- audio: follow the SELECTED source. single hevc/jxs already embed their own
   # (lip-synced) audio; run the standalone follower only where the video has none:
   # side/multi, and single+raw. Switches instantly without touching the video. ---
-  if [ "$layout" = "single" ] || [ "$layout" = "program" ]; then akey=""; else akey="$active"; fi
+  if [ "$layout" = "single" ] || [ "$layout" = "program" ] || [ "$layout" = "switcher" ]; then akey=""; else akey="$active"; fi
   adelay="$(cat "$ADELAY_FILE" 2>/dev/null)"; [[ "$adelay" =~ ^[0-9]+$ ]] || adelay=0
   if [ "$akey" != "$aud_key" ] || [ "$adelay" != "$last_adelay" ]; then
     kill_audio

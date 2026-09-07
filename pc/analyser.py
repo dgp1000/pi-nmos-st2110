@@ -17,6 +17,7 @@
 # ===========================================================================
 import socket, struct, threading, time, json, subprocess, os, select, sys, collections
 import http.server, socketserver, urllib.request
+SO_TIMESTAMPNS = 35   # Linux: kernel RX timestamp (ns) via recvmsg ancillary data
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -155,7 +156,10 @@ FLOWS = [f for f in FLOWS if f[1] and f[2]]
 
 class Flow:
     __slots__ = ("label", "grp", "port", "std", "sock", "pkts", "bytes", "seq", "lost", "reorder",
-                 "pt", "ssrc", "is_rtp", "last", "rate_pps", "rate_bps", "avg", "loss_pct", "total_lost")
+                 "pt", "ssrc", "is_rtp", "last", "rate_pps", "rate_bps", "avg", "loss_pct", "total_lost",
+                 # ST 2110-21 receive-side pacing (Cmax via a virtual-receive-buffer leaky bucket)
+                 "_tprev", "_vrx", "_vrxpeak", "_drain", "_gsum", "_gn", "_gmax", "_brun", "_bmax",
+                 "cmax", "burst", "gap_mean_us", "gap_max_us")
 
     def __init__(self, label, grp, port, std):
         self.label, self.grp, self.port, self.std = label, grp, int(port), std
@@ -166,6 +170,12 @@ class Flow:
         self.is_rtp = False
         self.last = 0.0
         self.rate_pps = self.rate_bps = self.avg = self.loss_pct = 0.0
+        self._tprev = None
+        self._vrx = self._vrxpeak = 0.0
+        self._drain = 0.0            # ideal drain rate (pps); set each window from the measured rate
+        self._gsum = 0.0; self._gn = 0; self._gmax = 0.0
+        self._brun = 0; self._bmax = 0
+        self.cmax = self.gap_mean_us = self.gap_max_us = 0.0; self.burst = 0
         self.sock = self._join()
 
     def _join(self):
@@ -182,16 +192,45 @@ class Flow:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16 * 1024 * 1024)
         except OSError:
             pass
+        try:
+            s.setsockopt(socket.SOL_SOCKET, SO_TIMESTAMPNS, 1)   # kernel RX timestamps for pacing analysis
+        except OSError:
+            pass
         s.bind(("", self.port))
         mreq = struct.pack("4s4s", socket.inet_aton(self.grp), socket.inet_aton(LOCAL))
         s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
         s.setblocking(False)
         return s
 
-    def feed(self, d):
+    def feed(self, d, t=None):
         self.pkts += 1
         self.bytes += len(d)
         self.last = time.time()
+        # ST 2110-21 pacing: drain a virtual receive buffer at the flow's mean rate; its peak
+        # occupancy is Cmax (packets). t is the KERNEL rx timestamp, so this measures how the
+        # packets actually arrive, not when Python drained the socket.
+        if t is not None and self._drain > 0.0 and self._tprev is not None:
+            gap = t - self._tprev
+            if gap < 0.0:
+                gap = 0.0
+            self._vrx = self._vrx - gap * self._drain
+            if self._vrx < 0.0:
+                self._vrx = 0.0
+            self._vrx += 1.0
+            if self._vrx > self._vrxpeak:
+                self._vrxpeak = self._vrx
+            gus = gap * 1e6
+            self._gsum += gus; self._gn += 1
+            if gus > self._gmax:
+                self._gmax = gus
+            if gap < 0.2 / self._drain:           # back-to-back vs the ideal interval -> a clump
+                self._brun += 1
+                if self._brun + 1 > self._bmax:
+                    self._bmax = self._brun + 1
+            else:
+                self._brun = 0
+        if t is not None:
+            self._tprev = t
         if len(d) < 12 or (d[0] >> 6) != 2:      # not RTP (e.g. bare TS in UDP)
             return
         self.is_rtp = True
@@ -223,13 +262,17 @@ def reader():
             f = by_fd.get(s.fileno())
             while True:                            # drain this socket
                 try:
-                    d = s.recv(2048)
+                    d, anc, _flags, _addr = s.recvmsg(2048, 256)
                 except BlockingIOError:
                     break
                 except OSError:
                     break
+                t = None
+                for _lvl, _typ, _cd in anc:        # kernel RX timestamp (SO_TIMESTAMPNS)
+                    if _lvl == socket.SOL_SOCKET and _typ == SO_TIMESTAMPNS and len(_cd) >= 16:
+                        _sec, _nsec = struct.unpack("qq", _cd[:16]); t = _sec + _nsec / 1e9
                 if f:
-                    f.feed(d)
+                    f.feed(d, t)
 
 def sampler():
     prev = {f.label: (0, 0, 0) for f in flows}
@@ -247,6 +290,14 @@ def sampler():
             f.rate_bps = db * 8 / dt
             f.avg = (db / dp) if dp else 0.0
             f.loss_pct = (100.0 * dl / (dp + dl)) if (dp + dl) else 0.0
+            # finalize this window's pacing, then arm the drain rate for the next window
+            f.cmax = f._vrxpeak
+            f._vrxpeak = f._vrx                 # peak is per-window; carry the current level
+            f.gap_mean_us = (f._gsum / f._gn) if f._gn else 0.0
+            f.gap_max_us = f._gmax
+            f.burst = f._bmax
+            f._gsum = 0.0; f._gn = 0; f._gmax = 0.0; f._bmax = 0
+            f._drain = f.rate_pps
 
 # --- NMOS IS-07 tally receiver -------------------------------------------------------------
 # Which analyser row maps to which tally source. Explicit rather than matched on label: the two
@@ -315,6 +366,22 @@ def ptp_status():
     except Exception:
         return {"gm": PI, "reachable": False, "time": ""}
 
+# ST 2110-21 receiver-observed pacing classification. Narrow senders keep the virtual receive
+# buffer near empty (Cmax ~1-5); bursty software senders clump a frame/mux-group of packets then
+# idle, so Cmax climbs. Only the genuine ST 2110 essences carry a declared TP in their SDP.
+_P21_DECLARED = {
+    "Pi raw video": "ST 2110-20 \u00b7 TP=2110TPW",
+    "Pi audio":     "ST 2110-30 \u00b7 1 ms ptime",
+}
+def _pace_class(cmax, alive):
+    if not alive:
+        return None
+    if cmax <= 5.0:
+        return "narrow"
+    if cmax <= 20.0:
+        return "wide"
+    return "bursty"
+
 def snapshot():
     now = time.time()
     out = []
@@ -324,7 +391,10 @@ def snapshot():
                     "alive": alive, "pps": round(f.rate_pps), "mbps": round(f.rate_bps / 1e6, 2),
                     "avg": round(f.avg), "rtp": f.is_rtp, "pt": f.pt,
                     "ssrc": (f"{f.ssrc:08x}" if f.ssrc is not None else None),
-                    "lost": f.total_lost, "loss_pct": round(f.loss_pct, 3), "reorder": f.reorder})
+                    "lost": f.total_lost, "loss_pct": round(f.loss_pct, 3), "reorder": f.reorder,
+                    "cmax": round(f.cmax, 1), "burst": f.burst,
+                    "gap_mean_us": round(f.gap_mean_us, 1), "gap_max_us": round(f.gap_max_us, 1),
+                    "pace": _pace_class(f.cmax, alive), "declared": _P21_DECLARED.get(f.label)})
     tally = is07_status()
     for x in out:
         k = IS07_KEY.get(x["label"])
@@ -411,6 +481,8 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  .evv{width:46px;flex:none;text-align:right;font-weight:700}
  .evv.offv{color:#5d7a68;font-weight:400}
  .evempty{padding:9px 11px;color:#476}
+ .pnote{color:#8aa;font-size:12px;line-height:1.55;padding:8px 11px 2px;max-width:70em}
+ .pnote code{color:#8ec98e}
 </style></head><body>
 <header><h1>ATOLL</h1><span class="sub">island flow analyser &middot; 10.10.10.0/24</span>
  <span id="ptp" class="sub"></span><span id="is07" class="sub"></span><span id="pgm" class="sub"></span><span id="take" class="sub"></span><span id="fec" class="sub"></span><span class="tot" id="tot"></span></header>
@@ -418,6 +490,12 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  <th>flow</th><th>tally</th><th>pgm</th><th>output</th><th>group : port</th><th class="n">pps</th><th class="n">Mbit/s</th>
  <th class="n">avg pkt</th><th>transport</th><th class="n">lost</th><th class="n">loss %</th><th>standard</th>
 </tr></thead><tbody id="rows"></tbody></table></div>
+<section class="evs"><h2>ST 2110-21 &middot; sender pacing <span class="sub">receiver-observed, from kernel RX timestamps</span></h2>
+<div class="wrap"><table><thead><tr>
+ <th>flow</th><th class="n">Cmax (pkts)</th><th class="n">max burst</th><th class="n">gap mean &micro;s</th><th class="n">gap max &micro;s</th><th>pacing</th><th>declared (SDP)</th>
+</tr></thead><tbody id="prows"></tbody></table></div>
+<div class="pnote"><b>Cmax</b> is the peak of a virtual receive buffer drained at each flow\u2019s mean rate \u2014 the ST 2110-21 network-compatibility model, measured here from kernel RX timestamps at the analyser socket. <span class="ok">narrow</span> (&le;5 pkts) is what a hardware-paced sender achieves; our GStreamer software senders clump a whole frame or mux-group of packets then idle, so they read <span class="warn">wide</span> to <span class="bad">bursty</span> \u2014 which is exactly why the ST 2110 SDPs honestly declare <code>TP=2110TPW</code>, not Narrow (true <code>2110TPN</code> needs a hardware-paced NIC). Note the Pi <b>L24 audio</b> (fixed 1&nbsp;ms ptime) paces far tighter than the Pi <b>raw video</b> (whole-frame bursts).</div>
+</section>
 <section class="evs"><h2>IS-07 event stream</h2>
  <div id="ev" class="evlist"><div class="evempty">waiting for events\u2026</div></div></section>
 <footer id="ft">&nbsp;</footer>
@@ -454,6 +532,17 @@ async function load(){
    '<td class="n">'+(f.rtp?f.lost.toLocaleString():'&ndash;')+'</td>'+
    '<td class="n '+lossCls+'">'+(f.rtp?f.loss_pct.toFixed(2):'&ndash;')+'</td>'+
    '<td class="std">'+esc(f.std)+'</td></tr>';
+ }).join('');
+ document.getElementById('prows').innerHTML=d.flows.filter(f=>f.alive).map(f=>{
+  const cls=f.pace==='narrow'?'ok':(f.pace==='wide'?'warn':'bad');
+  return '<tr>'+
+   '<td class="lbl">'+esc(f.label)+'</td>'+
+   '<td class="n">'+f.cmax.toFixed(1)+'</td>'+
+   '<td class="n">'+f.burst+'</td>'+
+   '<td class="n">'+f.gap_mean_us.toFixed(0)+'</td>'+
+   '<td class="n">'+f.gap_max_us.toFixed(0)+'</td>'+
+   '<td class="'+cls+'">'+esc(f.pace||'')+'</td>'+
+   '<td class="std">'+(f.declared?esc(f.declared):'&ndash;')+'</td></tr>';
  }).join('');
  const s7=d.is07;
  document.getElementById('is07').innerHTML='IS-07 '+(s7.connected

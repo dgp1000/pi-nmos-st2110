@@ -378,6 +378,17 @@ def _hdhr_rediscover():
         HDHR_HOST = ip
 _RUN = _c.get('ATOLL_RUN', '/home/david/atoll-run')
 SWITCHER_KNOB = _RUN + "/switcher"
+AVSYNC_KNOB = _RUN + "/video-delay-ms"   # A/V sync: +ms holds video back to meet late audio
+def _avsync_get():
+    try: return int(open(AVSYNC_KNOB).read().strip())
+    except Exception: return 0
+def _avsync_set(ms):
+    try: ms = max(-100, min(300, int(float(ms))))
+    except Exception: return {"ms": _avsync_get()}
+    try:
+        with open(AVSYNC_KNOB, "w") as f: f.write(str(ms) + "\n")
+    except OSError: pass
+    return {"ms": ms}
 _SWITCH_SRCS = ["hevc", "jxs", "music", "tsrtp", "h264"]
 _SWITCH_LABEL = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "tsrtp": "TS over RTP", "h264": "H.264 RTP"}
 _switcher = {"a": "hevc", "b": "music", "trans": "dissolve", "rate": 1.0, "seq": 0}
@@ -539,6 +550,10 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  .flock{color:#3c9;font-weight:bold} .fwarn{color:#fc0;font-weight:bold} .foff{color:#c84;font-weight:bold}
  #lay{margin-top:1vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
  #lay button{font-size:min(2.6vw,3vh);padding:.4em .8em;margin:.4vh .4vw}
+ #avsync{display:flex;align-items:center;gap:.7vw;margin-top:.8vh;width:min(60vw,70vh)}
+ #avsync .avlbl{color:#6cba90;font-size:min(1.5vw,1.8vh);letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+ #avslider{flex:1;height:2.4vh}
+ #avsync .avval{color:#9c9;font-size:min(1.7vw,2vh);min-width:5ch;text-align:right;font-variant-numeric:tabular-nums}
  #progwrap{margin-top:.6vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
  #progbtns{display:flex;flex-wrap:wrap;justify-content:center;margin-left:.6vw}
  #progbtns button{font-size:min(2vw,2.3vh);padding:.35em .7em;margin:.3vh .3vw;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
@@ -653,6 +668,11 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="lmulti" onclick="setLayout('multi')">Multiview</button>
    <button id="lprogram" onclick="setLayout('program')">&#127909; Program Out</button>
    <button id="lswitcher" onclick="setLayout('switcher')">&#127899; Switcher</button>
+  </div>
+  <div id="avsync">
+   <span class="avlbl">A/V sync</span>
+   <input type="range" id="avslider" min="-100" max="300" step="5" value="60" oninput="avsyncInput(this.value)">
+   <span id="avval" class="avval">60 ms</span>
   </div>
   </section>
 
@@ -856,10 +876,18 @@ async function setPvw(src){ try{await fetch('/switcher/pvw?src='+encodeURICompon
 async function swTake(){ try{await fetch('/switcher/take',{cache:'no-store'});}catch(e){} setTimeout(loadSwitcher,200); }
 async function toggleSwTrans(){ const t=SW.trans==='cut'?'dissolve':'cut'; try{await fetch('/switcher/trans?type='+t+'&rate='+SW.rate,{cache:'no-store'});}catch(e){} setTimeout(loadSwitcher,200); }
 async function setLayout(m){ hlLayout(m); try{await fetch('/layout?mode='+m,{cache:'no-store'});}catch(e){} }
+let _avT=null;
+function avsyncInput(v){
+  document.getElementById('avval').textContent = v + ' ms';
+  if(_avT) clearTimeout(_avT);
+  _avT = setTimeout(function(){ fetch('/avsync/set?ms='+v,{cache:'no-store'}).catch(function(){}); }, 120);
+}
 async function refreshState(){
   try{const r=await fetch('/state',{cache:'no-store'});const d=await r.json();
       if(d.active) highlight(d.active); if(d.layout) hlLayout(d.layout);
-      if(d.slots){ curSlots=d.slots.split(','); renderSlots(); } }catch(e){}
+      if(d.slots){ curSlots=d.slots.split(','); renderSlots(); }
+      if(d.video_delay!==undefined){ const sl=document.getElementById('avslider');
+        if(sl && document.activeElement!==sl){ sl.value=d.video_delay; document.getElementById('avval').textContent=d.video_delay+' ms'; } } }catch(e){}
 }
 const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const dot=b=>b?'<span class="on-dot">&#9679;</span>':'<span class="off-dot">&#9675;</span>';
@@ -1069,7 +1097,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._send_json(json.dumps({"error": str(e)}).encode(), 500)
         elif parsed.path == "/state":
             try:
-                self._send_json(json.dumps({"active": active_src(), "layout": _output["layout"], "slots": ",".join(_slots)}).encode())
+                self._send_json(json.dumps({"active": active_src(), "layout": _output["layout"], "slots": ",".join(_slots), "video_delay": _avsync_get()}).encode())
             except Exception as e:
                 self._send_json(json.dumps({"error": str(e)}).encode(), 500)
         elif parsed.path == "/layout":
@@ -1195,6 +1223,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif parsed.path == "/sps/set":
             _q = parse_qs(parsed.query)
             self._send_json(sps_set(_q.get("path", [""])[0], _q.get("up", ["1"])[0]))
+        elif parsed.path == "/avsync/set":
+            _q = parse_qs(parsed.query)
+            self._send_json(json.dumps(_avsync_set(_q.get("ms", ["0"])[0])).encode())
+        elif parsed.path == "/avsync/state":
+            self._send_json(json.dumps({"ms": _avsync_get()}).encode())
         elif parsed.path == "/fec/state":
             self._send_json(fec_state())
         elif parsed.path == "/fec/set":

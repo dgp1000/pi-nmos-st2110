@@ -725,8 +725,11 @@ the way a real switcher must behave. It is two parts bridged by `intervideosrc`/
 
 Driven by `~/atoll-run/switcher` = `"<srcA> <srcB> <transition> <rate> <take_seq>"`; the take-seq
 **parity** picks PGM (even=A, odd=B), so a TAKE just bumps the seq (animate) while the two source
-identities stay put. PROGRAM audio follows the on-air source via a subprocess, switched only when the
-PGM source changes. The panel's SWITCHER row picks the PREVIEW source, toggles Cut/Dissolve and fires
+identities stay put. **PROGRAM audio transitions with the picture**: each bus decodes audio to a
+second inter-pipeline bus (`interaudiosink` abusA/abusB) and a persistent audio mixer runs both
+through `volume` elements (volA/volB) into an `audiomixer`; the take animates them, so a DISSOLVE
+crossfades the sound over the same `rate` as the video and a CUT switches it instantly (in-process,
+no audio subprocess). The panel's SWITCHER row picks the PREVIEW source, toggles Cut/Dissolve and fires
 TAKE (`/switcher/{state,pvw,take,trans}`). Sources: Live TV, Home videos, Music, TS-over-RTP, H.264.
 
 ### 7.3 `meter-view.py` — single view

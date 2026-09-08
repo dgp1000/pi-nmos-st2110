@@ -115,7 +115,7 @@ build_pipeline() {   # $1=layout  $2=active
       if [ "$2" = "none" ] || [ -z "$2" ]; then
         echo "gst-launch-1.0 -q videotestsrc pattern=black is-live=true ! video/x-raw,width=1920,height=1080,framerate=30/1 ! textoverlay text='Program Out: no route (connect a flow over IS-05)' valignment=center halignment=center font-desc='$F' ! $BRAND ! $VIDEO_SINK sync=false"
       else
-        echo "python3 \"$DIR/meter-view.py\" \"$2\" \"$SCREEN\""
+        echo "ATOLL_METER_NOPANEL=1 python3 \"$DIR/meter-view.py\" \"$2\" \"$SCREEN\""
       fi
       ;;
     side)
@@ -193,7 +193,9 @@ while true; do
   # settled stream links cleanly, so a transient blip recovers on its own.
   if [ -n "$apid" ] && ! kill -0 "$apid" 2>/dev/null; then apid=""; aud_key="__force_audio_rebuild__"; fi
   # --- video: relaunch the pipeline only on layout/source/tile-assignment change ---
-  case "$layout" in single) key="single:$active";; program) key="program:$active";; multi) key="multi:$slots";; wall) key="wall:$slots";; *) key="$layout";; esac
+  # single now handles source changes live (meter-view rebuilds only its source pipeline);
+  # relaunch it only on a layout change. program still relaunches per IS-05 route.
+  case "$layout" in single) key="single";; program) key="program:$active";; multi) key="multi:$slots";; wall) key="wall:$slots";; *) key="$layout";; esac
   if [ "$key" != "$cur_key" ]; then
     cmd="$(build_pipeline "$layout" "$active" "$slots")"
     if [ -n "$cmd" ]; then

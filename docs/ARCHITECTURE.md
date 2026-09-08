@@ -973,3 +973,35 @@ These are the constraints that recur across modules. Each one was learned by bre
   its task. Source-first waited forever on `souphttpsrc`'s task, blocked into a full queue below it,
   and that wait ran on the main loop, so the watchdog that should have caught it was frozen too
   (Live TV black, deaf to channel changes, 3 Sep 2026). The thread-based hang guard is the backstop.
+
+---
+
+## 13. Timing & clocks
+
+Two independent clocks show up as timecodes, and keeping them aligned matters.
+
+- **The panel timecode follows the Pi grandmaster.** The panel proxies the Pi's `:8000/time`, so its
+  clock is the island's PTP grandmaster time (NTP-correct real time).
+- **The output's burned-in `clockoverlay` uses the PC (WSL) system clock.** So if the PC clock drifts,
+  the output timecode drifts with it — independently of the panel.
+
+**The drift trap (seen 7 Sep 2026, output ran ~9 s ahead of the panel).** The WSL2 guest clock is not
+its own — the WSL kernel force-syncs it to the **Windows host** via a Hyper-V PTP clock
+(`/dev/ptp_hyperv`, with `chronyd` alongside). If the Windows **W32Time** service is stopped, the host
+drifts (it was ~+10 s), the WSL guest follows, and every PC-stamped timecode leads the panel by that.
+Fix on the **Windows host** (elevated): start + auto-enable `W32Time` and point it at NTP
+(`Set-Service W32Time -StartupType Automatic; Start-Service W32Time; w32tm /config /manualpeerlist:… ;
+w32tm /resync /force`). The guest then tracks the corrected host to ~10–30 ms of the grandmaster —
+imperceptible on a timecode, and persistent.
+
+**Why the PC is not PTP-disciplined.** It would be the broadcast-pure choice, but it is **not
+achievable on WSL**: the WSL kernel owns the guest clock and overrides `ptp4l` (and `chronyd`) — proven
+by locking `ptp4l` to the grandmaster (it reaches SLAVE) yet its adjustments never stick, and by
+stopping `chronyd` (the clock stays pinned to the host). If real PTP on the PC is ever needed, in
+increasing accuracy: **(1)** a real VM instead of WSL — you can disable the hypervisor's host time-sync
+so `ptp4l` becomes authoritative, but a virtual NIC is **software-timestamped** (~sub-ms to a few ms,
+no PHC); **(2)** **bare-metal Linux + a NIC with a PHC** (PTP Hardware Clock — hardware timestamping at
+the wire, `/dev/ptp0`, `ethtool -T`) → sub-microsecond, broadcast-grade; **(3)** or pass a PTP NIC
+through to a VM (Hyper-V DDA / SR-IOV) for PHC-grade timing in a guest. The whole island is
+software-timestamped today anyway (even the grandmaster runs `ptp4l -S`), so it lives in the ~ms
+regime — PHC-grade only matters for true genlock interop of the PC's own ST 2110 timestamps.

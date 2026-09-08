@@ -526,6 +526,7 @@ def on_draw(_ov, ctx, _ts, _dur):
         x, y = POS[i]
         ctx.rectangle(x * sx, (y + TH - 95 * S) * sy, TW * sx, 95 * S * sy)   # UMD / fps / FEC / meters
         ctx.rectangle(x * sx, y * sy, 150 * S * sx, 62 * S * sy)              # ON AIR + IS-07 flag
+        ctx.rectangle((x + TW - 130 * S) * sx, y * sy, 130 * S * sx, 46 * S * sy)  # AUDIO badge (left pane)
         ctx.rectangle(x * sx, y * sy, TW * sx, b * sy)                        # tally border: top
         ctx.rectangle(x * sx, (y + TH - b) * sy, TW * sx, b * sy)             #               bottom
         ctx.rectangle(x * sx, y * sy, b * sx, TH * sy)                        #               left
@@ -558,6 +559,11 @@ def _draw_overlay(ctx):
             if tag:   # the border is lit by an IS-07 boolean, not by panel state -- say so
                 ctx.set_source_rgba(1, 1, 1, 0.85); ctx.set_font_size(11 * S)
                 ctx.move_to(x + 22 * S, y + 45 * S); ctx.show_text("NMOS IS-07")
+        # --- AUDIO badge on the LEFT pane (slot 0): its source is what you hear ---
+        if i == 0:
+            ctx.set_source_rgba(0.10, 0.55, 0.95, 0.92); ctx.rectangle(x + TW - 128 * S, y + 10 * S, 118 * S, 30 * S); ctx.fill()
+            ctx.set_source_rgba(1, 1, 1, 1); ctx.set_font_size(15 * S)
+            ctx.move_to(x + TW - 116 * S, y + 31 * S); ctx.show_text("♪ AUDIO")
         # --- UMD label + live bitrate ---
         ctx.set_source_rgba(0, 0, 0, 0.55); ctx.rectangle(x + 8 * S, y + TH - 40 * S, 320 * S, 30 * S); ctx.fill()
         ctx.set_source_rgba(1, 1, 1, 0.95); ctx.set_font_size(17 * S)

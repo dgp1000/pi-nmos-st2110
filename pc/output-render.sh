@@ -212,7 +212,12 @@ while true; do
   # --- audio: follow the SELECTED source. single hevc/jxs already embed their own
   # (lip-synced) audio; run the standalone follower only where the video has none:
   # side/multi, and single+raw. Switches instantly without touching the video. ---
-  if [ "$layout" = "single" ] || [ "$layout" = "program" ] || [ "$layout" = "switcher" ]; then akey=""; else akey="$active"; fi
+  # audio follower: single/program/switcher embed/manage their own audio. In SIDE the audio
+  # follows the LEFT pane (slot 0 = program pane), so switching it switches the sound; the
+  # right pane is silent video/preview. multi/wall follow the panel active source.
+  if [ "$layout" = "single" ] || [ "$layout" = "program" ] || [ "$layout" = "switcher" ]; then akey="";
+  elif [ "$layout" = "side" ]; then akey="${slots%%,*}";
+  else akey="$active"; fi
   adelay="$(cat "$ADELAY_FILE" 2>/dev/null)"; [[ "$adelay" =~ ^[0-9]+$ ]] || adelay=0
   if [ "$akey" != "$aud_key" ] || [ "$adelay" != "$last_adelay" ]; then
     kill_audio

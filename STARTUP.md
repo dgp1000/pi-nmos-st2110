@@ -125,6 +125,23 @@ still selectable — put it in `single`/`side`, not the default wall.
   `python3 pc/hdhr.py <DeviceID>`. Some ATSC 3.0 channels are DRM and come up black — pick a plain
   HD channel.
 
+### PC clock / time sync (output timecode vs the panel)
+- **Symptom:** the burned-in `clockoverlay` on the output runs ahead of the panel's timecode.
+- **Cause:** the panel timecode follows the **Pi grandmaster** (`/time`) = correct real time, but the
+  burned-in source clocks use the **PC (WSL) system clock**. The WSL guest mirrors the **Windows host**
+  clock (via the `/dev/ptp_hyperv` Hyper-V PTP, disciplined by the WSL kernel + chronyd). If the Windows
+  **W32Time** service is stopped, the host drifts (seen ~+10 s) and the output leads the panel by that.
+- **Fix (Windows host, elevated PowerShell):** `Set-Service W32Time -StartupType Automatic;
+  Start-Service W32Time; w32tm /config /manualpeerlist:"time.windows.com,0x9 pool.ntp.org,0x9"
+  /syncfromflags:manual /update; w32tm /resync /force`. Then the WSL guest tracks the corrected host to
+  ~10-30 ms of the grandmaster (imperceptible). Verify: on the PC compare `date` to `curl :8096/time`.
+- **Why not PTP-discipline the PC?** Tried it (linuxptp installed, ptp4l -s slaving to the grandmaster
+  with hybrid E2E). ptp4l reaches SLAVE but its clock adjustments **do not stick**: the WSL kernel force-
+  syncs the guest to the Windows host via `/dev/ptp_hyperv`, overriding both ptp4l and chronyd (verified
+  by stopping each -- the guest stayed pinned to the host value). So true sub-ms PTP on a WSL guest is
+  not achievable; the Windows-NTP path (~10-30 ms) is the working solution. A bare-metal/VM Linux host
+  (not WSL) would be needed for real PTP discipline.
+
 ### Sync
 - **Live TV A/V sync**: single / follow-take view is lip-synced — `meter-view.py` runs the audio sink
   at `sync=true` off the stream's own PTS, not a hand-tuned delay. `~/atoll-run/tv-audio-delay-ms`

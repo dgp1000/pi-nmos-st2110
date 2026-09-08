@@ -13,7 +13,10 @@ DECOUPLED design (a real switcher must never interrupt PROGRAM to cue a preview)
 
 Driven by ~/atoll-run/switcher:  "<srcA> <srcB> <transition> <rate> <take_seq>". take_seq PARITY
 picks PGM (even=A, odd=B) so a TAKE just bumps the seq (animate); the source identities stay put.
-PROGRAM audio follows the on-air source via a subprocess, switched only when the PGM source changes.
+PROGRAM audio is mixed IN-PROCESS: each bus decodes audio -> interaudiosink (abusA/abusB); a
+persistent audio pipeline runs both through `volume` elements into an audiomixer, and a TAKE
+animates those volumes -- so a DISSOLVE crossfades the sound with the picture and a CUT switches
+it instantly. No audio subprocess.
 """
 import gi, os, sys, subprocess, time, signal
 gi.require_version("Gst", "1.0")
@@ -66,30 +69,35 @@ def decode(key):
             f"! queue leaky=downstream max-size-time=700000000 max-size-buffers=0 max-size-bytes=0")
 
 # PROGRAM-follow audio (subprocess; switched only when the PGM source changes).
-def audio_cmd(key):
+def audio_decode(key, chan):
+    """Decode a source's audio to F32LE 48k stereo (normalised by AUDIO_GAIN_*) and hand it to the
+    audio bus `chan` (interaudiosink). The persistent audio mixer picks it up on interaudiosrc and
+    crossfades it via the per-bus volume. Sources without audio feed silence so the mixer always has
+    both inputs. Appended to that bus's source pipeline, so it rebuilds with the source."""
     gain_h = CFG.get("AUDIO_GAIN_HEVC") or "1.0"; gain_j = CFG.get("AUDIO_GAIN_JXS") or "1.0"; gain_m = CFG.get("AUDIO_GAIN_MUSIC") or "1.0"
+    tail = f"audioconvert ! audioresample ! audio/x-raw,format=F32LE,rate=48000,channels=2 ! interaudiosink channel={chan} sync=false"
     if key in ("hevc", "jxs", "tsrtp"):
         g, p = _g("HEVC" if key == "hevc" else ("HOME" if key == "jxs" else "TSRTP"))
         if key == "tsrtp":
-            head = f'udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=MP2T,payload=33" ! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name=a'
+            head = f'udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=MP2T,payload=33" ! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name=ad'
+            vdrain = "ad. ! queue ! h264parse ! fakesink sync=false"
         else:
-            head = f'udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=a'
+            head = f'udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=8388608 ! tsdemux name=ad'
+            vdrain = "ad. ! queue ! h265parse ! fakesink sync=false"
         gain = gain_h if key == "hevc" else (gain_j if key == "jxs" else "1.0")
-        vdrain = "a. ! queue ! h265parse ! fakesink sync=false" if key != "tsrtp" else "a. ! queue ! h264parse ! fakesink sync=false"
-        return (f'gst-launch-1.0 -q {head} {vdrain} a. ! audio/mpeg ! queue max-size-time=1500000000 ! decodebin ! audioconvert '
-                f'! audio/x-raw,channels=2 ! audioresample ! queue max-size-time=2000000000 ! volume volume={gain} ! autoaudiosink sync=true')
+        return (f'{head} {vdrain} ad. ! audio/mpeg ! queue max-size-time=1500000000 ! decodebin ! audioconvert '
+                f'! audio/x-raw,channels=2 ! audioresample ! volume volume={gain} ! {tail}')
     if key == "music":
         g, p = _g("MUSIC_AUDIO")
-        return (f'gst-launch-1.0 -q udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=16777216 '
+        return (f'udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true buffer-size=16777216 '
                 f'caps="application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96" ! rtpjitterbuffer latency=500 '
-                f'! rtpL24depay ! audioconvert ! audioresample ! queue max-size-time=2000000000 ! volume volume={gain_m} ! autoaudiosink sync=false')
+                f'! rtpL24depay ! audioconvert ! audioresample ! volume volume={gain_m} ! {tail}')
     if key == "h264":
         g, p = _g("OPUS")
-        return (f'gst-launch-1.0 -q udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true '
+        return (f'udpsrc address={g} port={p} multicast-iface={IFACE} auto-multicast=true '
                 f'caps="application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload=97" ! rtpjitterbuffer latency=200 '
-                f'! rtpopusdepay ! opusdec ! audioconvert ! audioresample ! queue max-size-time=2000000000 ! autoaudiosink sync=true')
-    return None
-
+                f'! rtpopusdepay ! opusdec ! audioconvert ! audioresample ! {tail}')
+    return f"audiotestsrc wave=silence is-live=true ! {tail}"
 def read_knob():
     try:
         parts = open(KNOB).read().split()
@@ -103,13 +111,14 @@ class Switcher:
         self.disp = None; self.mix = None; self.pads = {}
         self.srcpipe = {"A": None, "B": None}
         self.srckey = {"A": None, "B": None}
-        self.audio_proc = None; self.audio_key = None
+        self.aud = None; self.volA = None; self.volB = None
         self.pgm = "A"; self.take_seq = -1; self._anim = None; self._frames = 0
         a, b, trans, rate, seq = read_knob()
         self.take_seq = seq; self.pgm = "A" if seq % 2 == 0 else "B"
         self.set_source("A", a); self.set_source("B", b)   # source pipelines up first
         self.build_display()                                # persistent display consumes busA/busB
-        self.start_audio()
+        self.build_audio()                                  # persistent audio mixer consumes abusA/abusB
+        self.apply_bus()                                    # set initial PGM/PVW volumes
         GLib.timeout_add(300, self.poll)
         GLib.timeout_add_seconds(5, self._diag)
         if CFG.get("WAYLAND_DISPLAY"):
@@ -122,7 +131,8 @@ class Switcher:
         old = self.srcpipe.get(bus)
         if old:
             old.set_state(Gst.State.NULL)
-        pipe = Gst.parse_launch(decode(key) + f" ! intervideosink channel={ch} sync=false")
+        ach = "abusA" if bus == "A" else "abusB"
+        pipe = Gst.parse_launch(decode(key) + f" ! intervideosink channel={ch} sync=false " + audio_decode(key, ach))
         b = pipe.get_bus(); b.add_signal_watch()
         b.connect("message", lambda _b, m, bs=bus: self._src_msg(m, bs))
         pipe.set_state(Gst.State.PLAYING)
@@ -173,6 +183,17 @@ class Switcher:
                 return Gst.PadProbeReturn.OK
             ovpad.add_probe(Gst.PadProbeType.BUFFER, _count)
 
+    # --- persistent PROGRAM audio: mix both buses through per-bus volumes (the TAKE animates them) --
+    def build_audio(self):
+        asink = "fakesink sync=false" if os.environ.get("ATOLL_SINK_TEST") else "autoaudiosink sync=false"
+        desc = ("interaudiosrc channel=abusA ! audio/x-raw,rate=48000,channels=2 ! volume name=volA ! "
+                "audiomixer name=amix ! audioconvert ! audioresample ! " + asink + " "
+                "interaudiosrc channel=abusB ! audio/x-raw,rate=48000,channels=2 ! volume name=volB ! amix. ")
+        self.aud = Gst.parse_launch(desc)
+        self.volA = self.aud.get_by_name("volA"); self.volB = self.aud.get_by_name("volB")
+        b = self.aud.get_bus(); b.add_signal_watch(); b.connect("message", self.on_msg)
+        self.aud.set_state(Gst.State.PLAYING)
+
     def _snap(self):
         try:
             ps = os.path.join(HERE, "snap-window-screen.ps1")
@@ -186,7 +207,9 @@ class Switcher:
 
     def _diag(self):
         al = {k: round(self.pads[k].get_property("alpha"), 2) for k in ("Afull", "Bfull", "Ains", "Bins")}
-        print(f"switcher DIAG: pgm={self._pgm_key()} pvw={self._pvw_key()} frames/5s={self._frames} alphas={al}", flush=True)
+        vol = (round(self.volA.get_property("volume"), 2) if self.volA else None,
+               round(self.volB.get_property("volume"), 2) if self.volB else None)
+        print(f"switcher DIAG: pgm={self._pgm_key()} pvw={self._pvw_key()} frames/5s={self._frames} alphas={al} vol(A,B)={vol}", flush=True)
         self._frames = 0
         return True
 
@@ -200,53 +223,35 @@ class Switcher:
         self.pads[off].set_property("zorder", 5); self.pads[off].set_property("alpha", 0.0)
         self.pads[pvwins].set_property("alpha", 1.0)
         self.pads[pgmins].set_property("alpha", 0.0)
+        if self.volA and self.volB:                       # PGM audible, PVW muted (at rest)
+            self.volA.set_property("volume", 1.0 if self.pgm == "A" else 0.0)
+            self.volB.set_property("volume", 1.0 if self.pgm == "B" else 0.0)
 
     def take(self, newpgm, trans, rate):
         if self._anim:
             GLib.source_remove(self._anim); self._anim = None
         inc = "Bfull" if newpgm == "B" else "Afull"
+        vol_in = self.volB if newpgm == "B" else self.volA     # incoming PGM audio fades up
+        vol_out = self.volA if newpgm == "B" else self.volB    # outgoing PGM audio fades down
         if trans == "dissolve" and rate > 0.05:
             self.pads[inc].set_property("zorder", 7)      # incoming rides on top during the mix
             self.pads[inc].set_property("alpha", 0.0)
             steps = max(2, int(rate / 0.033)); state = {"i": 0}
             def step():
                 state["i"] += 1
-                self.pads[inc].set_property("alpha", min(1.0, state["i"] / steps))
+                frac = min(1.0, state["i"] / steps)
+                self.pads[inc].set_property("alpha", frac)      # video crossfade
+                if vol_in:  vol_in.set_property("volume", frac)         # audio crossfade, in step
+                if vol_out: vol_out.set_property("volume", 1.0 - frac)
                 if state["i"] >= steps:
-                    self.pgm = newpgm; self.apply_bus(); self.start_audio(); self._anim = None
+                    self.pgm = newpgm; self.apply_bus(); self._anim = None
                     return False
                 return True
             self._anim = GLib.timeout_add(33, step)
         else:
-            self.pgm = newpgm; self.apply_bus(); self.start_audio()
+            self.pgm = newpgm; self.apply_bus()             # CUT: apply_bus swaps volumes instantly
 
     # --- PROGRAM audio (switched only when the PGM source changes) --------------------------------
-    def _stop_audio(self):
-        if not self.audio_proc:
-            return
-        try:
-            os.killpg(os.getpgid(self.audio_proc.pid), signal.SIGTERM)
-        except Exception:
-            try: self.audio_proc.terminate()
-            except Exception: pass
-        try:
-            self.audio_proc.wait(timeout=2)
-        except Exception:
-            try: os.killpg(os.getpgid(self.audio_proc.pid), signal.SIGKILL)
-            except Exception:
-                try: self.audio_proc.kill()
-                except Exception: pass
-        self.audio_proc = None
-
-    def start_audio(self):
-        key = self._pgm_key()
-        cmd = audio_cmd(key)
-        self._stop_audio()
-        self.audio_key = key
-        if cmd:
-            self.audio_proc = subprocess.Popen("exec " + cmd, shell=True, start_new_session=True,
-                                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
     def poll(self):
         a, b, trans, rate, seq = read_knob()
         if a != self.srckey["A"]:
@@ -259,8 +264,6 @@ class Switcher:
             if target != self.pgm:
                 print(f"switcher: TAKE ({trans} {rate}s) PGM {self._pgm_key()} -> {self._pvw_key()}", flush=True)
                 self.take(target, trans, rate)
-        if self._pgm_key() != self.audio_key:   # PGM source changed (take completed) -> follow audio
-            self.start_audio()
         return True
 
     def on_draw(self, _ov, ctx, _ts, _dur):
@@ -287,8 +290,7 @@ class Switcher:
     def stop(self):
         if self._anim:
             GLib.source_remove(self._anim); self._anim = None
-        self._stop_audio()
-        for pipe in (self.disp, self.srcpipe.get("A"), self.srcpipe.get("B")):
+        for pipe in (self.aud, self.disp, self.srcpipe.get("A"), self.srcpipe.get("B")):
             try:
                 if pipe: pipe.set_state(Gst.State.NULL)
             except Exception:

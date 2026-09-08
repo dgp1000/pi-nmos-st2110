@@ -381,6 +381,13 @@ SWITCHER_KNOB = _RUN + "/switcher"
 _SWITCH_SRCS = ["hevc", "jxs", "music", "tsrtp", "h264"]
 _SWITCH_LABEL = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "tsrtp": "TS over RTP", "h264": "H.264 RTP"}
 _switcher = {"a": "hevc", "b": "music", "trans": "dissolve", "rate": 1.0, "seq": 0}
+def _switch_load():   # adopt the current knob on startup so the panel's seq stays in sync with
+    try:              # a running switcher across a panel restart (else the first take can no-op)
+        a, b, t, r, sq = open(SWITCHER_KNOB).read().split()
+        _switcher.update(a=a, b=b, trans=t, rate=float(r), seq=int(sq))
+    except Exception:
+        pass
+_switch_load()
 def _switch_write():
     try:
         with open(SWITCHER_KNOB, "w") as f:

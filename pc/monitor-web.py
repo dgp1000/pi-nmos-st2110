@@ -717,13 +717,19 @@ const FPS=__FPS__;
 let offset=0, ptp={}, synced=false;
 const BTN={jxs:'bjxs',raw:'braw',hevc:'bhevc',music:'bmusic',reels:'breels'};
 const SRCLABEL={jxs:'Home',raw:'Pi raw',hevc:"Live TV",music:'Music',reels:'Test Reels',jpegxs:'JPEG XS',j2k:'JPEG 2000',h264:'H.264 RTP',mjpeg:'MJPEG RTP',vp9:'VP9 RTP',tsrtp:'TS/RTP',fec:'FEC',sps:'2022-7'};
-let selSlot=null, curSlots=['hevc','raw','jxs','music'];
+let selSlot=null, curSlots=['hevc','raw','jxs','music'], curLayout='wall';
 function selSlotFn(i){ selSlot=(selSlot===i)?null:i; renderSlots(); }
 function renderSlots(){
-  for(let i=0;i<4;i++){ const b=document.getElementById('slot'+i);
-    if(b){ b.textContent=(i+1)+': '+(SRCLABEL[curSlots[i]]||curSlots[i]||'\\u2014'); b.classList.toggle('sel',selSlot===i); } }
+  const side=(curLayout==='side');
+  for(let i=0;i<4;i++){ const b=document.getElementById('slot'+i); if(!b) continue;
+    if(side && i>=2){ b.style.display='none'; continue; } b.style.display='';
+    const lbl = side ? (i===0?'\u25e7 Left':'Right \u25e8') : ((i+1)+'');
+    b.textContent = lbl+': '+(SRCLABEL[curSlots[i]]||curSlots[i]||'\u2014');
+    b.classList.toggle('sel',selSlot===i); }
   const h=document.getElementById('slothint');
-  if(h) h.textContent = selSlot!=null ? ('now tap a source for tile '+(selSlot+1)) : 'tap a tile, then a source';
+  if(h) h.textContent = selSlot!=null
+    ? ('now tap a source for '+(side?(selSlot===0?'the LEFT pane':'the RIGHT pane'):('tile '+(selSlot+1))))
+    : (side?'tap Left or Right, then a source':'tap a tile, then a source');
 }
 async function assignSlot(pos,src){
   try{const r=await fetch('/slot?pos='+pos+'&src='+src,{cache:'no-store'});const d=await r.json();
@@ -825,7 +831,7 @@ async function routeProgram(ess){
   try{await fetch(q,{cache:"no-store"});}catch(e){}
   setTimeout(loadProgramOut,300);
 }
-function hlLayout(m){ document.querySelectorAll('#lay button').forEach(b=>b.classList.remove('on')); const b=document.getElementById(LAYBTN[m]); if(b) b.classList.add('on'); document.querySelectorAll('.modegrp').forEach(function(g){ var md=(g.getAttribute('data-mode')||'').split(' '); g.classList.toggle('modehide', md.indexOf(m)<0); }); }
+function hlLayout(m){ document.querySelectorAll('#lay button').forEach(b=>b.classList.remove('on')); const b=document.getElementById(LAYBTN[m]); if(b) b.classList.add('on'); document.querySelectorAll('.modegrp').forEach(function(g){ var md=(g.getAttribute('data-mode')||'').split(' '); g.classList.toggle('modehide', md.indexOf(m)<0); }); curLayout=m; try{renderSlots();}catch(e){} }
 let SW={trans:'dissolve',rate:1.0};
 function swLabelOf(d,k){const s=d.sources.find(x=>x.key===k);return s?s.label:k;}
 async function loadSwitcher(){

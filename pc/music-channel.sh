@@ -8,6 +8,8 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$DIR/atoll.conf"        # ISLAND_IFACE, MUSIC_*, MAC_MUSIC_*, MCAST_TTL
 IFACE="${ISLAND_IFACE:-eth0}"
 MACBASE="http://$MAC_MUSIC_HOST:$MAC_MUSIC_PORT"
+TRANSPORT_FILE="${ATOLL_RUN:-$HOME/atoll-run}/music-video-transport"  # IS-05 sender re-point (host port); absent=default
+DEST_HOST="$MUSIC_GRP"; DEST_PORT="$MUSIC_PORT"   # current video sender transport (updated each loop from the knob)
 
 mac_up() { curl -s --max-time 4 -o /dev/null "$MACBASE/state"; }
 
@@ -25,7 +27,7 @@ run_bridge() {
       ! queue ! rtpL24pay pt=96 min-ptime=1000000 max-ptime=1000000 \
       ! udpsink host=127.0.0.1 port=${MUSIC_AUDIO_PREMAP_PORT:-5015} \
     mpegtsmux name=mux alignment=7 ! queue \
-      ! udpsink host=$MUSIC_GRP port=$MUSIC_PORT multicast-iface="$IFACE" auto-multicast=true ttl=$MCAST_TTL
+      ! udpsink host=$DEST_HOST port=$DEST_PORT multicast-iface="$IFACE" auto-multicast=true ttl=$MCAST_TTL
 }
 
 # Placeholder card for $1 seconds, then return so the loop can re-check the Mac.
@@ -36,11 +38,13 @@ run_placeholder() {
     ! videoconvert ! video/x-raw,format=NV12 ! cudaupload \
     ! nvh265enc rc-mode=cbr bitrate=4000 gop-size=30 aud=true ! h265parse config-interval=-1 ! queue \
     ! mpegtsmux alignment=7 ! queue \
-    ! udpsink host=$MUSIC_GRP port=$MUSIC_PORT multicast-iface="$IFACE" auto-multicast=true ttl=$MCAST_TTL
+    ! udpsink host=$DEST_HOST port=$DEST_PORT multicast-iface="$IFACE" auto-multicast=true ttl=$MCAST_TTL
 }
 
 echo "music-channel -> $MUSIC_GRP:$MUSIC_PORT  (bridge when Mac up, placeholder when down)"
 while true; do
+  DEST_HOST="$MUSIC_GRP"; DEST_PORT="$MUSIC_PORT"
+  if [ -r "$TRANSPORT_FILE" ]; then read -r _th _tp < "$TRANSPORT_FILE" || true; [ -n "${_th:-}" ] && DEST_HOST="$_th"; [ -n "${_tp:-}" ] && DEST_PORT="$_tp"; fi
   if mac_up; then
     echo "$(date +%T) Mac reachable -> live bridge"
     run_bridge || true

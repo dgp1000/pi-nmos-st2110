@@ -325,3 +325,10 @@ still selectable — put it in `single`/`side`, not the default wall.
   The channel-change problem it targeted was ultimately solved in tv-send instead.
 - `output-render.sh` sweeps orphaned renderers on startup (by PID — never `pkill -f`, whose pattern
   matches the sweeping command itself and has killed the SSH session more than once).
+
+### Complete IS-05 (both directions) + BCP-004-01
+- **Sender-side IS-05** lives in `music-nmos.py` (`:8093`). List senders:
+  `curl :8093/x-nmos/connection/v1.1/single/senders`. Re-point the L24 audio sender live:
+  `curl -X PATCH -H 'Content-Type: application/json' -d '{"master_enable":true,"transport_params":[{"destination_ip":"239.10.10.42","destination_port":5099}],"activation":{"mode":"activate_immediate"}}' :8093/x-nmos/connection/v1.1/single/senders/<audio-id>/staged`
+  The audiomapper restarts onto the new group within ~2 s and the `transportfile` SDP updates; PATCH back to `239.10.10.32:5013` to revert. The knobs `~/atoll-run/music-{audio,video}-transport` hold the active destination (absent = default group).
+- **BCP-004-01 receiver caps** on Program Out: `curl :8080/x-nmos/query/v1.3/receivers/<progout-id>` → `caps.constraint_sets` lists the media types it accepts.

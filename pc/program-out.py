@@ -315,12 +315,32 @@ def _post(kind, data):
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=5) as r:
         return r.status
+def _receiver_caps():
+    """BCP-004-01 receiver capabilities. `media_types` (IS-04 legacy) plus `constraint_sets`:
+    a controller reads these to know which senders Program Out can take before it routes one.
+    Program Out decodes any island video essence, so one constraint set enumerates the media
+    types it accepts (a sender satisfying the set is compatible). See AMWA BCP-004-01."""
+    mts = sorted({f[3] for f in _FLOWS})
+    return {
+        "media_types": mts,
+        "constraint_sets": [{
+            "urn:x-nmos:cap:meta:label": "Program Out - any island video essence",
+            "urn:x-nmos:cap:meta:preference": 0,
+            "urn:x-nmos:cap:meta:enabled": True,
+            "urn:x-nmos:cap:format:media_type": {"enum": mts},
+            "urn:x-nmos:cap:format:grain_rate": {"enum": [
+                {"numerator": 30, "denominator": 1},
+                {"numerator": 25, "denominator": 1},
+                {"numerator": 60, "denominator": 1}]},
+        }],
+    }
+
 def _receiver_resource():
     return {"id": RX_ID, "version": _ver(), "label": "Program Out",
             "description": "Route any island flow here over IS-05", "tags": {},
             "device_id": DEVICE_ID, "transport": "urn:x-nmos:transport:rtp",
             "interface_bindings": [], "format": "urn:x-nmos:format:video",
-            "caps": {"media_types": sorted({f[3] for f in _FLOWS})},
+            "caps": _receiver_caps(),
             "subscription": {"sender_id": STATE["active"]["sender_id"] if STATE["active"]["master_enable"] else None,
                              "active": bool(STATE["active"]["master_enable"])}}
 def _resources():

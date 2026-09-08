@@ -12,16 +12,19 @@ source "$DIR/atoll.conf"        # ISLAND_IFACE, MUSIC_AUDIO_*, MUSIC_AUDIO_PREMA
 IFACE="${ISLAND_IFACE:-eth0}"
 PREMAP_PORT="${MUSIC_AUDIO_PREMAP_PORT:-5015}"
 MAPFILE="${ATOLL_RUN:-$HOME/atoll-run}/audiomap"
+TRANSPORT_FILE="${ATOLL_RUN:-$HOME/atoll-run}/music-audio-transport"  # IS-05 sender re-point (host port); absent=default
 DEFAULT_MATRIX="<<1.0,0.0>,<0.0,1.0>>"   # identity / straight stereo
 
 INCAPS="application/x-rtp,media=(string)audio,clock-rate=(int)48000,encoding-name=(string)L24,channels=(int)2,payload=(int)96"
 
 echo "audiomapper: localhost:$PREMAP_PORT -> matrix -> $MUSIC_AUDIO_GRP:$MUSIC_AUDIO_PORT (map: $MAPFILE)"
 while true; do
+  DEST_HOST="$MUSIC_AUDIO_GRP"; DEST_PORT="$MUSIC_AUDIO_PORT"   # IS-05 sender transport (music-nmos)
+  if [ -r "$TRANSPORT_FILE" ]; then read -r _th _tp < "$TRANSPORT_FILE" || true; [ -n "${_th:-}" ] && DEST_HOST="$_th"; [ -n "${_tp:-}" ] && DEST_PORT="$_tp"; fi
   MATRIX="$DEFAULT_MATRIX"
   [ -r "$MAPFILE" ] && MATRIX="$(cat "$MAPFILE")"
   [ -z "$MATRIX" ] && MATRIX="$DEFAULT_MATRIX"
-  echo "$(date +%T) applying matrix: $MATRIX"
+  echo "$(date +%T) applying matrix: $MATRIX -> $DEST_HOST:$DEST_PORT"
   gst-launch-1.0 -q \
     udpsrc address=127.0.0.1 port="$PREMAP_PORT" caps="$INCAPS" \
     ! rtpjitterbuffer latency=50 ! rtpL24depay ! audioconvert \
@@ -29,7 +32,7 @@ while true; do
     ! audiomixmatrix in-channels=2 out-channels=2 channel-mask=0x3 matrix="$MATRIX" \
     ! audioconvert ! audioresample ! audio/x-raw,format=S24BE,rate=48000,channels=2 \
     ! rtpL24pay pt=96 min-ptime=1000000 max-ptime=1000000 \
-    ! udpsink host="$MUSIC_AUDIO_GRP" port="$MUSIC_AUDIO_PORT" multicast-iface="$IFACE" auto-multicast=true ttl="$MCAST_TTL" \
+    ! udpsink host="$DEST_HOST" port="$DEST_PORT" multicast-iface="$IFACE" auto-multicast=true ttl="$MCAST_TTL" \
     || true
   sleep 1
 done

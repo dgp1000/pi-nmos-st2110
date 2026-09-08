@@ -171,8 +171,8 @@ WSL boots (WSL itself does not start with Windows). `~/atoll-run` is `ATOLL_RUN`
 |---|---|---|---|---|
 | Panel | `pc/monitor-web.py` | `atoll-panel` | `:8096` | The iPad page -- grouped into labelled sections (Sources, Output, Production Switcher, Program Out, Multiview, Music, Resilience, Live TV, Demo), with the mode-specific sections shown only for the active OUTPUT mode -- and the single source of truth for *active source*, *layout* and *tile slots*. Issues IS-05 takes and routes Program Out over IS-05. Writes the knob files. Proxies the Mac music API and the Pi clock. A **Guided demo** button runs a scripted, captioned tour of the whole rig. |
 | IS-07 emitter | `pc/is07-tally.py` | `atoll-is07` | `:8102` REST, `:8103` ws | One boolean event source per Atoll source key. Registers node/device/13 sources/flows/senders in IS-04. Pushes state on transition. |
-| Program Out | `pc/program-out.py` | `atoll-programout` | `:8092` | Software NMOS receiver: serves the IS-05 v1.1 Connection API and registers its node/device/receiver in IS-04. On activation it maps the connection's multicast/port to an island flow and writes `~/atoll-run/programout` for the renderer. |
-| Music NMOS source | `pc/music-nmos.py` | `atoll-music-nmos` | `:8093` | Registers the music channel as an IS-04 node with two senders — video (HEVC) and ST 2110-30 L24 audio — and serves an SDP per sender, so music is discoverable in the inspector and routable via Program Out. Heartbeats like the other registrars. |
+| Program Out | `pc/program-out.py` | `atoll-programout` | `:8092` | Software NMOS receiver: serves the IS-05 v1.1 Connection API and registers its node/device/receiver in IS-04. On activation it maps the connection's multicast/port to an island flow and writes `~/atoll-run/programout` for the renderer. Publishes **BCP-004-01** receiver capabilities (`caps.constraint_sets`) so controllers know what it accepts. |
+| Music NMOS source | `pc/music-nmos.py` | `atoll-music-nmos` | `:8093` | Registers the music channel as an IS-04 node with two senders — video (HEVC) and ST 2110-30 L24 audio — and serves an SDP per sender, so music is discoverable in the inspector and routable via Program Out. Also serves the **sender-side IS-05 v1.1 Connection API** for both senders — a controller can re-point where each sender transmits (multicast destination) live; the pipeline moves and the SDP/registry update. Heartbeats like the other registrars. |
 | Audio channel map (IS-08) | `pc/audiomap-nmos.py` | `atoll-audiomap` | `:8094` | Serves the AMWA IS-08 v1.0 Channel Mapping API for the music audio (node/device with a `cm-ctrl` control). A controller maps the output's channels to the input's (stereo / swap / mono / mute); on activation it writes `~/atoll-run/audiomap` and restarts the audio mapper. Immediate + scheduled activation. |
 | Pi ST 2110 NMOS | `pc/pi-nmos.py` | `atoll-pi-nmos` | `:8095` | Registers the Pi's real ST 2110-20 raw video and -30 L24 audio as an IS-04 node (`atoll-pi`) with two senders, serving a standards-complete SDP each (ST 2110-20/-21 fmtp, `mediaclk`, `ts-refclk` with the grandmaster id). Makes the Pi flows discoverable + routable. |
 | Loudness meter | `pc/loudness.py` (+ `pc/bs1770.py`) | `atoll-loudness` | `:8104` | EBU R128 / ITU-R BS.1770-4 loudness on the **program** audio (follows the active source / Program Out). Momentary / Short-term / gated Integrated LUFS + Loudness Range (LRA) + true peak (dBTP), with an EBU R128 in-spec check (−23 LUFS ±1 LU, true peak ≤ −1 dBTP). numpy-only K-weighting (FIR of the BS.1770 biquads). Serves JSON + a broadcast readout; the analyser header shows it too. |
@@ -342,6 +342,25 @@ receiver looks the (address, port) up in its catalogue of island flows and write
 that knob, so an IS-05 connection actually drives the picture — unlike the `v0`/`m0` gate, and
 discoverable, so any NMOS controller can route it too.
 
+**Both halves of connection management.** Program Out is the *receiver* half; the music node
+(`music-nmos.py`) is the *sender* half. It serves the IS-05 v1.1 Connection API for its two
+senders (video + L24 audio) at `:8093/x-nmos/connection/v1.1/single/senders/`, and advertises
+the `urn:x-nmos:control:sr-ctrl/v1.1` control on its device so any controller finds it. A PATCH
+to a sender's `/staged` changes its `transport_params` — the multicast `destination_ip` and
+`destination_port` — and `activate_immediate` (or the scheduled modes) applies it: the process
+writes the new destination to a pipeline knob (`music-video-transport` for the video udpsink,
+`music-audio-transport` for the audiomapper's L24 udpsink), restarts that one service, and
+re-registers the sender so the SDP (`transportfile`) and the registry show the new destination.
+The flow genuinely moves on the wire — a re-point of the audio sender to a test group put 3001
+packets/3 s on the new group and 0 on the old, then reverted cleanly. Default (no knob) = the
+configured groups, so a cold boot matches the SDP.
+
+**Receiver capabilities (BCP-004-01).** The Program Out receiver publishes `caps.constraint_sets`
+alongside the legacy `caps.media_types`: one constraint set enumerating the video media types it
+accepts (`urn:x-nmos:cap:format:media_type`) plus the frame rates it handles, with a
+`meta:label`/`meta:preference`. A controller reads these to decide which senders are compatible
+*before* it routes one — the standards-clean way to answer "can this receiver take that sender?".
+
 ### 5.2 The knob files in `~/atoll-run`
 
 These are the rig's "GPIO": the panel writes them, long-running pipelines poll them and apply the
@@ -352,6 +371,8 @@ value to a live element property, so nothing rebuilds.
 | `tv-channel` | panel `/tv/set`, `tv-web.py`, the TV sender itself on error | `tv-send-inputselect.py` (0.5 s), `wall-view`/`meter-view` (label) | Retune Live TV. |
 | `tv-favorites` | panel `/tv/fav` | panel | Favourite channel list. |
 | `programout` | `program-out.py` on IS-05 activation | `output-render.sh` (`program` layout) | The flow routed to Program Out: essence + multicast + port. |
+| `music-audio-transport` | `music-nmos.py` on IS-05 sender activation | `audiomapper.sh` (per restart) | Music L24 sender's multicast `host port`; absent = default `MUSIC_AUDIO_GRP`. Re-points the audio sender live. |
+| `music-video-transport` | `music-nmos.py` on IS-05 sender activation | `music-channel.sh` (each loop) | Music video sender's multicast `host port`; absent = default `MUSIC_GRP`. Re-points the video sender live. |
 | `fec-loss` | panel `/fec/set` | `meter-view`, `wall-view` (1 s) | `identity drop-probability` on the FEC media flow: the loss injector. |
 | `fec-enable` | panel `/fec/set` | `meter-view`, `wall-view` | Gates the column/row FEC flows (drop-probability 0 or 1) so protected vs unprotected is a live A/B at constant loss. |
 | `sps-a`, `sps-b` | panel `/sps/set` | `meter-view`, `wall-view` | "Pull the cable" on a 2022-7 path. |

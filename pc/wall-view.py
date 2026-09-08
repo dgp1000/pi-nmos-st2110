@@ -190,7 +190,7 @@ ov = pipe.get_by_name("ov")
 _vsink = pipe.get_by_name("vsink")
 def _apply_avsync():   # +ms delays video to match late audio. ~/atoll-run/video-delay-ms
     try: _ms = int(open(os.path.join(RUN, "video-delay-ms")).read().strip())
-    except Exception: _ms = 0
+    except Exception: _ms = 30
     if _vsink: _vsink.set_property("ts-offset", _ms * 1_000_000)
     return True
 _apply_avsync(); GLib.timeout_add_seconds(1, _apply_avsync)

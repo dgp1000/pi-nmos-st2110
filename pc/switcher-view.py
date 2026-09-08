@@ -209,7 +209,7 @@ class Switcher:
 
     def _avsync(self):   # +ms delays video to match late audio. ~/atoll-run/video-delay-ms
         try: ms = int(open(os.path.join(RUN, "video-delay-ms")).read().strip())
-        except Exception: ms = 0
+        except Exception: ms = 30
         if getattr(self, "vsink", None): self.vsink.set_property("ts-offset", ms * 1_000_000)
         return True
 

@@ -381,7 +381,7 @@ SWITCHER_KNOB = _RUN + "/switcher"
 AVSYNC_KNOB = _RUN + "/video-delay-ms"   # A/V sync: +ms holds video back to meet late audio
 def _avsync_get():
     try: return int(open(AVSYNC_KNOB).read().strip())
-    except Exception: return 0
+    except Exception: return 30
 def _avsync_set(ms):
     try: ms = max(-100, min(300, int(float(ms))))
     except Exception: return {"ms": _avsync_get()}
@@ -671,8 +671,8 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   </div>
   <div id="avsync">
    <span class="avlbl">A/V sync</span>
-   <input type="range" id="avslider" min="-100" max="300" step="5" value="60" oninput="avsyncInput(this.value)">
-   <span id="avval" class="avval">60 ms</span>
+   <input type="range" id="avslider" min="-100" max="300" step="5" value="30" oninput="avsyncInput(this.value)">
+   <span id="avval" class="avval">30 ms</span>
   </div>
   </section>
 

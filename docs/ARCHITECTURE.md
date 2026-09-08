@@ -34,7 +34,7 @@ flowchart TB
     music["music-channel.sh + music-nmos.py<br/>Mac Now-Playing → HEVC video + L24 audio<br/>NMOS source"]
     rtp["h264 · opus · mjpeg · vp9 · j2k<br/>essence over RTP"]
     tsrtp["tsrtp · fec · sps<br/>TS over RTP + 2022-1 / 2022-7"]
-    anc["anc-send.py<br/>ST 2110-40 ATC"]
+    anc["anc-send.py<br/>ST 2110-40 ATC + captions + SCTE"]
   end
 
   subgraph ISLAND["THE ISLAND — 10.10.10.0/24 multicast"]
@@ -193,7 +193,8 @@ WSL boots (WSL itself does not start with Windows). `~/atoll-run` is `ATOLL_RUN`
 | `reels` "Test Reels" | *(none — only `launch-media.sh`)* | `pc/media-send.sh --reels` | NVENC HEVC + MP3 | MPEG-TS / UDP | `239.10.10.31:5014` |
 | `raw` "Pi raw 2110-20" | `atoll-pi` (on the Pi) | `pi/launch-all.sh` | none — UYVY 320x240 59.94 | ST 2110-20 RTP (RFC 4175) | `239.10.10.21:5006` |
 | *(audio for `raw`)* | `atoll-pi` | `pi/launch-all.sh` | none — L24 48 kHz stereo, 1 ms ptime | ST 2110-30 RTP | `239.10.10.10:5004` |
-| *(ancillary)* | `atoll-anc` | `pc/anc-send.py` | ATC timecode, ST 291 words | ST 2110-40 RTP (RFC 8331), pt 100 | `239.10.10.50:5020` |
+| *(ancillary)* | `atoll-anc` | `pc/anc-send.py` | ATC timecode + CEA-708 captions + SCTE-104, multiplexed ST 291 packets | ST 2110-40 RTP (RFC 8331), pt 100 | `239.10.10.50:5020` |
+| *(ancillary rx)* | `atoll-anc-recv` | `pc/anc-recv.py` | extracts timecode/captions/SCTE from the ANC flow; renders captions + AD-break on Program Out (gated by `cc-enable`) | receives `239.10.10.50:5020` | — |
 | `j2k` | `atoll-j2k` | `pc/j2k-send.sh` | `avenc_jpeg2000` | J2K RTP (RFC 5371) | `239.10.10.70:5016` |
 | `h264` | `atoll-h264` | `pc/h264-send.sh` | NVENC H.264 4 Mb/s | RTP (RFC 6184), pt 96 | `239.10.10.75:5018` |
 | *(audio for `h264`)* | `atoll-opus` | `pc/opus-send.sh` | Opus 96 kb/s | RTP (RFC 7587), pt 97 | `239.10.10.80:5022` |
@@ -554,8 +555,16 @@ average datagram is under 400 B because that is the signature of forgetting it, 
 pair (bars and tone), and the receivers join both groups in one pipeline. `config-interval=-1`
 on both `h264parse` and `rtph264pay` repeats SPS/PPS with every IDR so a late joiner can decode.
 `anc-send.py` is hand-built because GStreamer has no ancillary payloader: it emits one RFC 8331
-packet per frame carrying an ATC LTC timecode packet (DID 0x60 / SDID 0x60) with ST 291 parity
-words and checksum, marker bit set, 90 kHz clock.
+packet per frame **multiplexing several ST 291 data packets** (ANC_Count>1) -- ATC LTC timecode
+(DID 0x60/0x60), CEA-708 closed captions (DID 0x61/0x01; the UDW carry caption text, a documented
+simplified stand-in for full cc_data), and an on-demand SCTE-104 splice/ad-break (DID 0x41/0x07) --
+each with ST 291 parity words + checksum, marker bit set, 90 kHz clock. `anc-recv.py`
+(`atoll-anc-recv`) is the matching hand-built depayloader: it reverses the 10-bit packing, writes the
+received timecode to `~/atoll-run/anc-tc`, and renders captions (and `AD BREAK` on an SCTE splice)
+onto Program Out via the caption-band knob -- gated by `~/atoll-run/cc-enable`, which the panel's
+**Ancillary - ST 2110-40** row toggles (with a Trigger-AD-break button and a live timecode readout).
+This makes ST 2110-40 a full round-trip essence on the rig (send, discover, receive, render), not just
+a flow on the wire.
 
 **Family 3** is the demonstrator layer. Wrapping the TS in RTP is what makes ST 2022-1 FEC and
 ST 2022-7 possible:

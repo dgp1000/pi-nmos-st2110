@@ -139,8 +139,21 @@ still selectable — put it in `single`/`side`, not the default wall.
   with hybrid E2E). ptp4l reaches SLAVE but its clock adjustments **do not stick**: the WSL kernel force-
   syncs the guest to the Windows host via `/dev/ptp_hyperv`, overriding both ptp4l and chronyd (verified
   by stopping each -- the guest stayed pinned to the host value). So true sub-ms PTP on a WSL guest is
-  not achievable; the Windows-NTP path (~10-30 ms) is the working solution. A bare-metal/VM Linux host
-  (not WSL) would be needed for real PTP discipline.
+  not achievable; the Windows-NTP path (~10-30 ms) is the working solution.
+- **If you ever need real PTP on the PC** (genuine sub-ms/PHC-grade lock so the PC's ST 2110 essence
+  timestamps are genlocked to the island, not just ~10 ms NTP), in increasing accuracy:
+  1. **A real VM** (Hyper-V / VMware / VirtualBox) instead of WSL -- you can DISABLE the hypervisor's
+     host time-sync (e.g. Hyper-V `Set-VMIntegrationService -Name "Time Synchronization" -Disable`),
+     which WSL cannot, so ptp4l becomes authoritative and its discipline sticks. But a virtual NIC has
+     no **PHC** (PTP Hardware Clock), so it is **software timestamping** only -> ~sub-ms to a few ms
+     (same class as the Pi 2 follower). Better than WSL (where PTP does not work at all), not tight.
+  2. **Bare-metal Linux + a NIC with a PHC** (`ethtool -T <iface>` shows `PTP Hardware Clock: N`,
+     `/dev/ptp0`) -> hardware timestamping at the wire -> **sub-microsecond**, broadcast-grade. This is
+     the real answer. (`ptp4l` disciplines the PHC; `phc2sys` syncs the PHC and the system clock.)
+  3. **Or pass a PTP NIC through to a VM** (Hyper-V DDA / SR-IOV) so the guest owns real hardware and
+     gets PHC-grade timestamping inside a VM.
+  Note the whole island is currently **software-timestamped** anyway (even the Pi grandmaster runs
+  `ptp4l -S`), so it already lives in the ~ms regime; PHC-grade only matters for true genlock interop.
 
 ### Sync
 - **Live TV A/V sync**: single / follow-take view is lip-synced — `meter-view.py` runs the audio sink

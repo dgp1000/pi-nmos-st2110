@@ -214,8 +214,9 @@ Live TV), `atoll-jxs` (JPEG XS over TS at ~100 Mb/s, exceeds the WSL ceiling), `
 |---|---|---|---|---|
 | Renderer loop | `pc/output-render.sh` | **manual, local WSL terminal** | spawns the three below | Polls the panel once a second, builds a pipeline key from layout+source+slots, relaunches a child renderer only when the key changes. Also runs the audio follower. |
 | Wall | `pc/wall-view.py` | child of output-render | WSLg window, monitor 2 | The instrumented 2x2: cairo overlay with tally border, per-tile bitrate/fps/audio meters, FEC counters. IS-07 receiver. Presents via **glimagesink** (GL/EGL, vsync-paced), GPU-upscaled to fill monitor 2. |
-| Single view | `pc/meter-view.py` | child of output-render | WSLg window | Fullscreen active source with VU meters and a stream-info panel. Hosts the live FEC/2022-7 knobs for single view. Live TV (`hevc`) presents via **glimagesink** (GL/EGL); other sources via `waylandsink`. |
-| gst-launch multi / side | inline strings in `output-render.sh` | child of output-render | WSLg window | The original 2x2 and side-by-side, kept for comparison with the wall. Both present via **glimagesink** (GL/EGL), GPU-upscaled to fill monitor 2. |
+| Single view | `pc/meter-view.py` | child of output-render | WSLg window | Fullscreen active source with VU meters and a stream-info panel; hosts the live FEC/2022-7 knobs. **Seamless**: a persistent display pipeline (`intervideosrc` -> overlay -> **glimagesink** GL/EGL) reads one intervideo bus; a separate source pipeline (decode -> `intervideosink`, + audio -> level -> autoaudiosink) is rebuilt on a source change, so the window never respawns. meter-view polls the panel active source itself. |
+| Side-by-side | `pc/side-view.py` | child of output-render | WSLg window, monitor 2 | **Seamless source-selectable 2-up** (panel slots 0/1 = left/right). Persistent display + two per-pane source pipelines over intervideo, so changing a pane rebuilds only that pane. Per-pane label/meters/bitrate/tally, shared CUDA context, **glimagesink** GL. Audio follows the LEFT pane (slot 0), marked with a ♪ AUDIO badge. |
+| gst-launch multi | inline string in `output-render.sh` | child of output-render | WSLg window | The original 2x2, four `tile_full()` fragments, kept for comparison with the wall. Presents via **glimagesink** (GL/EGL), GPU-upscaled to fill monitor 2. |
 | Browser multiview | `pc/multiview-web.py` + `pc/multiview-mjpeg.sh` | `atoll-multiview` | MJPEG `:8099` | Same compositor topology, JPEG frames over HTTP instead of a window. Built when WSLg could not show a window. |
 | JPEG XS viewer | `pc/jxs-web.py` | `atoll-jxs-web` | MJPEG `:8100` | Local svtjpegxsenc→svtjpegxsdec, proof that the ST 2110-22 codec works here. |
 
@@ -608,9 +609,9 @@ flowchart TD
 
 | layout | What runs | Rebuild key |
 |---|---|---|
-| `single` | `python3 meter-view.py <active> <screen>` | `single:<active>` — every take rebuilds |
+| `single` | `python3 meter-view.py <active> <screen>` | `single` — source changes rebuild only the source pipeline (no respawn); meter-view self-follows the panel |
 | `program` | `python3 meter-view.py <routed> <screen>` (idle card if nothing connected) | `program:<routed>` — follows the Program Out IS-05 route, not the take |
-| `side` | inline `gst-launch-1.0` compositor: Live TV left, Pi raw right | `side` — never rebuilds on take |
+| `side` | `python3 side-view.py <slots> <screen>` | `side` — source-selectable 2-up; a pane (slot 0/1) change rebuilds only that pane, no relaunch |
 | `multi` | inline `gst-launch-1.0` compositor, four `tile_full()` fragments | `multi:<slots>` — slot changes rebuild, takes do not |
 | `wall` | `python3 wall-view.py <slots> <screen>` | `wall:<slots>` — same |
 
@@ -632,6 +633,17 @@ follower without touching video.
 WSL terminal session. Launching over SSH gives audio and no window. Kill it by PID
 (`/tmp/output-render.pid` is not written by this script; use `pgrep -af "[o]utput-render.sh"`),
 never `pkill -f`, whose pattern matches the SSH command that launched it.
+
+**Seamless per-source switching (single / side).** Single view and side-by-side use the same
+`intervideosrc`/`intervideosink` decoupling as the production switcher: a persistent display
+pipeline and separate source pipeline(s), so changing a source rebuilds only that source and
+the on-screen window never respawns. This works because they run 1 (single) or 2 (side)
+hardware decoders -- within WSLg's virtual-GPU headroom for creating a decode session *live*.
+The 4-up **wall was NOT converted**: 3-4 concurrent decoders plus the 4K GL sink oversubscribe
+the WSLg vGPU, so a live rebuild of a hardware-decoded tile starves (0 fps). A shared
+GstCudaContext (one context for all decoders, via the NEED/HAVE_CONTEXT bus dance) fixes wall
+*startup* but not live rebuilds; the seamless wall is shelved for a future bare-metal / VM+GPU
+deployment where the vGPU limit does not apply. See `side-view.py` / `meter-view.py`.
 
 ### 7.2 `wall-view.py` — the instrumented 2x2
 

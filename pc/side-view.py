@@ -195,10 +195,10 @@ def tile(i, src):
 sinkprops = " ".join(f"sink_{i}::xpos={x} sink_{i}::ypos={y}" for i, (x, y) in enumerate(POS))
 TEST = os.environ.get("ATOLL_SINK_TEST") == "1"    # headless: swap glimagesink for fakesink
 if TEST:
-    _tail = "! videoconvert ! cairooverlay name=ov ! videoconvert ! fakesink sync=false "
+    _tail = "! videoconvert ! cairooverlay name=ov ! videoconvert ! fakesink name=vsink sync=false "
 else:
     _tail = (f"! video/x-raw,width={W},height={H} ! videoconvert ! cairooverlay name=ov ! videoconvert "
-             f"! glupload ! glcolorscale ! video/x-raw(memory:GLMemory),width={WINW},height={WINH} ! glimagesink sync=true ")
+             f"! glupload ! glcolorscale ! video/x-raw(memory:GLMemory),width={WINW},height={WINH} ! glimagesink name=vsink sync=true ")
 # NOTE: do NOT ask the compositor for BGRA to "save" the pre-overlay conversion. Measured, that is
 # WORSE (296% vs 238% CPU at 2560x1440): compositing in 4-byte BGRA moves 2.67x more data per pixel
 # than YUV, which costs more than the conversion it avoids.
@@ -209,6 +209,13 @@ _isrcs = "".join(
 desc = (f"compositor name=mix ignore-inactive-pads=true background=black {sinkprops} " + _tail + _isrcs)
 pipe = Gst.parse_launch(desc)      # `pipe` = the persistent display pipeline
 ov = pipe.get_by_name("ov")
+_vsink = pipe.get_by_name("vsink")
+def _apply_avsync():   # +ms delays video to match late audio. ~/atoll-run/video-delay-ms
+    try: _ms = int(open(os.path.join(RUN, "video-delay-ms")).read().strip())
+    except Exception: _ms = 0
+    if _vsink: _vsink.set_property("ts-offset", _ms * 1_000_000)
+    return True
+_apply_avsync(); GLib.timeout_add_seconds(1, _apply_avsync)
 
 # ---- live state the overlay draws from ----
 st = {"active": "", "peak": [[] for _ in range(NT)], "bytes": [0] * NT, "mbps": [0.0] * NT,

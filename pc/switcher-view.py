@@ -42,8 +42,8 @@ SCREEN = sys.argv[1] if len(sys.argv) > 1 else "2"
 W, H = 1920, 1080
 WINW = int(os.environ.get("ATOLL_TV_W", "3840"))
 WINH = int(os.environ.get("ATOLL_TV_H", "2160"))
-SINK = ("fakesink sync=true" if os.environ.get("ATOLL_SINK_TEST")
-        else f"glupload ! glcolorscale ! video/x-raw(memory:GLMemory),width={WINW},height={WINH} ! glimagesink sync=true")
+SINK = ("fakesink name=vsink sync=true" if os.environ.get("ATOLL_SINK_TEST")
+        else f"glupload ! glcolorscale ! video/x-raw(memory:GLMemory),width={WINW},height={WINH} ! glimagesink name=vsink sync=true")
 IW, IH = 600, 338                       # PREVIEW inset size
 IX, IY = W - IW - 48, H - IH - 48       # bottom-right, with a margin
 RAWCAPS = f"video/x-raw,format=I420,width={W},height={H},framerate=30/1"
@@ -121,6 +121,7 @@ class Switcher:
         self.apply_bus()                                    # set initial PGM/PVW volumes
         GLib.timeout_add(300, self.poll)
         GLib.timeout_add_seconds(5, self._diag)
+        self._avsync(); GLib.timeout_add_seconds(1, self._avsync)
         if CFG.get("WAYLAND_DISPLAY"):
             GLib.timeout_add_seconds(2, self._snap)
         print(f"switcher: PGM(bus {self.pgm})={self._pgm_key()} PVW={self._pvw_key()}", flush=True)
@@ -154,6 +155,7 @@ class Switcher:
         )
         self.disp = Gst.parse_launch(desc)
         self.mix = self.disp.get_by_name("mix")
+        self.vsink = self.disp.get_by_name("vsink")
         byname = {}
         it = self.mix.iterate_sink_pads()
         while True:
@@ -204,6 +206,12 @@ class Switcher:
         except Exception as e:
             print("snap failed:", e, flush=True)
         return False
+
+    def _avsync(self):   # +ms delays video to match late audio. ~/atoll-run/video-delay-ms
+        try: ms = int(open(os.path.join(RUN, "video-delay-ms")).read().strip())
+        except Exception: ms = 0
+        if getattr(self, "vsink", None): self.vsink.set_property("ts-offset", ms * 1_000_000)
+        return True
 
     def _diag(self):
         al = {k: round(self.pads[k].get_property("alpha"), 2) for k in ("Afull", "Bfull", "Ains", "Bins")}

@@ -175,12 +175,18 @@ TRANSPORT = {"hevc": "MPEG-TS / UDP", "jxs": "MPEG-TS / UDP", "music": "MPEG-TS 
 
 # ---- persistent DISPLAY pipeline: reads the single intervideo bus, overlays, presents ----
 if TEST:
-    _disptail = "videoconvert ! cairooverlay name=ov ! videoconvert ! fakesink sync=false"
+    _disptail = "videoconvert ! cairooverlay name=ov ! videoconvert ! fakesink name=vsink sync=false"
 else:
     _disptail = (f"videoconvert ! cairooverlay name=ov ! {BRAND} ! videoconvert "
-                 f"! glupload ! glcolorscale ! video/x-raw(memory:GLMemory),width={_WINW},height={_WINH} ! glimagesink sync=true")
+                 f"! glupload ! glcolorscale ! video/x-raw(memory:GLMemory),width={_WINW},height={_WINH} ! glimagesink name=vsink sync=true")
 disp = Gst.parse_launch(f"intervideosrc channel=single ! video/x-raw,width={OUT_W},height={OUT_H},framerate=30/1 ! {_disptail}")
 ov = disp.get_by_name("ov")
+_vsink = disp.get_by_name("vsink")
+def _apply_avsync():   # hold video back to match late audio; +ms delays video. ~/atoll-run/video-delay-ms
+    try: _ms = int(open(os.path.join(RUN, "video-delay-ms")).read().strip())
+    except Exception: _ms = 0
+    if _vsink: _vsink.set_property("ts-offset", _ms * 1_000_000)
+    return True
 
 st = {"src": INIT_SRC, "peak": [], "decay": [], "w": OUT_W, "h": OUT_H, "cap": "",
       "vw": 0, "vh": 0, "vfps": 0.0, "vfmt": "", "mbps": 0.0, "_bytes": 0, "arate": 0, "chan": "",
@@ -401,6 +407,7 @@ def _cap_tick():
     except Exception: st["cap"] = ""
     return True
 _cap_tick(); GLib.timeout_add(400, _cap_tick)
+_apply_avsync(); GLib.timeout_add_seconds(1, _apply_avsync)
 
 # ---- follow the panel's active source; rebuild ONLY the source pipeline on a change ----
 def panel_tick():

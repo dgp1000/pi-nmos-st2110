@@ -2,11 +2,19 @@
 """Atoll ST 2110-40 ancillary-data sender (RFC 8331).
 
 GStreamer has no ancillary-data RTP payloader, so this is a self-contained sender. It emits
-one ANC RTP packet per frame carrying an ATC (Ancillary Time Code, SMPTE ST 12M-2, DID 0x60 /
-SDID 0x60) data packet — a real, inspectable ST 2110-40 essence on the island. RFC 8331 framing
-with SMPTE ST 291 10-bit parity words and checksum. 90 kHz RTP clock, marker bit per frame.
+one ANC RTP packet per frame MULTIPLEXING several ST 291 ancillary data packets — a real,
+inspectable ST 2110-40 essence on the island (RFC 8331 framing, 10-bit parity words + checksum,
+90 kHz RTP clock, marker bit per frame). Data packets carried:
+  * ATC timecode        DID 0x60 / SDID 0x60  (SMPTE ST 12M-2, always on)
+  * Closed captions     DID 0x61 / SDID 0x01  (SMPTE 334 / CEA-708 DID; the UDW carry the caption
+                        text directly -- a deliberately simplified stand-in for the full CEA-708
+                        cc_data bitstream. The 2110-40/RFC 8331 transport is real; only the caption
+                        codec payload is simplified.)  Text from ~/atoll-run/cc-input, else a rolling
+                        sample set.
+  * SCTE-104 splice     DID 0x41 / SDID 0x07  (ad-break marker) -- emitted for a few frames when
+                        ~/atoll-run/anc-scte is touched/non-empty.
 
-Env: ANC_GRP, ANC_PORT, ISLAND_PC_IP, MCAST_TTL, ANC_FPS, ANC_PT.
+Env: ANC_GRP, ANC_PORT, ISLAND_PC_IP, MCAST_TTL, ANC_FPS, ANC_PT, ATOLL_RUN.
 """
 import socket, struct, time, os
 
@@ -17,6 +25,16 @@ TTL      = int(os.environ.get("MCAST_TTL", "1"))
 FPS      = int(os.environ.get("ANC_FPS", "30"))
 PT       = int(os.environ.get("ANC_PT", "100"))
 SSRC     = 0x2110A17C
+RUN      = os.environ.get("ATOLL_RUN") or os.path.expanduser("~/atoll-run")
+CC_INPUT = os.path.join(RUN, "cc-input")     # live caption text (panel/demo writes it); empty -> samples
+SCTE_KNOB= os.path.join(RUN, "anc-scte")     # non-empty -> emit an SCTE-104 splice marker briefly
+CC_SAMPLES = [
+    "ATOLL NEWS AT SIX -- good evening.",
+    "Carried as ST 2110-40 ancillary data.",
+    "CEA-708 captions, DID 0x61 / SDID 0x01.",
+    "RFC 8331 over RTP, multiplexed with timecode.",
+    "Extracted and rendered live on Program Out.",
+]
 
 
 def anc_word(v8):
@@ -72,23 +90,29 @@ def atc_udws(hh, mm, ss, ff):
     return tc[:16]
 
 
-def build_anc_payload(seq16, hh, mm, ss, ff, field=0):
-    """One RFC 8331 payload with a single ATC ANC packet."""
-    DID, SDID = 0x60, 0x60
-    udw = atc_udws(hh, mm, ss, ff)
-    dc = len(udw)                              # Data_Count = 16
-    # ST291 checksum: sum of b0..b8 of DID,SDID,DC,UDW words (9-bit), modulo 512; b9 = ~b8
+def caption_udws(text):
+    """Caption text -> UDW payload (one 8-bit word per character, 7-bit ASCII). Simplified stand-in
+    for CEA-708 cc_data; keeps the ST 2110-40 transport real and the receiver able to render text."""
+    t = (text or "")[:200]
+    return [ord(c) & 0x7F for c in t] or [0x20]
+
+
+def scte104_udws():
+    """A minimal SCTE-104 splice_request marker payload (ad break). Not a full multiple_operation
+    message -- enough to be recognised and shown as AD BREAK by the receiver."""
+    return [0x08, 0x01, 0x00, 0x00, 0x00, 0x01]   # opID splice_request-ish + a splice_event flag
+
+
+def _anc_packet(bw, DID, SDID, udw, line):
+    """Bit-pack one ST 291 ANC data packet into bw (32-bit aligned)."""
+    dc = len(udw) & 0xFF
     words9 = [DID, SDID, dc] + udw
     csum = sum(w & 0x1FF for w in words9) & 0x1FF
-    cs_b8 = (csum >> 8) & 1
-    checksum_word = ((0 if cs_b8 else 1) << 9) | csum
-
-    bw = BitWriter()
-    # --- per-ANC-packet fields (bit-packed) ---
-    bw.put(0, 1)              # C (0 = luma/HANC C-channel not applicable)
-    bw.put(9, 11)             # Line_Number (9 = a plausible VANC line)
+    checksum_word = ((0 if ((csum >> 8) & 1) else 1) << 9) | csum
+    bw.put(0, 1)              # C
+    bw.put(line & 0x7FF, 11)  # Line_Number
     bw.put(0, 12)             # Horizontal_Offset
-    bw.put(0, 1)              # S (StreamFlag)
+    bw.put(0, 1)              # S
     bw.put(0, 7)              # StreamNum
     bw.put(anc_word(DID), 10)
     bw.put(anc_word(SDID), 10)
@@ -96,17 +120,25 @@ def build_anc_payload(seq16, hh, mm, ss, ff, field=0):
     for w in udw:
         bw.put(anc_word(w), 10)
     bw.put(checksum_word, 10)
-    bw.align32()             # each ANC packet is 32-bit aligned
+    bw.align32()
+
+
+def build_anc_payload(seq16, hh, mm, ss, ff, cap_text=None, scte=False, field=0):
+    """One RFC 8331 payload multiplexing ATC timecode + (optional) caption + (optional) SCTE-104."""
+    bw = BitWriter()
+    n = 0
+    _anc_packet(bw, 0x60, 0x60, atc_udws(hh, mm, ss, ff), line=9); n += 1     # ATC timecode
+    if cap_text is not None:
+        _anc_packet(bw, 0x61, 0x01, caption_udws(cap_text), line=11); n += 1  # CEA-708 captions
+    if scte:
+        _anc_packet(bw, 0x41, 0x07, scte104_udws(), line=13); n += 1          # SCTE-104 splice
     anc_bytes = bw.to_bytes()
 
-    # --- RFC 8331 payload header ---
     hdr = bytearray()
     hdr += struct.pack("!H", seq16)                 # Extended Sequence Number
     hdr += struct.pack("!H", len(anc_bytes))        # Length (bytes of ANC data that follow)
-    anc_count = 1
-    F = field & 0x3
-    hdr.append(anc_count & 0xFF)                     # ANC_Count
-    hdr += (F << 22).to_bytes(3, "big")             # F (top 2 bits) + 22 reserved -> 3 bytes
+    hdr.append(n & 0xFF)                             # ANC_Count
+    hdr += ((field & 0x3) << 22).to_bytes(3, "big") # F (top 2 bits) + reserved
     return bytes(hdr) + anc_bytes
 
 
@@ -121,6 +153,14 @@ def main():
     frame = 0
     tstart = time.time()
     period = 1.0 / FPS
+    scte_left = 0               # frames remaining to emit the SCTE-104 marker
+    def read_caption():
+        try:
+            t = open(CC_INPUT).read().strip()
+            if t: return t
+        except Exception:
+            pass
+        return CC_SAMPLES[int((time.time() - tstart) / 4) % len(CC_SAMPLES)]   # rolling sample every 4s
     while True:
         # wall-clock timecode
         el = int(time.time() - tstart)
@@ -130,7 +170,18 @@ def main():
         ff = frame % FPS
         rtp_ts = (int((time.time()) * 90000)) & 0xFFFFFFFF
 
-        payload = build_anc_payload(ext, hh, mm, ss, ff)
+        cap_text = read_caption()
+        if scte_left <= 0:                       # trigger: non-empty knob -> mark, then consume it
+            try:
+                if os.path.getsize(SCTE_KNOB) > 0:
+                    scte_left = FPS               # emit the splice for ~1 s of frames
+                    open(SCTE_KNOB, "w").close()  # consume the trigger
+            except OSError:
+                pass
+        scte_now = scte_left > 0
+        if scte_now:
+            scte_left -= 1
+        payload = build_anc_payload(ext, hh, mm, ss, ff, cap_text=cap_text, scte=scte_now)
         b0 = 0x80                                   # V=2
         b1 = 0x80 | (PT & 0x7F)                     # Marker=1 (last/only ANC pkt of frame) + PT
         rtp = struct.pack("!BBHII", b0, b1, seq & 0xFFFF, rtp_ts, SSRC) + payload

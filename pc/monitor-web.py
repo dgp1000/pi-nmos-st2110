@@ -379,6 +379,27 @@ def _hdhr_rediscover():
 _RUN = _c.get('ATOLL_RUN', '/home/david/atoll-run')
 SWITCHER_KNOB = _RUN + "/switcher"
 AVSYNC_KNOB = _RUN + "/video-delay-ms"   # A/V sync: +ms holds video back to meet late audio
+CC_ENABLE_KNOB = _RUN + "/cc-enable"     # ST 2110-40 captions on/off (anc-recv renders them)
+ANC_SCTE_KNOB  = _RUN + "/anc-scte"      # touch -> anc-send emits an SCTE-104 splice (AD break)
+ANC_TC_FILE    = _RUN + "/anc-tc"        # anc-recv writes the received ATC timecode here
+def _cc_get():
+    try: return open(CC_ENABLE_KNOB).read().strip() in ("1","true","on")
+    except Exception: return False
+def _cc_set(on):
+    try:
+        with open(CC_ENABLE_KNOB, "w") as f: f.write("1" if on else "0")
+    except OSError: pass
+    return {"on": _cc_get()}
+def _cc_scte():
+    try:
+        with open(ANC_SCTE_KNOB, "w") as f: f.write("1")
+    except OSError: pass
+    return {"scte": True}
+def _cc_state():
+    tc = ""
+    try: tc = open(ANC_TC_FILE).read().strip()
+    except Exception: pass
+    return {"on": _cc_get(), "tc": tc}
 def _avsync_get():
     try: return int(open(AVSYNC_KNOB).read().strip())
     except Exception: return 30
@@ -551,6 +572,10 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #lay{margin-top:1vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
  #lay button{font-size:min(2.6vw,3vh);padding:.4em .8em;margin:.4vh .4vw}
  #avsync{display:flex;align-items:center;gap:.7vw;margin-top:.8vh;width:min(60vw,70vh)}
+ #anc{display:flex;align-items:center;gap:.7vw;margin-top:.8vh;flex-wrap:wrap;justify-content:center}
+ #anc button{font-size:min(1.9vw,2.2vh);padding:.4em .7em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
+ #anc button.on{background:#093;color:#000;border-color:#0f0;font-weight:bold}
+ #anc #anctc{color:#6cba90;font-variant-numeric:tabular-nums;font-size:min(1.8vw,2.1vh)}
  #avsync .avlbl{color:#6cba90;font-size:min(1.5vw,1.8vh);letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
  #avslider{flex:1;height:2.4vh}
  #avsync .avval{color:#9c9;font-size:min(1.7vw,2vh);min-width:5ch;text-align:right;font-variant-numeric:tabular-nums}
@@ -668,6 +693,12 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="lmulti" onclick="setLayout('multi')">Multiview</button>
    <button id="lprogram" onclick="setLayout('program')">&#127909; Program Out</button>
    <button id="lswitcher" onclick="setLayout('switcher')">&#127899; Switcher</button>
+  </div>
+  <div id="anc">
+   <span class="avlbl">Ancillary &middot; ST 2110-40</span>
+   <button id="ccbtn" onclick="ccToggle()">CC: off</button>
+   <button id="scbtn" onclick="ccScte()">Trigger AD break</button>
+   <span id="anctc" class="avval">--:--:--:--</span>
   </div>
   <div id="avsync">
    <span class="avlbl">A/V sync</span>
@@ -876,6 +907,12 @@ async function setPvw(src){ try{await fetch('/switcher/pvw?src='+encodeURICompon
 async function swTake(){ try{await fetch('/switcher/take',{cache:'no-store'});}catch(e){} setTimeout(loadSwitcher,200); }
 async function toggleSwTrans(){ const t=SW.trans==='cut'?'dissolve':'cut'; try{await fetch('/switcher/trans?type='+t+'&rate='+SW.rate,{cache:'no-store'});}catch(e){} setTimeout(loadSwitcher,200); }
 async function setLayout(m){ hlLayout(m); try{await fetch('/layout?mode='+m,{cache:'no-store'});}catch(e){} }
+let _ccOn=false;
+async function ccToggle(){ _ccOn=!_ccOn; try{await fetch("/cc/set?on="+(_ccOn?1:0),{cache:"no-store"});}catch(e){} ccRender(); }
+async function ccScte(){ try{await fetch("/cc/scte",{cache:"no-store"});}catch(e){} }
+function ccRender(){ const b=document.getElementById("ccbtn"); if(b){ b.textContent="CC: "+(_ccOn?"on":"off"); b.classList.toggle("on",_ccOn);} }
+async function ccPoll(){ try{const d=await(await fetch("/cc/state",{cache:"no-store"})).json();
+  _ccOn=!!d.on; ccRender(); const t=document.getElementById("anctc"); if(t&&d.tc) t.textContent=d.tc; }catch(e){} }
 let _avT=null;
 function avsyncInput(v){
   document.getElementById('avval').textContent = v + ' ms';
@@ -889,6 +926,7 @@ async function refreshState(){
       if(d.video_delay!==undefined){ const sl=document.getElementById('avslider');
         if(sl && document.activeElement!==sl){ sl.value=d.video_delay; document.getElementById('avval').textContent=d.video_delay+' ms'; } } }catch(e){}
 }
+setInterval(ccPoll, 1000); ccPoll();
 const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const dot=b=>b?'<span class="on-dot">&#9679;</span>':'<span class="off-dot">&#9675;</span>';
 const sid=id=>id?esc(String(id).slice(0,8)):'<span class="mut">none</span>';
@@ -1228,6 +1266,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(json.dumps(_avsync_set(_q.get("ms", ["0"])[0])).encode())
         elif parsed.path == "/avsync/state":
             self._send_json(json.dumps({"ms": _avsync_get()}).encode())
+        elif parsed.path == "/cc/set":
+            _q = parse_qs(parsed.query)
+            self._send_json(json.dumps(_cc_set(_q.get("on", ["0"])[0] in ("1","true","on"))).encode())
+        elif parsed.path == "/cc/scte":
+            self._send_json(json.dumps(_cc_scte()).encode())
+        elif parsed.path == "/cc/state":
+            self._send_json(json.dumps(_cc_state()).encode())
         elif parsed.path == "/fec/state":
             self._send_json(fec_state())
         elif parsed.path == "/fec/set":

@@ -1,0 +1,13 @@
+[Unit]
+Description=Atoll ST 2110-40 ancillary RECEIVER (captions/SCTE/timecode -> Program Out)
+After=network.target atoll-anc.service
+
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/bin/bash -c "source ./atoll.conf && ANC_GRP=$ANC_GRP ANC_PORT=$ANC_PORT ISLAND_PC_IP=$ISLAND_PC_IP ATOLL_RUN=${ATOLL_RUN:-/home/david/atoll-run} exec python3 anc-recv.py"
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

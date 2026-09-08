@@ -667,7 +667,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   </div>
   </section>
 
-  <section class="grp modegrp modehide" data-mode="multi wall"><div class="grphdr">Multiview tiles</div>
+  <section class="grp modegrp modehide" data-mode="multi wall side"><div class="grphdr">Multiview / side tiles</div>
   <div id="slotwrap">
    <div id="slots">
     <button class="slot" id="slot0" onclick="selSlotFn(0)">&mdash;</button>

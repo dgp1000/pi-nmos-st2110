@@ -1,0 +1,667 @@
+#!/usr/bin/env python3
+# ===========================================================================
+#  Atoll SIDE-BY-SIDE renderer -- a source-selectable 2-up (derived from the seamless wall) with the things a real multiviewer has that the
+#  gst-launch version cannot do: a live TALLY border on the on-air tile, per-tile AUDIO METERS,
+#  and a per-tile BITRATE readout.
+#
+#  Why Python: tally has to follow IS-05 takes *without* rebuilding the wall. A gst-launch string
+#  cannot change a property after it starts, so the old multi layout could only have shown tally by
+#  tearing the whole mosaic down on every take. Here the pipeline is built once and a cairooverlay
+#  redraws tally/meters/bitrate every frame from state we update live.
+#
+#  Topology (7 Sep 2026): a PERSISTENT display pipeline (compositor -> cairooverlay -> glimagesink)
+#  reads four intervideosrc buses (tile0..tile3); each tile is a SEPARATE source pipeline ending in
+#  intervideosink channel=tileN. Changing one tile's source tears down and rebuilds only THAT source
+#  pipeline -- the compositor, overlay, window and the other three tiles never stop. This is the same
+#  intervideosrc/intervideosink decoupling proven in switcher-view.py, applied per tile, so per-tile
+#  source switching is seamless (the old single-pipeline wall had to rebuild all four on any change).
+#
+#  Usage: wall-view.py <slots> [SCREEN]     slots = "tl,tr,bl,br" e.g. "hevc,raw,jxs,music"
+#  Slot changes are now handled live HERE (we poll the panel and rebuild just the changed tile);
+#  output-render.sh no longer relaunches us on a slot change. We also handle ACTIVE (tally) live.
+#  ATOLL_SINK_TEST=1 swaps glimagesink for fakesink (headless verification of the pipeline graph).
+# ===========================================================================
+import gi, os, sys, subprocess, urllib.request, json, time, gc
+gi.require_version("Gst", "1.0")
+from gi.repository import Gst, GLib
+import cairo
+Gst.init(None)
+
+# Default 4-up is compressed tiles only. The raw Pi tile (ST 2110-20) is decoded + upscaled on
+# the CPU and, with three GPU-decoded tiles, oversubscribes the WSLg compositor/display so the
+# Live TV tile steps to keyframes (4 Sep 2026). raw is still selectable -- best in single/2-up.
+NT = 2                                   # two panes
+CHANP = "side"                           # intervideo channel prefix (distinct from the wall)
+SLOTS = (sys.argv[1] if len(sys.argv) > 1 else "hevc,raw").split(",")
+SLOTS = (SLOTS + ["hevc"] * NT)[:NT]
+SCREEN = sys.argv[2] if len(sys.argv) > 2 else "2"
+HERE = os.path.dirname(os.path.abspath(__file__))
+NEED = ["ISLAND_IFACE", "VIDEO_SINK", "ATOLL_PLATFORM", "ATOLL_RUN", "PANEL_PORT",
+        "WALL_W", "WALL_H", "WALL_SYNC", "WALL_SW_DECODE", "IS07_PORT", "IS07_WS_PORT",
+        "HEVC_GRP", "HEVC_PORT", "HOME_GRP", "HOME_PORT", "MUSIC_GRP", "MUSIC_PORT",
+        "REELS_GRP", "REELS_PORT", "PI_RAW_GRP", "PI_RAW_PORT", "PI_AUDIO_GRP", "PI_AUDIO_PORT",
+        "J2K_GRP", "J2K_PORT", "H264_GRP", "H264_PORT", "OPUS_GRP", "OPUS_PORT",
+        "MJPEG_GRP", "MJPEG_PORT", "VP9_GRP", "VP9_PORT", "TSRTP_GRP", "TSRTP_PORT",
+        "FEC_GRP", "FEC_PORT", "FEC_COLUMNS", "FEC_ROWS", "SPS_A_GRP", "SPS_A_PORT", "SPS_B_GRP", "SPS_B_PORT",
+        "GALLIUM_DRIVER", "PULSE_SERVER", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"]
+raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
+CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
+# ---- FEC recovery jitterbuffer sizing (2022-1) ----------------------------------------------------
+# ST 2022-1 column FEC can only reconstruct a lost packet once its whole L x D matrix has arrived, so
+# a recovered packet is emitted up to ~2 x L x D packet-times behind the live edge (the matrix plus
+# the column-FEC row that follows it). Size the jitterbuffer to hold that span even at a slow feed, so
+# recovery stays robust to GOP / bitrate changes and does NOT depend on the all-intra sender hack
+# keeping the packet rate high enough for a fixed 500 ms buffer (the old, fragile arrangement -- if
+# the feed reverted to a normal GOP at ~70 pps the matrix fell ~1.1 s behind and tore). FEC_JB_FLOOR_PPS
+# is a deliberately conservative packet-rate floor (normal-GOP 3 Mbit/s TS ~70-150 pps; the current
+# all-intra feed is ~300). At the 5x5 matrix this yields 1000 ms; it scales if FEC_COLUMNS/ROWS change.
+_FEC_COLS = int(CFG.get("FEC_COLUMNS") or 5)
+_FEC_ROWS = int(CFG.get("FEC_ROWS") or 5)
+FEC_JB_FLOOR_PPS = 50
+FEC_JB_MS = max(500, round(2 * _FEC_COLS * _FEC_ROWS / FEC_JB_FLOOR_PPS * 1000))
+FEC_JB = f"rtpjitterbuffer latency={FEC_JB_MS} max-misorder-time={FEC_JB_MS * 5} max-dropout-time={FEC_JB_MS * 5}"
+
+for k in ("GALLIUM_DRIVER", "PULSE_SERVER", "XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"):
+    if CFG.get(k):
+        os.environ[k] = CFG[k]
+IFACE = CFG["ISLAND_IFACE"] or "eth0"
+SINK = CFG["VIDEO_SINK"] or "waylandsink fullscreen=true"
+# sync=false presents each frame the moment it arrives -- unpaced and unaligned to the display
+# refresh, which tears moving objects (a horizontal split showing halves of two different frames).
+# That is a DISPLAY artifact, nothing to do with the stream: it appears even when the transport is
+# byte-perfect. sync=true paces presentation from each frame's PTS instead. WALL_SYNC=false restores
+# the old behaviour if clock-syncing ever stalls on this WSLg path.
+SYNC = "true" if (CFG.get("WALL_SYNC", "").lower() == "true") else "false"
+# H.264 decode path for the tiles: GPU by default, software when WALL_SW_DECODE=true (diagnostic --
+# isolates whether partial/black frame regions come from nvh264dec/cudadownload rather than the feed)
+if CFG.get("WALL_SW_DECODE", "").lower() == "true":
+    H264DEC = "avdec_h264 ! videoconvert"
+else:
+    H264DEC = "nvh264dec ! cudadownload"
+IS_WSL = CFG["ATOLL_PLATFORM"] == "wsl"
+RUN = CFG.get("ATOLL_RUN", "")
+PANEL = f"http://localhost:{CFG.get('PANEL_PORT', '8096')}"
+def grp(k): return CFG[f"{k}_GRP"], CFG[f"{k}_PORT"]
+
+W = int(CFG.get("WALL_W") or 1920)
+H = int(CFG.get("WALL_H") or 1080)
+WINW = int(os.environ.get("ATOLL_TV_W", "3840"))   # glimagesink window size (Monitor 2 native)
+WINH = int(os.environ.get("ATOLL_TV_H", "2160"))
+TW, TH = W // 2, H // 2              # each pane is 960x540
+S = W / 1920.0                       # overlay scale, so the UI keeps its proportions at any size
+POS = [(0, (H - TH) // 2), (TW, (H - TH) // 2)]   # left / right, vertically centred
+LABEL = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "reels": "Test Reels",
+         "raw": "Pi raw 2110-20", "j2k": "JPEG 2000", "h264": "H.264 RTP", "mjpeg": "MJPEG RTP",
+         "vp9": "VP9 RTP", "tsrtp": "TS over RTP", "fec": "ST 2022-1 FEC", "sps": "ST 2022-7 SPS", "jpegxs": "JPEG XS"}
+RAW_CAPS = ("application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)RAW,"
+            "sampling=(string)YCbCr-4:2:2,depth=(string)8,width=(string)320,height=(string)240,"
+            "colorimetry=(string)BT601-5,payload=(int)96")
+FECSTREAM = "application/x-rtp,payload=96,clock-rate=90000"
+MP2T = "application/x-rtp,media=video,clock-rate=90000,encoding-name=MP2T,payload=33"
+
+def udp(g, p, buf=8388608, caps=None, name=None):
+    n = f"name={name} " if name else ""
+    c = f'caps="{caps}" ' if caps else ""
+    return (f"udpsrc {n}address={g} port={p} multicast-iface={IFACE} auto-multicast=true "
+            f"buffer-size={buf} {c}")
+
+def scale(i):
+    # ends one tile's SOURCE pipeline: scaled to the quadrant, tapped for fps, handed to the tile bus.
+    return (f"! videorate ! video/x-raw,framerate=30/1 ! videoconvert ! videoscale ! "
+            f"video/x-raw,format=I420,width={TW},height={TH} ! identity name=tap{i} ! "
+            f"queue leaky=downstream max-size-time=700000000 max-size-buffers=0 max-size-bytes=0 ! "
+            f"intervideosink channel={CHANP}{i} sync=false ")
+
+def ts_tile(i, g, p, vparse, vdec):
+    """MPEG-TS over plain UDP: video decoded, audio decoded only to feed this tile's level meter."""
+    d = f"d{i}"
+    return (udp(g, p, name=f"u{i}") + f"! tsdemux name={d} "
+            f"{d}. ! {vparse} ! queue ! {vdec} ! cudadownload " + scale(i) +
+            f"{d}. ! audio/mpeg ! queue ! decodebin ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")
+
+def tile(i, src):
+    """One quadrant. Returns a pipeline fragment ending at mix.sink_<i> (+ an audio meter branch)."""
+    if src in ("hevc", "jxs", "music", "reels"):
+        g, p = grp({"hevc": "HEVC", "jxs": "HOME", "music": "MUSIC", "reels": "REELS"}[src])
+        if src == "music":   # video-only placeholder: no audio pad to demux (would hang preroll)
+            d = f"d{i}"
+            return (udp(g, p, name=f"u{i}") + f"! tsdemux name={d} {d}. ! h265parse ! queue ! nvh265dec ! cudadownload " + scale(i))
+        return ts_tile(i, g, p, "h265parse", "nvh265dec")
+    if src == "raw":         # ST 2110-20 video + the separate 2110-30 L24 audio flow for the meter
+        g, p = grp("PI_RAW"); ag, ap = grp("PI_AUDIO")
+        return (udp(g, p, buf=8388608, caps=RAW_CAPS, name=f"u{i}") +
+                "! rtpjitterbuffer latency=100 ! rtpvrawdepay ! videoconvert " + scale(i) +
+                udp(ag, ap, buf=16777216, caps="application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96") +
+                f"! rtpjitterbuffer latency=500 ! rtpL24depay ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")
+    if src == "j2k":
+        g, p = grp("J2K")
+        return (udp(g, p, caps="application/x-rtp,media=video,encoding-name=JPEG2000,clock-rate=90000,sampling=YCbCr-4:2:0", name=f"u{i}") +
+                "! rtpj2kdepay ! avdec_jpeg2000 " + scale(i))
+    if src == "h264":        # video RTP + its separate Opus RTP audio essence -> meter
+        g, p = grp("H264"); ag, ap = grp("OPUS")
+        return (udp(g, p, caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96", name=f"u{i}") +
+                "! rtpjitterbuffer latency=100 ! rtph264depay ! h264parse ! nvh264dec ! cudadownload " + scale(i) +
+                udp(ag, ap, caps="application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload=97") +
+                f"! rtpjitterbuffer latency=200 ! rtpopusdepay ! opusdec ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")
+    if src == "mjpeg":
+        g, p = grp("MJPEG")
+        return (udp(g, p, buf=16777216, caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=JPEG,payload=96", name=f"u{i}") +
+                "! rtpjitterbuffer latency=100 ! rtpjpegdepay ! nvjpegdec " + scale(i))
+    if src == "vp9":
+        g, p = grp("VP9")
+        return (udp(g, p, caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=VP9,payload=96", name=f"u{i}") +
+                "! rtpjitterbuffer latency=100 ! rtpvp9depay ! vp9parse ! nvvp9dec " + scale(i))
+    if src in ("tsrtp", "fec"):   # TS inside RTP; fec additionally recombines the 2022-1 flows
+        d = f"d{i}"
+        if src == "tsrtp":
+            g, p = grp("TSRTP")
+            head = udp(g, p, caps=MP2T, name=f"u{i}") + "! rtpjitterbuffer latency=200 ! rtpmp2tdepay "
+        else:
+            g, p = grp("FEC"); cp, rp = int(p) + 2, int(p) + 4
+            head = (udp(g, p, caps=MP2T, name=f"u{i}") + f"! identity name=flossy{i} ! rtpst2022-1-fecdec name=fd{i} " +
+                    udp(g, cp, caps=FECSTREAM) + f"! identity name=fg0_{i} ! queue ! fd{i}.fec_0 " +
+                    udp(g, rp, caps=FECSTREAM) + f"! identity name=fg1_{i} ! queue ! fd{i}.fec_1 " +
+                    f"fd{i}. ! {FEC_JB} ! identity name=fjb{i} ! rtpmp2tdepay ")
+        # FEC tile decodes in SOFTWARE (avdec_h264), on purpose -- root cause diagnosed 6 Sep 2026:
+        # under residual loss (what FEC can't fully rebuild, the point of the demo) the recovered
+        # H.264 has gaps. (1) The sender carries SPS/PPS inband (config-interval=-1); when loss eats
+        # the frame carrying them, nvh264dec loses configuration -> "Should configure decoder first"
+        # / "Failed to negotiate" -> torn frames. Re-inserting cached SPS/PPS on the receiver with
+        # h264parse config-interval=1 fixes THAT (fatal nvdec gap errors: 2/14s -> 0 at 5% loss).
+        # (2) But NVDEC still has no macroblock error concealment, so residual corrupt frames glitch;
+        # avdec_h264 conceals them smoothly -- which is exactly the graceful degradation this FEC
+        # demo exists to show. So avdec is the right decoder here, not merely a workaround. It is one
+        # 720p 3 Mbps tile (~25% of a core), nowhere near the WALL_SW_DECODE=true all-tiles
+        # oversubscription. tsrtp and the other H.264 tiles decode fine on the GPU via H264DEC.
+        # (nvh264dec + config-interval=1 is a viable GPU alternative if you accept glitch-not-conceal.)
+        parse = "h264parse config-interval=1" if src == "fec" else "h264parse"
+        vdec = "avdec_h264 ! videoconvert" if src == "fec" else H264DEC
+        return (head + f"! tsdemux name={d} "
+                f"{d}. ! {parse} ! queue ! {vdec} " + scale(i) +
+                f"{d}. ! audio/mpeg ! queue ! decodebin ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")
+    if src == "sps":     # both paths funnelled; the jitterbuffer drops the duplicate copy
+        d = f"d{i}"
+        return (f"funnel name=fn{i} ! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name={d} " +
+                udp(CFG["SPS_A_GRP"], CFG["SPS_A_PORT"], caps=MP2T, name=f"u{i}") + f"! identity name=spa{i} ! queue ! fn{i}. " +
+                udp(CFG["SPS_B_GRP"], CFG["SPS_B_PORT"], caps=MP2T) + f"! identity name=spb{i} ! queue ! fn{i}. " +
+                f"{d}. ! h264parse ! queue ! {H264DEC} " + scale(i) +
+                f"{d}. ! audio/mpeg ! queue ! decodebin ! audioconvert ! level name=lvl{i} post-messages=true interval=100000000 ! fakesink sync=false ")
+    # jpegxs / unknown -> local encode->decode demo pattern
+    return (f"videotestsrc pattern=ball motion=sweep is-live=true ! video/x-raw,width={TW},height={TH},framerate=30/1 "
+            f"! videoconvert ! video/x-raw,format=Y42B ! svtjpegxsenc ! svtjpegxsdec ! videoconvert " + scale(i))
+
+# ---- persistent DISPLAY pipeline: compositor + cairooverlay + sink, fed by four intervideosrc
+# buses (tile0..tile3). This never restarts; only the per-tile SOURCE pipelines below come and go. ----
+sinkprops = " ".join(f"sink_{i}::xpos={x} sink_{i}::ypos={y}" for i, (x, y) in enumerate(POS))
+TEST = os.environ.get("ATOLL_SINK_TEST") == "1"    # headless: swap glimagesink for fakesink
+if TEST:
+    _tail = "! videoconvert ! cairooverlay name=ov ! videoconvert ! fakesink sync=false "
+else:
+    _tail = (f"! video/x-raw,width={W},height={H} ! videoconvert ! cairooverlay name=ov ! videoconvert "
+             f"! glupload ! glcolorscale ! video/x-raw(memory:GLMemory),width={WINW},height={WINH} ! glimagesink sync=true ")
+# NOTE: do NOT ask the compositor for BGRA to "save" the pre-overlay conversion. Measured, that is
+# WORSE (296% vs 238% CPU at 2560x1440): compositing in 4-byte BGRA moves 2.67x more data per pixel
+# than YUV, which costs more than the conversion it avoids.
+_isrcs = "".join(
+    f"intervideosrc channel={CHANP}{i} ! video/x-raw,format=I420,width={TW},height={TH},framerate=30/1 "
+    f"! queue leaky=downstream max-size-time=700000000 max-size-buffers=0 max-size-bytes=0 ! mix.sink_{i} "
+    for i in range(NT))
+desc = (f"compositor name=mix ignore-inactive-pads=true background=black {sinkprops} " + _tail + _isrcs)
+pipe = Gst.parse_launch(desc)      # `pipe` = the persistent display pipeline
+ov = pipe.get_by_name("ov")
+
+# ---- live state the overlay draws from ----
+st = {"active": "", "peak": [[] for _ in range(NT)], "bytes": [0] * NT, "mbps": [0.0] * NT,
+      "w": W, "h": H, "chan": "", "cap": "", "cap_rect": None}
+for _k in ("fw", "fa", "fo", "fj"):          # ST 2022-1 recovery counters (cumulative; see tick())
+    st[_k] = [0] * NT
+    st["_" + _k] = [0] * NT
+st["fps"] = [0.0] * NT
+st["_fc"] = [0] * NT
+st["reord"] = [0] * NT
+st["_hi"] = [None] * NT
+
+def on_caps(_ov, caps):
+    s = caps.get_structure(0)
+    st["w"], st["h"] = s.get_value("width"), s.get_value("height")
+ov.connect("caps-changed", on_caps)
+
+# ---- probe helpers (attached per SOURCE pipeline in build_source) ----
+def _bytetap(idx):                           # per-tile bitrate: sum udpsrc buffer sizes
+    def cb(_pad, info):
+        b = info.get_buffer()
+        if b:
+            st["bytes"][idx] += b.get_size()
+        return Gst.PadProbeReturn.OK
+    return cb
+def _fpsn(idx):                              # per-tile fps: count frames reaching the scaler tap
+    def cb(_pad, _info):
+        st["_fc"][idx] += 1
+        return Gst.PadProbeReturn.OK
+    return cb
+def _tapn(key, idx):                         # FEC straddle counters (wire / after-loss / dec-out / jb-out)
+    def cb(_pad, _info):
+        st[key][idx] += 1
+        return Gst.PadProbeReturn.OK
+    return cb
+def _ordertap(idx):
+    """Count out-of-order RTP arrivals at the depayloader input for this tile."""
+    import struct as _st
+    def cb(_pad, info):
+        b = info.get_buffer()
+        ok, mi = b.map(Gst.MapFlags.READ)
+        if ok:
+            try:
+                d = mi.data
+                if len(d) >= 4:
+                    seq = _st.unpack("!H", d[2:4])[0]
+                    hi = st["_hi"][idx]
+                    if hi is not None:
+                        back = (hi - seq) & 0xFFFF
+                        if 0 < back < 4000:
+                            st["reord"][idx] += 1
+                    if hi is None or ((seq - hi) & 0xFFFF) < 4000:
+                        st["_hi"][idx] = seq
+            finally:
+                b.unmap(mi)
+        return Gst.PadProbeReturn.OK
+    return cb
+
+# ---- level meters + errors arrive on each SOURCE pipeline's bus (was the single pipe's bus) ----
+def on_msg(_b, msg):
+    if msg.type == Gst.MessageType.ELEMENT:
+        s2 = msg.get_structure()
+        if s2 and s2.get_name() == "level":
+            nm = msg.src.get_name()          # lvl<i> -> that tile's meters
+            if nm.startswith("lvl"):
+                try:
+                    st["peak"][int(nm[3:])] = [float(v) for v in s2.get_value("peak")]
+                except Exception:
+                    pass
+    elif msg.type == Gst.MessageType.ERROR:
+        e, dbg = msg.parse_error()
+        print(f"side-view ERROR: {e.message} :: {dbg}", flush=True)
+_dbus = pipe.get_bus(); _dbus.add_signal_watch(); _dbus.connect("message", on_msg)   # display-pipe errors
+
+# ---- per-tile SOURCE pipelines: build one, tear one down, rebuild just the changed one ----
+SRCPIPE = [None] * NT
+GATES = {"floss": [], "fgate": [], "spa": [], "spb": []}
+
+# ---- shared CUDA context: the OLD single-pipeline wall let all decoders share ONE GstCudaContext;
+# separate per-tile pipelines would otherwise each make their own, and on WSLg 4 CUDA contexts + the
+# 4K GL sink oversubscribe the vGPU (the nvh264dec tile then decodes 0 fps). We capture the context
+# the first CUDA decoder creates and hand it to every other source pipeline, so 4 decoders = 1
+# context, exactly as before. Cross-pipeline sharing is the standard NEED/HAVE_CONTEXT bus dance. ----
+_shared_cuda = {"ctx": None}
+_CUDA_CTX_TYPE = "gst.cuda.context"
+def _cuda_sync(_bus, msg):
+    t = msg.type
+    if t == Gst.MessageType.HAVE_CONTEXT:
+        ctx = msg.parse_have_context()
+        if ctx and ctx.get_context_type() == _CUDA_CTX_TYPE and _shared_cuda["ctx"] is None:
+            _shared_cuda["ctx"] = ctx
+            print(f"{time.strftime('%T')} side-view: captured shared CUDA context", flush=True)
+    elif t == Gst.MessageType.NEED_CONTEXT:
+        ok, ctype = msg.parse_context_type()
+        if ok and ctype == _CUDA_CTX_TYPE and _shared_cuda["ctx"] is not None:
+            msg.src.set_context(_shared_cuda["ctx"])   # serve the shared context to this decoder
+    return Gst.BusSyncReply.PASS
+
+def rescan_gates():
+    """Re-collect the FEC/2022-7 gate elements across the CURRENT source pipelines (they move when a
+    tile's source changes), so apply_knobs always drives the live elements."""
+    g = {"floss": [], "fgate": [], "spa": [], "spb": []}
+    for i in range(NT):
+        p = SRCPIPE[i]
+        if p is None:
+            continue
+        for _nm, _key in ((f"flossy{i}", "floss"), (f"spa{i}", "spa"), (f"spb{i}", "spb")):
+            e = p.get_by_name(_nm)
+            if e:
+                g[_key].append(e)
+        for _nm in (f"fg0_{i}", f"fg1_{i}"):
+            e = p.get_by_name(_nm)
+            if e:
+                g["fgate"].append(e)
+    GATES.clear(); GATES.update(g)
+
+def build_source(i, key):
+    """(Re)build tile i's source pipeline for `key`, ending at intervideosink channel={CHANP}{i}. Tears
+    down only this one pipeline; the display and the other three tiles keep running."""
+    old = SRCPIPE[i]
+    SRCPIPE[i] = None
+    if old is not None:
+        # Fully tear the old pipeline down BEFORE building the replacement on the same intervideo
+        # channel: block until it actually reaches NULL and finalize it, so its NVDEC decode session
+        # is released on the (WSLg) GPU. Otherwise the new decoder claims a session while the old one
+        # is still being freed -> transient session-limit overflow -> the new tile decodes 0 fps.
+        old.set_state(Gst.State.NULL)
+        old.get_state(Gst.SECOND * 3)     # wait for the NULL transition to complete
+        old = None
+        gc.collect()                      # drop the last ref so the decoder is disposed now
+    try:
+        p = Gst.parse_launch(tile(i, key))
+    except Exception as e:
+        print(f"side-view: pane {i} <- {key} parse error: {e}", flush=True)
+        rescan_gates()
+        return
+    # reset this tile's live stats so stale numbers don't linger from the previous source
+    st["bytes"][i] = 0; st["mbps"][i] = 0.0; st["_fc"][i] = 0; st["fps"][i] = 0.0; st["peak"][i] = []
+    for k in ("fw", "fa", "fo", "fj"):
+        st[k][i] = 0; st["_" + k][i] = 0
+    st["reord"][i] = 0; st["_hi"][i] = None
+    b = p.get_bus()
+    b.set_sync_handler(_cuda_sync)          # capture/serve the shared CUDA context (before PLAYING)
+    b.add_signal_watch(); b.connect("message", on_msg)
+    if _shared_cuda["ctx"] is not None:
+        p.set_context(_shared_cuda["ctx"])   # proactively share (rebuilds + all-but-first startup tile)
+    u = p.get_by_name(f"u{i}")
+    if u:
+        u.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _bytetap(i))   # bitrate
+    t = p.get_by_name(f"tap{i}")
+    if t:
+        t.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _fpsn(i))      # fps
+    for _nm, _key in ((f"u{i}", "_fw"), (f"flossy{i}", "_fa"), (f"fd{i}", "_fo"), (f"fjb{i}", "_fj")):
+        _e = p.get_by_name(_nm)
+        if _e:
+            _e.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _tapn(_key, i))
+            if _nm.startswith("fjb"):
+                _e.get_static_pad("src").add_probe(Gst.PadProbeType.BUFFER, _ordertap(i))
+    SRCPIPE[i] = p
+    p.set_state(Gst.State.PLAYING)
+    rescan_gates()
+    print(f"{time.strftime('%T')} side-view: pane {i} <- {key}", flush=True)
+
+def tick():
+    for i in range(NT):
+        st["mbps"][i] = round(st["bytes"][i] * 8 / 1e6, 1)
+        st["bytes"][i] = 0
+        st["fps"][i] = st["_fc"][i]; st["_fc"][i] = 0
+        for k in ("fw", "fa", "fo", "fj"):          # CUMULATIVE totals: the taps straddle the fecdec
+            st[k][i] = st["_" + k][i]        # buffer, so per-second differencing is meaningless
+    if RUN:
+        try:
+            st["chan"] = open(os.path.join(RUN, "tv-channel")).read().strip()
+        except Exception:
+            pass
+    return True
+GLib.timeout_add_seconds(1, tick)
+
+def _knob(name, default):
+    try:
+        return float(open(os.path.join(RUN, name)).read().strip())
+    except Exception:
+        return default
+
+# The panel's FEC loss / FEC on-off / 2022-7 path buttons write these knob files; the wall honours
+# them on whichever tile currently holds the fec/sps source (GATES is refreshed on every rebuild).
+def apply_knobs():
+    loss = max(0.0, min(1.0, _knob("fec-loss", 0.0)))
+    fec_on = _knob("fec-enable", 1.0) >= 0.5
+    ups = {"spa": _knob("sps-a", 1.0) >= 0.5, "spb": _knob("sps-b", 1.0) >= 0.5}
+    try:
+        for e in GATES["floss"]:
+            e.set_property("drop-probability", loss)
+        for e in GATES["fgate"]:
+            e.set_property("drop-probability", 0.0 if fec_on else 1.0)
+        for key in ("spa", "spb"):
+            for e in GATES[key]:
+                e.set_property("drop-probability", 0.0 if ups[key] else 1.0)
+    except Exception:
+        pass    # an element may be mid-teardown between a rebuild and the next rescan; harmless
+    return True
+GLib.timeout_add_seconds(1, apply_knobs)
+
+# --- NMOS IS-07 tally receiver -------------------------------------------------------------
+# The wall is a real IS-07 receiver: it SUBSCRIBES to the boolean event source of EVERY known source
+# key (not just the four currently shown), so a tile that is switched in already has its tally live
+# and a cut reaches the flag when it happens. Tally is stored BY SOURCE KEY, so seamless slot changes
+# need no re-subscription -- the overlay just looks up st["tally_by_key"][SLOTS[i]].
+import threading as _threading
+sys.path.insert(0, HERE)                 # resolve is07client whatever cwd we were started from
+import is07client
+
+st["tally_by_key"] = {}
+st["is07"] = False                       # whether the subscription is up
+_sub = {}                                # source_id -> key
+for _key in LABEL:
+    _sub[is07client.source_id(_key)] = _key
+
+def _on_state(sid, value, _tai):
+    k = _sub.get(sid)
+    if k is not None:
+        st["tally_by_key"][k] = value    # GIL makes the item store atomic
+
+def _on_status(up):
+    st["is07"] = up                      # flag drops to plain ON AIR while down, visibly
+
+_is07 = is07client.Is07Client(list(_sub), port=int(CFG.get("IS07_WS_PORT") or 8103),
+                              on_state=_on_state, on_status=_on_status)
+
+def panel_tick():
+    """One panel poll a second: (1) drive SEAMLESS per-tile slot changes -- rebuild only a tile whose
+    source key changed; (2) tally fallback while the IS-07 subscription is down."""
+    if os.environ.get("ATOLL_WALL_TEST_NOPANEL"): return True   # headless test: let a scripted swap stick
+    try:
+        with urllib.request.urlopen(f"{PANEL}/state", timeout=2) as r:
+            j = json.load(r)
+    except Exception:
+        return True
+    slots = [x.strip() for x in (j.get("slots") or "").split(",") if x.strip()]
+    for i in range(min(NT, len(slots))):
+        if slots[i] != SLOTS[i]:
+            SLOTS[i] = slots[i]
+            build_source(i, slots[i])
+    if not st["is07"]:                    # fallback: tally follows the panel's active source
+        a = j.get("active", "")
+        st["tally_by_key"] = {k: (k == a) for k in LABEL}
+    return True
+
+# Double-buffered overlay. The DRAWING (~30-60ms of Python+cairo text) happens on the GLib main
+# loop, never on the streaming thread: on_draw only ever blits an already-rendered surface, so the
+# frame budget is not hostage to how long the overlay takes to compose. Two surfaces are alternated
+# so a blit can never read the one being drawn into.
+_ovbufs = [None, None]
+_ovidx = 0
+_ovsurf = None
+_ovsize = (0, 0)
+
+def _draw_caption(ctx, text, w, h):
+    """Guided-demo narration burned onto the wall as a bottom band. Returns (y0, height) so on_draw
+    can blit exactly that region. Drawn in screen coords (after the overlay's scale is restored)."""
+    if not text:
+        return None
+    ctx.save()
+    ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+    fs = max(22, int(h * 0.032)); ctx.set_font_size(fs)
+    maxw = w * 0.9; lines = []; cur = ""
+    for wd in text.split():
+        t = (cur + " " + wd).strip()
+        if cur and ctx.text_extents(t).width > maxw:
+            lines.append(cur); cur = wd
+        else:
+            cur = t
+    if cur:
+        lines.append(cur)
+    lh = fs * 1.35; pad = fs * 0.6; bh = int(lh * len(lines) + pad * 2)
+    y0 = int(h - bh - h * 0.03)
+    ctx.set_source_rgba(0, 0, 0, 0.75); ctx.rectangle(0, y0, w, bh); ctx.fill()
+    ctx.set_source_rgba(1, 1, 1, 0.98)
+    for i, ln in enumerate(lines):
+        tw = ctx.text_extents(ln).width
+        ctx.move_to((w - tw) / 2, y0 + pad + lh * (i + 1) - fs * 0.35); ctx.show_text(ln)
+    ctx.restore()
+    return (y0, bh)
+
+def _render_overlay():
+    """Compose the overlay on the MAIN LOOP into the spare buffer, then publish it."""
+    global _ovidx, _ovsurf, _ovsize, _ovbufs
+    w, h = int(st["w"]), int(st["h"])
+    if w <= 0 or h <= 0:
+        return True
+    if _ovsize != (w, h):
+        _ovbufs = [cairo.ImageSurface(cairo.FORMAT_ARGB32, w, h) for _ in range(2)]
+        _ovsize = (w, h)
+    spare = 1 - _ovidx
+    surf = _ovbufs[spare]
+    c = cairo.Context(surf)
+    c.set_operator(cairo.OPERATOR_CLEAR); c.paint()
+    c.set_operator(cairo.OPERATOR_OVER)
+    _draw_overlay(c)
+    surf.flush()
+    _ovidx = spare
+    _ovsurf = surf          # publish; rebinding a name is atomic under the GIL
+    return True
+
+def on_draw(_ov, ctx, _ts, _dur):
+    surf = _ovsurf
+    if surf is None:
+        return
+    # Blit ONLY the regions that carry overlay. Painting a full-screen ARGB surface every frame was
+    # itself ~20ms (8MB of alpha compositing in cairo's software renderer).
+    sx, sy = st["w"] / W, st["h"] / H
+    ctx.set_source_surface(surf, 0, 0)
+    b = 8 * S
+    for i in range(NT):
+        x, y = POS[i]
+        ctx.rectangle(x * sx, (y + TH - 95 * S) * sy, TW * sx, 95 * S * sy)   # UMD / fps / FEC / meters
+        ctx.rectangle(x * sx, y * sy, 150 * S * sx, 62 * S * sy)              # ON AIR + IS-07 flag
+        ctx.rectangle(x * sx, y * sy, TW * sx, b * sy)                        # tally border: top
+        ctx.rectangle(x * sx, (y + TH - b) * sy, TW * sx, b * sy)             #               bottom
+        ctx.rectangle(x * sx, y * sy, b * sx, TH * sy)                        #               left
+        ctx.rectangle((x + TW - b) * sx, y * sy, b * sx, TH * sy)             #               right
+    ctx.rectangle((W - 130 * S) * sx, 0, 130 * S * sx, 46 * S * sy)           # ATOLL bug
+    _cr = st.get("cap_rect")
+    if _cr:
+        ctx.rectangle(0, _cr[0], st["w"], _cr[1])                             # demo caption band
+    ctx.fill()
+
+def _draw_overlay(ctx):
+    sx, sy = st["w"] / W, st["h"] / H
+    ctx.save(); ctx.scale(sx, sy)
+    ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+    for i, src in enumerate(SLOTS):
+        x, y = POS[i]
+        name = LABEL.get(src, src)
+        if src == "hevc" and st["chan"]:
+            name += f"  ch {st['chan']}"
+        # --- tally: red border + ON AIR flag on the tile that is currently taken ---
+        if st["tally_by_key"].get(SLOTS[i], False):
+            ctx.set_source_rgba(1, 0.1, 0.1, 0.95); ctx.set_line_width(6 * S)
+            ctx.rectangle(x + 3 * S, y + 3 * S, TW - 6 * S, TH - 6 * S); ctx.stroke()
+            # top-LEFT of the tile: the wall's ATOLL bug sits top-right and would collide there
+            tag = st.get("is07")
+            ctx.set_source_rgba(0.85, 0.05, 0.05, 0.92)
+            ctx.rectangle(x + 10 * S, y + 10 * S, 118 * S, (42 if tag else 26) * S); ctx.fill()
+            ctx.set_source_rgba(1, 1, 1, 1); ctx.set_font_size(15 * S)
+            ctx.move_to(x + 22 * S, y + 29 * S); ctx.show_text("ON AIR")
+            if tag:   # the border is lit by an IS-07 boolean, not by panel state -- say so
+                ctx.set_source_rgba(1, 1, 1, 0.85); ctx.set_font_size(11 * S)
+                ctx.move_to(x + 22 * S, y + 45 * S); ctx.show_text("NMOS IS-07")
+        # --- UMD label + live bitrate ---
+        ctx.set_source_rgba(0, 0, 0, 0.55); ctx.rectangle(x + 8 * S, y + TH - 40 * S, 320 * S, 30 * S); ctx.fill()
+        ctx.set_source_rgba(1, 1, 1, 0.95); ctx.set_font_size(17 * S)
+        ctx.move_to(x + 16 * S, y + TH - 19 * S); ctx.show_text(name)
+        ctx.set_source_rgba(0.35, 0.85, 0.7, 0.95); ctx.set_font_size(14 * S)
+        ctx.move_to(x + 240 * S, y + TH - 19 * S); ctx.show_text(f"{st['mbps'][i]:.1f} Mb/s")
+        f = st["fps"][i]
+        if f:                                  # a tile short of 30fps is dropping frames
+            ctx.set_source_rgba(1, 0.45, 0.35, 0.98) if f < 28 else ctx.set_source_rgba(0.35, 0.85, 0.7, 0.95)
+            ctx.move_to(x + 360 * S, y + TH - 19 * S); ctx.show_text(f"{f:.0f} fps")
+        if src == "fec" and st["fw"][i]:      # numeric proof of ST 2022-1 recovery
+            wire, after, out = st["fw"][i], st["fa"][i], st["fo"][i]
+            deliv = st["fj"][i] or out          # after the jitterbuffer = what the decoder really got
+            dropped = max(0, wire - after); recovered = max(0, min(dropped, deliv - after))
+            resid = (100.0 * max(0, wire - deliv) / wire) if wire > 0 else 0.0
+            ctx.set_source_rgba(0, 0, 0, 0.55); ctx.rectangle(x + 8 * S, y + TH - 74 * S, 330 * S, 30 * S); ctx.fill()
+            ctx.set_source_rgba(1, 0.75, 0.4, 0.95) if (resid > 0.01 or st["reord"][i]) else ctx.set_source_rgba(0.45, 0.95, 0.55, 0.95)
+            ctx.set_font_size(14 * S)
+            ctx.move_to(x + 16 * S, y + TH - 54 * S)
+            ctx.show_text(f"dropped {dropped:,}  recovered {recovered:,}  resid {resid:.3f}%  reord {st['reord'][i]:,}")
+        # --- per-tile audio meters (one slim bar per channel, bottom-right of the tile) ---
+        pk = st["peak"][i]
+        if pk:
+            n = min(len(pk), 6); bw, gap, maxh = 7 * S, 4 * S, 54 * S
+            mx = x + TW - (n * (bw + gap)) - 14 * S; base = y + TH - 14 * S
+            ctx.set_source_rgba(0, 0, 0, 0.4)
+            ctx.rectangle(mx - 8 * S, base - maxh - 8 * S, n * (bw + gap) + 12 * S, maxh + 14 * S); ctx.fill()
+            for c in range(n):
+                db = max(-60.0, min(0.0, pk[c]))
+                frac = (db + 60.0) / 60.0
+                bh = max(1, int(maxh * frac))
+                bx = mx + c * (bw + gap)
+                ctx.set_source_rgba(1, 1, 1, 0.14); ctx.rectangle(bx, base - maxh, bw, maxh); ctx.fill()
+                r = frac
+                ctx.set_source_rgba(0.15 + 0.8 * r, 0.8 - 0.45 * r, 0.15, 0.92)
+                ctx.rectangle(bx, base - bh, bw, bh); ctx.fill()
+    # --- ATOLL bug ---
+    ctx.set_source_rgba(1, 1, 1, 0.5); ctx.set_font_size(20 * S)
+    ctx.move_to(W - 108 * S, 34 * S); ctx.show_text("ATOLL")
+    ctx.restore()
+    st["cap_rect"] = _draw_caption(ctx, st.get("cap") or "", st["w"], st["h"])
+ov.connect("draw", on_draw)
+def _cap_tick():
+    try:
+        st["cap"] = open(os.path.join(RUN, "demo-caption")).read().strip()
+    except Exception:
+        st["cap"] = ""
+    return True
+_cap_tick(); GLib.timeout_add(400, _cap_tick)
+_render_overlay()                        # compose once up front so the first frames have an overlay
+GLib.timeout_add(100, _render_overlay)   # thereafter 10Hz, on the main loop, off the streaming thread
+
+# ---- bring it up: source pipelines first (they populate the intervideo buses), then the display ----
+# Build one at a time and, until a shared CUDA context exists, wait briefly after each so the FIRST
+# CUDA decoder's context is captured before the next tile comes up -- otherwise several decoders race
+# to each create their own context. Once captured, later tiles are pre-set with it (no wait, no race).
+for _i in range(NT):
+    build_source(_i, SLOTS[_i])
+    if _shared_cuda["ctx"] is None:
+        _t0 = time.time()
+        while _shared_cuda["ctx"] is None and time.time() - _t0 < 1.5:
+            time.sleep(0.05)     # sync handler runs on the streaming thread, so this poll sees it
+pipe.set_state(Gst.State.PLAYING)
+panel_tick()                                 # prime slots + tally before the socket is up
+GLib.timeout_add_seconds(1, panel_tick)
+_is07.start()
+
+def _diag():                                 # periodic health line (also the headless-test signal)
+    _cx = "shared" if _shared_cuda["ctx"] is not None else "none"
+    print("DIAG side cuda:" + _cx + " " + " | ".join(f"t{i}:{SLOTS[i]} {st['mbps'][i]:.1f}Mb/s {st['fps'][i]:.0f}fps"
+                                for i in range(NT)), flush=True)
+    return True
+GLib.timeout_add_seconds(5, _diag)
+
+_swap = os.environ.get("ATOLL_WALL_TEST_SWAP")   # "idx:key@secs" (e.g. "1:h264@6") -- headless test only
+if _swap:
+    try:
+        _spec, _secs = _swap.split("@"); _si, _sk = _spec.split(":")
+        def _do_swap():
+            print(f"TEST swap tile {_si} -> {_sk} (others should keep flowing)", flush=True)
+            SLOTS[int(_si)] = _sk; build_source(int(_si), _sk); return False
+        GLib.timeout_add(int(float(_secs) * 1000), _do_swap)
+    except Exception as _e:
+        print(f"TEST swap spec bad: {_e}", flush=True)
+
+print(f"side-view: {','.join(SLOTS)} -> screen {SCREEN}", flush=True)
+if IS_WSL and SCREEN != "0" and not TEST:
+    def mover():
+        try:
+            subprocess.Popen(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                              "-File", subprocess.check_output(["wslpath", "-w", os.path.join(HERE, "move-window-screen.ps1")], text=True).strip(),
+                              "-Screen", SCREEN, "-TimeoutSec", "12"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+        return False
+    GLib.timeout_add_seconds(2, mover)
+loop = GLib.MainLoop()
+try:
+    loop.run()
+except KeyboardInterrupt:
+    pass
+finally:
+    for _p in SRCPIPE:
+        if _p is not None:
+            _p.set_state(Gst.State.NULL)
+    pipe.set_state(Gst.State.NULL)

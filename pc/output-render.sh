@@ -119,10 +119,10 @@ build_pipeline() {   # $1=layout  $2=active
       fi
       ;;
     side)
-      echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=270 sink_1::xpos=960 sink_1::ypos=270 ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! glupload ! glcolorscale ! \"video/x-raw(memory:GLMemory),width=$WINW,height=$WINH\" ! glimagesink sync=true \
-        $(hevc_tile "$HEVC_GRP" "$HEVC_PORT" 960 540 hd) ! identity single-segment=true ! textoverlay text='Live TV' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_0 \
-        hd. ! audio/mpeg ! fakesink sync=false \
-        $(raw_video 960 540) ! textoverlay text='Pi raw 2110-20' valignment=top halignment=left xpad=14 ypad=10 font-desc='$F' shaded-background=true ! mix.sink_1" ;;
+      # source-selectable 2-up: two panes (slots 0/1 = left/right), seamless per-pane
+      # switching via intervideo (side-view.py reads the panel slots + rebuilds one pane).
+      echo "python3 \"$DIR/side-view.py\" \"${3:-hevc,raw}\" \"$SCREEN\""
+      ;;
     wall)
       # Python 2x2 wall: same one-pipeline topology as multi, but with a live tally border on the
       # on-air tile, per-tile audio meters and per-tile bitrate -- none of which a gst-launch string

@@ -19,7 +19,7 @@ relayed from the Pi grandmaster.
 
 Run in WSL:  python3 monitor-web.py    Open from iPad: http://<pc-wifi-ip>:8096
 """
-import http.server, socketserver, urllib.request, json, time
+import http.server, socketserver, urllib.request, json, time, os, subprocess, signal, glob
 from urllib.parse import urlparse, parse_qs
 import atoll_config as cfg
 
@@ -400,6 +400,70 @@ def _cc_state():
     try: tc = open(ANC_TC_FILE).read().strip()
     except Exception: pass
     return {"on": _cc_get(), "tc": tc}
+
+# ---- Record & Playback -------------------------------------------------------------------------
+_HERE = os.path.dirname(os.path.abspath(__file__))
+RECDIR = os.path.join(os.path.dirname((_RUN or "/home/david/atoll-run").rstrip("/")), "atoll-recordings")
+_IFACE = _c.get("ISLAND_IFACE", "eth1")
+_PC_IP = _c.get("ISLAND_PC_IP", "10.10.10.2")
+_TTL = _c.get("MCAST_TTL", "1")
+REC_SRCS = {  # recordable TS-over-UDP sources -> (label, group, port)
+    "hevc": ("Live TV", _c.get("HEVC_GRP"), _c.get("HEVC_PORT")),
+    "jxs":  ("Home videos", _c.get("HOME_GRP"), _c.get("HOME_PORT")),
+    "music": ("Music", _c.get("MUSIC_GRP"), _c.get("MUSIC_PORT")),
+}
+_REELS_G, _REELS_P = _c.get("REELS_GRP"), _c.get("REELS_PORT")   # playback shows on "Test Reels"
+_rec = {"proc": None, "src": None, "file": None, "t0": 0}
+_play = {"proc": None, "file": None, "loop": False}
+def _spawn(cmd):
+    return subprocess.Popen("exec " + cmd, shell=True, start_new_session=True,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def _kill(proc):
+    if not proc: return
+    try: os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except Exception:
+        try: proc.terminate()
+        except Exception: pass
+def _alive(d): return bool(d["proc"] and d["proc"].poll() is None)
+def _rec_status():
+    return {"recording": _alive(_rec), "src": _rec["src"] if _alive(_rec) else None,
+            "file": _rec["file"] if _alive(_rec) else None,
+            "secs": int(time.time() - _rec["t0"]) if _alive(_rec) else 0,
+            "playing": _alive(_play), "play_file": _play["file"] if _alive(_play) else None,
+            "loop": _play["loop"] if _alive(_play) else False}
+def _rec_start(src):
+    if _alive(_rec): return {"error": "already recording"}
+    if src not in REC_SRCS or not REC_SRCS[src][1]: return {"error": "bad src"}
+    _label, grp, port = REC_SRCS[src]
+    os.makedirs(RECDIR, exist_ok=True)
+    fn = time.strftime("%Y%m%d-%H%M%S") + f"_{src}.ts"
+    cmd = f'gst-launch-1.0 -q udpsrc address={grp} port={port} multicast-iface={_IFACE} buffer-size=8388608 ! filesink location="{os.path.join(RECDIR, fn)}"'
+    _rec.update(proc=_spawn(cmd), src=src, file=fn, t0=time.time())
+    return _rec_status()
+def _rec_stop():
+    _kill(_rec["proc"]); _rec.update(proc=None); return _rec_status()
+def _rec_list():
+    out = []
+    try:
+        for f in sorted(glob.glob(os.path.join(RECDIR, "*.ts")), reverse=True):
+            stt = os.stat(f); out.append({"name": os.path.basename(f), "mb": round(stt.st_size / 1e6, 1), "mtime": int(stt.st_mtime)})
+    except Exception: pass
+    return out
+def _play_start(fn, loop):
+    _kill(_play["proc"])
+    path = os.path.join(RECDIR, os.path.basename(fn or ""))
+    if not os.path.isfile(path): return {"error": "no such file"}
+    cmd = f'python3 "{os.path.join(_HERE, "playback-send.py")}" "{path}" {_REELS_G} {_REELS_P} {_PC_IP} {_TTL} {"loop" if loop else ""}'
+    _play.update(proc=_spawn(cmd), file=os.path.basename(fn), loop=bool(loop))
+    return _rec_status()
+def _play_stop():
+    _kill(_play["proc"]); _play.update(proc=None, file=None, loop=False); return _rec_status()
+def _rec_delete(fn):
+    b = os.path.basename(fn or "")
+    if _alive(_play) and _play["file"] == b: return {"error": "playing"}
+    try: os.remove(os.path.join(RECDIR, b))
+    except Exception as e: return {"error": str(e)}
+    return {"deleted": b}
 def _avsync_get():
     try: return int(open(AVSYNC_KNOB).read().strip())
     except Exception: return 30
@@ -576,6 +640,17 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #anc button{font-size:min(1.9vw,2.2vh);padding:.4em .7em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
  #anc button.on{background:#093;color:#000;border-color:#0f0;font-weight:bold}
  #anc #anctc{color:#6cba90;font-variant-numeric:tabular-nums;font-size:min(1.8vw,2.1vh)}
+ #recwrap{width:min(70vw,80vh);display:flex;flex-direction:column;gap:.6vh;align-items:center}
+ .recrow{display:flex;align-items:center;gap:.6vw;flex-wrap:wrap;justify-content:center}
+ .recrow button,#cliplist button,#playrow button{font-size:min(1.7vw,2vh);padding:.35em .7em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
+ #recstopb.on{background:#c22;color:#fff;border-color:#f55;font-weight:bold}
+ #recstat{color:#9c9;font-variant-numeric:tabular-nums}
+ #cliplist{display:flex;flex-direction:column;gap:.35vh;width:100%}
+ .clip{display:flex;align-items:center;gap:.5vw;font-size:min(1.5vw,1.8vh);color:#9c9;background:#0a1410;border:1px solid #12352a;border-radius:6px;padding:.3em .6em}
+ .clip .nm{flex:1;text-align:left;font-variant-numeric:tabular-nums}
+ .clip.playing{border-color:#0f0;color:#cfc}
+ #playrow{display:flex;align-items:center;gap:.6vw}
+ #playrow.hide{display:none}
  #avsync .avlbl{color:#6cba90;font-size:min(1.5vw,1.8vh);letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
  #avslider{flex:1;height:2.4vh}
  #avsync .avval{color:#9c9;font-size:min(1.7vw,2vh);min-width:5ch;text-align:right;font-variant-numeric:tabular-nums}
@@ -707,6 +782,20 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   </div>
   </section>
 
+  <section class="grp"><div class="grphdr">Record &amp; Playback</div>
+  <div id="recwrap">
+   <div class="recrow">
+    <span class="avlbl">Record</span>
+    <button onclick="recStart('hevc')">Live TV</button>
+    <button onclick="recStart('jxs')">Home</button>
+    <button onclick="recStart('music')">Music</button>
+    <button id="recstopb" onclick="recStop()">&#9632; Stop</button>
+    <span id="recstat" class="avval">idle</span>
+   </div>
+   <div id="cliplist"></div>
+   <div id="playrow"><span id="playstat" class="mut">&mdash;</span><button id="playstopb" onclick="playStop()">Stop playback</button></div>
+  </div>
+  </section>
   <section class="grp modegrp modehide" data-mode="switcher"><div class="grphdr">Production Switcher</div>
   <div id="switchwrap">
    <span id="sw-pgm" class="sw-pgm">PROGRAM &middot; &mdash;</span>
@@ -907,6 +996,34 @@ async function setPvw(src){ try{await fetch('/switcher/pvw?src='+encodeURICompon
 async function swTake(){ try{await fetch('/switcher/take',{cache:'no-store'});}catch(e){} setTimeout(loadSwitcher,200); }
 async function toggleSwTrans(){ const t=SW.trans==='cut'?'dissolve':'cut'; try{await fetch('/switcher/trans?type='+t+'&rate='+SW.rate,{cache:'no-store'});}catch(e){} setTimeout(loadSwitcher,200); }
 async function setLayout(m){ hlLayout(m); try{await fetch('/layout?mode='+m,{cache:'no-store'});}catch(e){} }
+function fmtDur(s){var m=Math.floor(s/60),x=s%60;return m+":"+(x<10?"0":"")+x;}
+async function recStart(src){ try{await fetch("/rec/start?src="+src,{cache:"no-store"});}catch(e){} recPoll(); }
+async function recStop(){ try{await fetch("/rec/stop",{cache:"no-store"});}catch(e){} recPoll(); }
+async function playStart(f,loop){ try{await fetch("/play/start?file="+encodeURIComponent(f)+"&loop="+(loop?1:0),{cache:"no-store"});}catch(e){} recPoll(); }
+async function playStop(){ try{await fetch("/play/stop",{cache:"no-store"});}catch(e){} recPoll(); }
+async function recDelete(f){ try{await fetch("/rec/delete?file="+encodeURIComponent(f),{cache:"no-store"});}catch(e){} recList(); }
+let _recPlaying=null;
+async function recPoll(){ try{const d=await(await fetch("/rec/status",{cache:"no-store"})).json();
+   const b=document.getElementById("recstopb"), st=document.getElementById("recstat");
+   if(d.recording){ b.classList.add("on"); st.textContent="\u25cf REC "+(d.src||"")+"  "+fmtDur(d.secs); }
+   else { b.classList.remove("on"); st.textContent="idle"; }
+   _recPlaying = d.playing ? d.play_file : null;
+   const pr=document.getElementById("playrow"), ps=document.getElementById("playstat");
+   if(d.playing){ pr.classList.remove("hide"); ps.textContent="\u25b6 Playing "+(d.play_file||"")+(d.loop?" (loop)":"")+" \u2192 Test Reels"; }
+   else { pr.classList.add("hide"); }
+   recRenderPlaying();
+  }catch(e){} }
+function recRenderPlaying(){ document.querySelectorAll("#cliplist .clip").forEach(function(c){ c.classList.toggle("playing", c.getAttribute("data-f")===_recPlaying); }); }
+async function recList(){ try{const a=await(await fetch("/rec/list",{cache:"no-store"})).json();
+   const box=document.getElementById("cliplist");
+   box.innerHTML = a.length? a.map(function(c){return '<div class="clip" data-f="'+esc(c.name)+'"><span class="nm">'+esc(c.name)+'  '+c.mb+' MB</span>'+
+     '<button onclick="playStart(\''+esc(c.name)+'\',false)">Play</button>'+
+     '<button onclick="playStart(\''+esc(c.name)+'\',true)">Loop</button>'+
+     '<button onclick="recDelete(\''+esc(c.name)+'\')">Del</button></div>';}).join('')
+     : '<span class="mut">no recordings yet</span>';
+   recRenderPlaying();
+  }catch(e){} }
+setInterval(recPoll, 1000); setInterval(recList, 4000); recPoll(); recList();
 let _ccOn=false;
 async function ccToggle(){ _ccOn=!_ccOn; try{await fetch("/cc/set?on="+(_ccOn?1:0),{cache:"no-store"});}catch(e){} ccRender(); }
 async function ccScte(){ try{await fetch("/cc/scte",{cache:"no-store"});}catch(e){} }
@@ -1273,6 +1390,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(json.dumps(_cc_scte()).encode())
         elif parsed.path == "/cc/state":
             self._send_json(json.dumps(_cc_state()).encode())
+        elif parsed.path == "/rec/start":
+            self._send_json(json.dumps(_rec_start(parse_qs(parsed.query).get("src",[""])[0])).encode())
+        elif parsed.path == "/rec/stop":
+            self._send_json(json.dumps(_rec_stop()).encode())
+        elif parsed.path == "/rec/status":
+            self._send_json(json.dumps(_rec_status()).encode())
+        elif parsed.path == "/rec/list":
+            self._send_json(json.dumps(_rec_list()).encode())
+        elif parsed.path == "/rec/delete":
+            self._send_json(json.dumps(_rec_delete(parse_qs(parsed.query).get("file",[""])[0])).encode())
+        elif parsed.path == "/play/start":
+            _q = parse_qs(parsed.query)
+            self._send_json(json.dumps(_play_start(_q.get("file",[""])[0], _q.get("loop",["0"])[0] in ("1","true","on"))).encode())
+        elif parsed.path == "/play/stop":
+            self._send_json(json.dumps(_play_stop()).encode())
         elif parsed.path == "/fec/state":
             self._send_json(fec_state())
         elif parsed.path == "/fec/set":

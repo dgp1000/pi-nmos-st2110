@@ -40,7 +40,10 @@ _start = time.time()
 
 def main():
     Gst.init(None)
-    tail = ("videoconvert ! autovideosink sync=false" if SINK == "display"
+    tail = ("videoconvert ! textoverlay text='JPEG XS - ST 2110-22 (RFC 9134 video/jxsv)' "
+            "valignment=top halignment=center font-desc='Sans Bold 22' shaded-background=true "
+            "! clockoverlay valignment=bottom halignment=right time-format='%H:%M:%S' "
+            "font-desc='Sans Bold 18' shaded-background=true ! videoconvert ! glimagesink sync=false" if SINK == "display"
             else "videoconvert ! video/x-raw ! appsink name=dec emit-signals=true sync=false max-buffers=4 drop=true")
     pipe = Gst.parse_launch(f"appsrc name=src is-live=true do-timestamp=false format=time ! {CAPS} ! svtjpegxsdec ! {tail}")
     src = pipe.get_by_name("src")

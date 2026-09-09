@@ -902,6 +902,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="lmulti" onclick="setLayout('multi')">Multiview</button>
    <button id="lprogram" onclick="setLayout('program')">&#127909; Program Out</button>
    <button id="lswitcher" onclick="setLayout('switcher')">&#127899; Switcher</button>
+   <button id="ljxs" onclick="setLayout('jxs')">JPEG XS 2110-22</button>
   </div>
   <div id="anc">
    <span class="avlbl">Ancillary &middot; ST 2110-40</span>
@@ -1101,7 +1102,7 @@ async function musicState(){
       const sh=document.getElementById('mshuf'); if(sh) sh.classList.toggle('on',!!d.shuffle);
   }catch(e){np.textContent='(offline)';}
 }
-const LAYBTN={single:'lsingle',side:'lside',multi:'lmulti',wall:'lwall',program:'lprogram',switcher:'lswitcher'};
+const LAYBTN={single:'lsingle',side:'lside',multi:'lmulti',wall:'lwall',program:'lprogram',switcher:'lswitcher',jxs:'ljxs'};
 async function loadProgramOut(){
   try{
     const d=await(await fetch("/programout/state",{cache:"no-store"})).json();
@@ -1429,7 +1430,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif parsed.path == "/layout":
             qs = parse_qs(parsed.query)
             mode = qs.get("mode", ["single"])[0]
-            if mode not in ("single", "side", "multi", "wall", "program", "switcher"):
+            if mode not in ("single", "side", "multi", "wall", "program", "switcher", "jxs"):
                 mode = "single"
             _output["layout"] = mode
             self._send_json(json.dumps({"layout": mode}).encode())

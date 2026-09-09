@@ -630,6 +630,8 @@ The rig carries JPEG XS two ways. The convenient way muxes the SVT-JPEG-XS codes
 
 `jxs-nmos.py` (`atoll-jxs-nmos`) advertises it in IS-04 with a BCP-006-01-clean manifest -- the Flow is `media_type=video/jxsv` with components, profile/level/sublevel and bit_rate; the SDP has `jxsv/90000`, the full RFC 9134 `fmtp`, the `b=AS` bandwidth and the PTP `ts-refclk`. Geometry and the codestream descriptors (profile Main422.10, level 2k-1, sublevel Sublev3bpp, 4:2:2 8-bit) live in `atoll.conf`, read by both sender and registrar so the manifest can never contradict the wire. Runs 1280x720 at 30 fps (~57 Mb/s), one CPU core on the 20-core box; `JXS_FPS`/`JXS_W`/`JXS_H`/`JXS_BPP` override for a heavier showcase.
 
+The panel has a **JPEG XS 2110-22** output mode: `output-render.sh` launches `jxs-rtp-recv.py` full-screen to decode the live `video/jxsv` in the rig UI -- the one renderer that is not a `gst-launch` pipeline, precisely because GStreamer cannot depay jxsv.
+
 ## 7. The renderers
 
 ### 7.1 `output-render.sh` — the loop

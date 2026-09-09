@@ -147,6 +147,11 @@ build_pipeline() {   # $1=layout  $2=active
       # audio, so output-render just launches it once (source changes + takes happen inside it).
       echo "python3 \"$DIR/switcher-view.py\" \"$SCREEN\""
       ;;
+    jxs)
+      # True ST 2110-22 JPEG XS (RFC 9134 video/jxsv): GStreamer has no depayloader, so the
+      # Python receiver reassembles the codestream and decodes it (svtjpegxsdec) full-screen.
+      echo "JXS_SINK=display python3 \"$DIR/jxs-rtp-recv.py\""
+      ;;
   esac
 }
 
@@ -219,7 +224,7 @@ while true; do
   # audio follower: single/program/switcher embed/manage their own audio. In SIDE the audio
   # follows the LEFT pane (slot 0 = program pane), so switching it switches the sound; the
   # right pane is silent video/preview. multi/wall follow the panel active source.
-  if [ "$layout" = "single" ] || [ "$layout" = "program" ] || [ "$layout" = "switcher" ]; then akey="";
+  if [ "$layout" = "single" ] || [ "$layout" = "program" ] || [ "$layout" = "switcher" ] || [ "$layout" = "jxs" ]; then akey="";
   elif [ "$layout" = "side" ]; then akey="${slots%%,*}";
   else akey="$active"; fi
   adelay="$(cat "$ADELAY_FILE" 2>/dev/null)"; [[ "$adelay" =~ ^[0-9]+$ ]] || adelay=0

@@ -330,12 +330,16 @@ GLib.timeout_add_seconds(1, apply_sps)
 # ---- overlay ----
 LABELS = ["L", "R", "C", "LFE", "Ls", "Rs", "7", "8"]
 def _draw_caption(ctx, text, w, h):
+    """Standout closed-caption band: a centred rounded near-opaque box with a bright yellow border
+    and bold bright-yellow text, lower third. Returns (y0, height) so double-buffered renderers can
+    blit exactly that region."""
     if not text:
-        return
+        return None
+    import math
     ctx.save()
     ctx.select_font_face("sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-    fs = max(22, int(h * 0.032)); ctx.set_font_size(fs)
-    maxw = w * 0.9; lines = []; cur = ""
+    fs = max(26, int(h * 0.044)); ctx.set_font_size(fs)
+    maxw = w * 0.86; lines = []; cur = ""
     for wd in text.split():
         t = (cur + " " + wd).strip()
         if cur and ctx.text_extents(t).width > maxw:
@@ -344,15 +348,26 @@ def _draw_caption(ctx, text, w, h):
             cur = t
     if cur:
         lines.append(cur)
-    lh = fs * 1.35; pad = fs * 0.6; bh = lh * len(lines) + pad * 2
-    y0 = h - bh - int(h * 0.03)
-    ctx.set_source_rgba(0, 0, 0, 0.75); ctx.rectangle(0, y0, w, bh); ctx.fill()
-    ctx.set_source_rgba(1, 1, 1, 0.98)
+    lh = fs * 1.35; padx = fs * 0.95; pady = fs * 0.5
+    tw = max((ctx.text_extents(ln).width for ln in lines), default=0)
+    bw = min(w - 8, tw + padx * 2); bh = lh * len(lines) + pady * 2
+    x0 = (w - bw) / 2.0; y0 = h - bh - int(h * 0.05)
+    r = fs * 0.35
+    ctx.new_sub_path()
+    ctx.arc(x0 + bw - r, y0 + r, r, -math.pi / 2, 0)
+    ctx.arc(x0 + bw - r, y0 + bh - r, r, 0, math.pi / 2)
+    ctx.arc(x0 + r, y0 + bh - r, r, math.pi / 2, math.pi)
+    ctx.arc(x0 + r, y0 + r, r, math.pi, 3 * math.pi / 2)
+    ctx.close_path()
+    ctx.set_source_rgba(0, 0, 0, 0.92); ctx.fill_preserve()               # opaque black box
+    ctx.set_source_rgba(1.0, 0.83, 0.0, 0.95); ctx.set_line_width(max(2.0, fs * 0.07)); ctx.stroke()  # yellow border
     for i, ln in enumerate(lines):
-        tw = ctx.text_extents(ln).width
-        ctx.move_to((w - tw) / 2, y0 + pad + lh * (i + 1) - fs * 0.35); ctx.show_text(ln)
+        lw = ctx.text_extents(ln).width
+        bx = (w - lw) / 2.0; by = y0 + pady + lh * (i + 1) - fs * 0.35
+        ctx.set_source_rgba(0, 0, 0, 0.85); ctx.move_to(bx + max(1.5, fs * 0.04), by + max(1.5, fs * 0.04)); ctx.show_text(ln)  # drop shadow
+        ctx.set_source_rgba(1.0, 0.93, 0.20, 1.0); ctx.move_to(bx, by); ctx.show_text(ln)             # bright yellow text
     ctx.restore()
-
+    return (int(y0) - 2, int(bh) + 4)
 def on_draw(_ov, ctx, _ts, _dur):
     src = st["src"]
     h = st["h"]

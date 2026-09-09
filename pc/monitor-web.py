@@ -1059,11 +1059,10 @@ async function recPoll(){ try{const d=await(await fetch("/rec/status",{cache:"no
 function recRenderPlaying(){ document.querySelectorAll("#cliplist .clip").forEach(function(c){ c.classList.toggle("playing", c.getAttribute("data-f")===_recPlaying); }); }
 async function recList(){ try{const a=await(await fetch("/rec/list",{cache:"no-store"})).json();
    const box=document.getElementById("cliplist");
-   box.innerHTML = a.length? a.map(function(c){return '<div class="clip" data-f="'+esc(c.name)+'"><span class="nm">'+esc(c.name)+'  '+c.mb+' MB</span>'+
-     '<button onclick="playStart(\''+esc(c.name)+'\',false)">Play</button>'+
-     '<button onclick="playStart(\''+esc(c.name)+'\',true)">Loop</button>'+
-     '<button onclick="recDelete(\''+esc(c.name)+'\')">Del</button></div>';}).join('')
-     : '<span class="mut">no recordings yet</span>';
+   box.innerHTML = a.length? a.map(function(c){var n=esc(c.name);return '<div class="clip" data-f="'+n+'"><span class="nm">'+n+'  '+c.mb+' MB</span><button class="rpl" data-f="'+n+'">Play</button><button class="rlp" data-f="'+n+'">Loop</button><button class="rdl" data-f="'+n+'">Del</button></div>';}).join('') : '<span class="mut">no recordings yet</span>';
+   box.querySelectorAll(".rpl").forEach(function(b){b.onclick=function(){playStart(b.getAttribute("data-f"),false);};});
+   box.querySelectorAll(".rlp").forEach(function(b){b.onclick=function(){playStart(b.getAttribute("data-f"),true);};});
+   box.querySelectorAll(".rdl").forEach(function(b){b.onclick=function(){recDelete(b.getAttribute("data-f"));};});
    recRenderPlaying();
   }catch(e){} }
 setInterval(recPoll, 1000); setInterval(recList, 4000); recPoll(); recList();
@@ -1087,7 +1086,7 @@ async function refreshState(){
         if(sl && document.activeElement!==sl){ sl.value=d.video_delay; document.getElementById('avval').textContent=d.video_delay+' ms'; } } }catch(e){}
 }
 setInterval(ccPoll, 1000); ccPoll();
-const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
 const dot=b=>b?'<span class="on-dot">&#9679;</span>':'<span class="off-dot">&#9675;</span>';
 const sid=id=>id?esc(String(id).slice(0,8)):'<span class="mut">none</span>';
 function fmtFlow(f){

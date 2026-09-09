@@ -18,7 +18,7 @@ persistent audio pipeline runs both through `volume` elements into an audiomixer
 animates those volumes -- so a DISSOLVE crossfades the sound with the picture and a CUT switches
 it instantly. No audio subprocess.
 """
-import gi, os, sys, subprocess, time, signal
+import gi, os, sys, subprocess, time, signal, math
 gi.require_version("Gst", "1.0")
 from gi.repository import Gst, GLib
 import cairo
@@ -249,8 +249,9 @@ class Switcher:
                 state["i"] += 1
                 frac = min(1.0, state["i"] / steps)
                 self.pads[inc].set_property("alpha", frac)      # video crossfade
-                if vol_in:  vol_in.set_property("volume", frac)         # audio crossfade, in step
-                if vol_out: vol_out.set_property("volume", 1.0 - frac)
+                _g = frac * math.pi / 2.0                              # equal-power law: constant loudness
+                if vol_in:  vol_in.set_property("volume", math.sin(_g))   # incoming rises on a sine
+                if vol_out: vol_out.set_property("volume", math.cos(_g))  # outgoing falls on a cosine (no -3 dB dip)
                 if state["i"] >= steps:
                     self.pgm = newpgm; self.apply_bus(); self._anim = None
                     return False

@@ -132,7 +132,11 @@ build_pipeline() {   # $1=layout  $2=active
     multi)
       # $3 = slots "tl,tr,bl,br" (any source -> any of the four 960x540 quadrants).
       IFS=',' read -r m0 m1 m2 m3 <<< "${3:-hevc,raw,jxs,music}"
-      echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=960 sink_1::ypos=0 sink_2::xpos=0 sink_2::ypos=540 sink_3::xpos=960 sink_3::ypos=540 ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! glupload ! glcolorscale ! \"video/x-raw(memory:GLMemory),width=$WINW,height=$WINH\" ! glimagesink sync=true \
+      # A/V sync: bake the current video-delay-ms into the mosaic sink as ts-offset (ns), so multi
+      # holds video back to meet late audio like every other renderer. gst-launch has no live
+      # control handle, so a changed value applies on the next (re)launch of this layout.
+      local _vd; _vd="$(cat "$ATOLL_RUN/video-delay-ms" 2>/dev/null)"; [[ "$_vd" =~ ^-?[0-9]+$ ]] || _vd=30
+      echo "gst-launch-1.0 -e compositor name=mix ignore-inactive-pads=true background=black sink_0::xpos=0 sink_0::ypos=0 sink_1::xpos=960 sink_1::ypos=0 sink_2::xpos=0 sink_2::ypos=540 sink_3::xpos=960 sink_3::ypos=540 ! video/x-raw,width=1920,height=1080 ! videoconvert ! $BRAND ! glupload ! glcolorscale ! \"video/x-raw(memory:GLMemory),width=$WINW,height=$WINH\" ! glimagesink sync=true ts-offset=$((_vd*1000000)) \
         $(tile_full "$m0" 0 960 540) \
         $(tile_full "$m1" 1 960 540) \
         $(tile_full "$m2" 2 960 540) \

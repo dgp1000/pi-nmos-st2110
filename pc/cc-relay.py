@@ -30,7 +30,7 @@ def _read(p, d=""):
     except Exception: return d
 def _live(): return _read(CC_SOURCE) == "live"
 def _delay():
-    try: return max(0.0, min(20.0, float(_read(CAPTION_DELAY, "0")) / 1000.0))
+    try: return max(0.0, min(20.0, float(_read(CAPTION_DELAY, "7000")) / 1000.0))
     except Exception: return 0.0
 def _write(t):
     try:

@@ -395,7 +395,7 @@ def _cc_source_set(mode):
 CAPTION_DELAY_KNOB = _RUN + "/caption-delay-ms"   # shift captions LATER to match the delayed video
 def _cc_delay_get():
     try: return int(open(CAPTION_DELAY_KNOB).read().strip())
-    except Exception: return 0
+    except Exception: return 7000
 def _cc_delay_set(ms):
     try: ms = max(0, min(15000, int(float(ms))))
     except Exception: return {"ms": _cc_delay_get()}
@@ -849,8 +849,8 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   </div>
   <div id="ccdelay">
    <span class="avlbl">Caption delay</span>
-   <input type="range" id="ccdelsl" min="0" max="15000" step="250" value="0" oninput="ccDelayInput(this.value)">
-   <span id="ccdelval" class="avval">0.0 s</span>
+   <input type="range" id="ccdelsl" min="0" max="15000" step="250" value="7000" oninput="ccDelayInput(this.value)">
+   <span id="ccdelval" class="avval">7.0 s</span>
   </div>
   <div id="avsync">
    <span class="avlbl">A/V sync</span>

@@ -150,7 +150,7 @@ build_pipeline() {   # $1=layout  $2=active
     jxs)
       # True ST 2110-22 JPEG XS (RFC 9134 video/jxsv): GStreamer has no depayloader, so the
       # Python receiver reassembles the codestream and decodes it (svtjpegxsdec) full-screen.
-      echo "JXS_SINK=display python3 \"$DIR/jxs-rtp-recv.py\""
+      echo "JXS_SINK=display JXS_WINW=$WINW JXS_WINH=$WINH python3 \"$DIR/jxs-rtp-recv.py\""
       ;;
   esac
 }

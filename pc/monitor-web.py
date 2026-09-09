@@ -392,6 +392,17 @@ def _cc_source_set(mode):
         with open(CC_SOURCE_KNOB,"w") as f: f.write(m)
     except OSError: pass
     return {"source": m}
+CAPTION_DELAY_KNOB = _RUN + "/caption-delay-ms"   # shift captions LATER to match the delayed video
+def _cc_delay_get():
+    try: return int(open(CAPTION_DELAY_KNOB).read().strip())
+    except Exception: return 0
+def _cc_delay_set(ms):
+    try: ms = max(0, min(15000, int(float(ms))))
+    except Exception: return {"ms": _cc_delay_get()}
+    try:
+        with open(CAPTION_DELAY_KNOB,"w") as f: f.write(str(ms))
+    except OSError: pass
+    return {"ms": ms}
 def _cc_get():
     try: return open(CC_ENABLE_KNOB).read().strip() in ("1","true","on")
     except Exception: return False
@@ -409,7 +420,7 @@ def _cc_state():
     tc = ""
     try: tc = open(ANC_TC_FILE).read().strip()
     except Exception: pass
-    return {"on": _cc_get(), "tc": tc, "source": _cc_source()}
+    return {"on": _cc_get(), "tc": tc, "source": _cc_source(), "delay": _cc_delay_get()}
 
 # ---- Record & Playback -------------------------------------------------------------------------
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -710,6 +721,10 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #avsync .avlbl{color:#6cba90;font-size:min(1.5vw,1.8vh);letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
  #avslider{flex:1;height:2.4vh}
  #avsync .avval{color:#9c9;font-size:min(1.7vw,2vh);min-width:5ch;text-align:right;font-variant-numeric:tabular-nums}
+ #ccdelay{display:flex;align-items:center;gap:.7vw;margin-top:.6vh;width:min(60vw,70vh)}
+ #ccdelay .avlbl{color:#6cba90;font-size:min(1.5vw,1.8vh);letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
+ #ccdelsl{flex:1;height:2.4vh}
+ #ccdelay .avval{color:#9c9;font-size:min(1.7vw,2vh);min-width:5ch;text-align:right;font-variant-numeric:tabular-nums}
  #progwrap{margin-top:.6vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
  #progbtns{display:flex;flex-wrap:wrap;justify-content:center;margin-left:.6vw}
  #progbtns button{font-size:min(2vw,2.3vh);padding:.35em .7em;margin:.3vh .3vw;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
@@ -831,6 +846,11 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <button id="ccsrcbtn" onclick="ccSource()">src: synthetic</button>
    <button id="scbtn" onclick="ccScte()">Trigger AD break</button>
    <span id="anctc" class="avval">--:--:--:--</span>
+  </div>
+  <div id="ccdelay">
+   <span class="avlbl">Caption delay</span>
+   <input type="range" id="ccdelsl" min="0" max="15000" step="250" value="0" oninput="ccDelayInput(this.value)">
+   <span id="ccdelval" class="avval">0.0 s</span>
   </div>
   <div id="avsync">
    <span class="avlbl">A/V sync</span>
@@ -1083,9 +1103,11 @@ async function ccScte(){ try{await fetch("/cc/scte",{cache:"no-store"});}catch(e
 let _ccSrc="synthetic";
 async function ccSource(){ _ccSrc = (_ccSrc==="live")?"synthetic":"live"; try{await fetch("/cc/source?mode="+_ccSrc,{cache:"no-store"});}catch(e){} ccRenderSrc(); }
 function ccRenderSrc(){ const b=document.getElementById("ccsrcbtn"); if(b){ b.textContent="src: "+_ccSrc; b.classList.toggle("on",_ccSrc==="live"); } }
+let _ccDelT=null;
+function ccDelayInput(v){ document.getElementById("ccdelval").textContent=(v/1000).toFixed(1)+" s"; if(_ccDelT)clearTimeout(_ccDelT); _ccDelT=setTimeout(function(){ fetch("/cc/delay?ms="+v,{cache:"no-store"}).catch(function(){}); },150); }
 function ccRender(){ const b=document.getElementById("ccbtn"); if(b){ b.textContent="CC: "+(_ccOn?"on":"off"); b.classList.toggle("on",_ccOn);} }
 async function ccPoll(){ try{const d=await(await fetch("/cc/state",{cache:"no-store"})).json();
-  _ccOn=!!d.on; ccRender(); if(d.source){_ccSrc=d.source; ccRenderSrc();} const t=document.getElementById("anctc"); if(t&&d.tc) t.textContent=d.tc; }catch(e){} }
+  _ccOn=!!d.on; ccRender(); if(d.source){_ccSrc=d.source; ccRenderSrc();} if(d.delay!==undefined){const sl=document.getElementById("ccdelsl"); if(sl&&document.activeElement!==sl){sl.value=d.delay; document.getElementById("ccdelval").textContent=(d.delay/1000).toFixed(1)+" s";}} const t=document.getElementById("anctc"); if(t&&d.tc) t.textContent=d.tc; }catch(e){} }
 let _avT=null;
 function avsyncInput(v){
   document.getElementById('avval').textContent = v + ' ms';
@@ -1446,6 +1468,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(json.dumps(_cc_scte()).encode())
         elif parsed.path == "/cc/source":
             self._send_json(json.dumps(_cc_source_set(parse_qs(parsed.query).get("mode",[""])[0])).encode())
+        elif parsed.path == "/cc/delay":
+            self._send_json(json.dumps(_cc_delay_set(parse_qs(parsed.query).get("ms",["0"])[0])).encode())
         elif parsed.path == "/cc/state":
             self._send_json(json.dumps(_cc_state()).encode())
         elif parsed.path == "/rec/start":

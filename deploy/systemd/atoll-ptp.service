@@ -1,0 +1,13 @@
+[Unit]
+Description=Atoll PC PTP discipline (slave the WSL clock to the island grandmaster)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env bash /home/david/pi-nmos-st2110/pc/pc-ptp.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

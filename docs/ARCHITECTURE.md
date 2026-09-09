@@ -156,7 +156,7 @@ island address (a controller on WiFi could never reach `10.10.10.2`).
 The island's ceiling is **packet rate**, not bandwidth: WSL mirrored networking limits multicast
 *receive* to roughly 12–15k packets/s across all groups. That single fact explains most of the
 design choices below (720p everywhere, `mpegtsmux alignment=7` on every TS sender, the Pi staying
-at 320x240, JPEG XS running as a local encode→decode rather than a network flow).
+at 320x240). JPEG XS now also runs as a **true ST 2110-22 network flow** (RFC 9134 `video/jxsv`, see §6); the older local encode→decode viewer (`jxs-web.py`) stays as a codec proof.
 
 ---
 
@@ -176,6 +176,7 @@ WSL boots (WSL itself does not start with Windows). `~/atoll-run` is `ATOLL_RUN`
 | Music NMOS source | `pc/music-nmos.py` | `atoll-music-nmos` | `:8093` | Registers the music channel as an IS-04 node with two senders — video (HEVC) and ST 2110-30 L24 audio — and serves an SDP per sender, so music is discoverable in the inspector and routable via Program Out. Also serves the **sender-side IS-05 v1.1 Connection API** for both senders — a controller can re-point where each sender transmits (multicast destination) live; the pipeline moves and the SDP/registry update. Heartbeats like the other registrars. |
 | Audio channel map (IS-08) | `pc/audiomap-nmos.py` | `atoll-audiomap` | `:8094` | Serves the AMWA IS-08 v1.0 Channel Mapping API for the music audio (node/device with a `cm-ctrl` control). A controller maps the output's channels to the input's (stereo / swap / mono / mute); on activation it writes `~/atoll-run/audiomap` and restarts the audio mapper. Immediate + scheduled activation. |
 | Pi ST 2110 NMOS | `pc/pi-nmos.py` | `atoll-pi-nmos` | `:8095` | Registers the Pi's real ST 2110-20 raw video and -30 L24 audio as an IS-04 node (`atoll-pi`) with two senders, serving a standards-complete SDP each (ST 2110-20/-21 fmtp, `mediaclk`, `ts-refclk` with the grandmaster id). Makes the Pi flows discoverable + routable. |
+| JPEG XS NMOS | `pc/jxs-nmos.py` | `atoll-jxs-nmos` | `:8097` | Registers the true ST 2110-22 JPEG XS sender (**BCP-006-01**) as an IS-04 node/flow/sender and serves its manifest. The SDP is the point: `a=rtpmap jxsv/90000` + the RFC 9134 `a=fmtp` (packetmode, transmode, profile/level/sublevel, sampling, depth, width, height, exactframerate, colorimetry, TCS), the `b=AS` bandwidth and `ts-refclk`/`mediaclk`; the Flow carries `media_type=video/jxsv` with components + profile/level/sublevel + bit_rate. Geometry shared with the sender via `atoll.conf` so the manifest can't drift from the wire. |
 | Loudness meter | `pc/loudness.py` (+ `pc/bs1770.py`) | `atoll-loudness` | `:8104` | EBU R128 / ITU-R BS.1770-4 loudness on the **program** audio (follows the active source / Program Out). Momentary / Short-term / gated Integrated LUFS + Loudness Range (LRA) + true peak (dBTP), with an EBU R128 in-spec check (−23 LUFS ±1 LU, true peak ≤ −1 dBTP). numpy-only K-weighting (FIR of the BS.1770 biquads). Serves JSON + a broadcast readout; the analyser header shows it too. |
 | Flow analyser | `pc/analyser.py` | `atoll-analyser` | `:8101` | Raw-socket join of every group: pps, bitrate, average datagram, RTP pt/SSRC/loss. IS-07 receiver (tally column + event log). |
 | NMOS registry | `deploy/nmos/docker-compose.yml` → `nmos-registry` | docker | `:8080` HTTP, `:8081` ws, `:1883` MQTT | nmos-cpp IS-04 Registration + Query API, and the IS-09 System API (`/x-nmos/system/v1.0/global`) the Atoll nodes discover. |
@@ -197,6 +198,8 @@ WSL boots (WSL itself does not start with Windows). `~/atoll-run` is `ATOLL_RUN`
 | *(ancillary)* | `atoll-anc` | `pc/anc-send.py` | ATC timecode + CEA-708 captions + SCTE-104, multiplexed ST 291 packets | ST 2110-40 RTP (RFC 8331), pt 100 | `239.10.10.50:5020` |
 | *(ancillary rx)* | `atoll-anc-recv` | `pc/anc-recv.py` | extracts timecode/captions/SCTE from the ANC flow; renders captions + AD-break on Program Out (gated by `cc-enable`) | receives `239.10.10.50:5020` | — |
 | `j2k` | `atoll-j2k` | `pc/j2k-send.sh` | `avenc_jpeg2000` | J2K RTP (RFC 5371) | `239.10.10.70:5016` |
+| `jxsv` | `atoll-jxs-rtp` | `pc/jxs-rtp-send.py` | `svtjpegxsenc` -> hand-built RFC 9134 payloader | **JPEG XS RTP (RFC 9134 `video/jxsv`), pt 112** | `239.10.10.61:5032` |
+| *(jxsv rx)* | *(on demand)* | `pc/jxs-rtp-recv.py` | Python RFC 9134 depay -> `svtjpegxsdec` | receives `239.10.10.61:5032` | -- |
 | `h264` | `atoll-h264` | `pc/h264-send.sh` | NVENC H.264 4 Mb/s | RTP (RFC 6184), pt 96 | `239.10.10.75:5018` |
 | *(audio for `h264`)* | `atoll-opus` | `pc/opus-send.sh` | Opus 96 kb/s | RTP (RFC 7587), pt 97 | `239.10.10.80:5022` |
 | `mjpeg` | `atoll-mjpeg` | `pc/mjpeg-send.sh` | `jpegenc quality=60` | RTP (RFC 2435) | `239.10.10.85:5024` |
@@ -204,7 +207,7 @@ WSL boots (WSL itself does not start with Windows). `~/atoll-run` is `ATOLL_RUN`
 | `tsrtp` | `atoll-tsrtp` | `pc/tsrtp-send.sh` | x264 CPU + AAC | MPEG-TS over RTP (ST 2022-2), pt 33 | `239.10.10.95:5028` |
 | `fec` | `atoll-fec` | `pc/fec-send.sh` | x264 all-intra + AAC | TS/RTP + ST 2022-1 column/row FEC | `239.10.10.100:5040 / 5042 / 5044` |
 | `sps` | `atoll-sps` | `pc/sps-send.sh` | x264 + AAC, one encoder | TS/RTP duplicated after payloader (ST 2022-7) | A `239.10.10.105:5046`, B `239.10.10.106:5048` |
-| `jpegxs` | `atoll-jxs-web` (viewer only) | `pc/jxs-web.py` | SVT JPEG XS local enc→dec | none — MJPEG to browser `:8100` | *(island sender `atoll-jxs` is disabled)* |
+| `jpegxs` | `atoll-jxs-web` (viewer only) | `pc/jxs-web.py` | SVT JPEG XS local enc→dec | none — MJPEG to browser `:8100` | *(codec proof; the real 2110-22 flow is `jxsv` above)* |
 
 Disabled on purpose, still in the repo: `atoll-hevc` (Big Buck Bunny clip on 5010, replaced by
 Live TV), `atoll-jxs` (JPEG XS over TS at ~100 Mb/s, exceeds the WSL ceiling), `atoll-music-ph`
@@ -620,6 +623,12 @@ two senders (video + L24 audio) with an SDP each — so it is discoverable in th
 routable via Program Out. `tv-send-inputselect.py` is section 5.4. The Mac Now-Playing host is reached at `MAC_MUSIC_HOST:8008` (`pc/atoll.conf`), a **hardcoded IP that drifts** with DHCP (it moved 192.168.6.159 → 192.168.4.51 mid-run, the same drift that moves the HDHomeRun); `.local`/mDNS does not resolve from WSL, so a **DHCP reservation** for the Mac mini (and the HDHomeRun) on the router is the durable fix — otherwise, when the Music tile shows "connecting", update `MAC_MUSIC_HOST` and restart `atoll-music`.
 
 ---
+
+### 6.x  JPEG XS as true ST 2110-22 (RFC 9134 / BCP-006-01)
+
+The rig carries JPEG XS two ways. The convenient way muxes the SVT-JPEG-XS codestream into MPEG-TS (`jxs-send.sh`) -- easy, but not ST 2110-22. The conformant way (`jxs-rtp-send.py`, `atoll-jxs-rtp`) carries the codestream **directly in RTP** with the RFC 9134 payload format, so it is a real `video/jxsv` essence. As with the ancillary sender, GStreamer has the codec (`svtjpegxsenc`, `image/x-jxsc`) but no RFC 9134 payloader, so it is hand-built: an `appsink` hands each whole codestream to Python, which fragments it in **codestream packetization mode** (K=0) into RTP packets carrying the 32-bit payload header (T sequential, K codestream, L last-of-frame, I progressive, F frame counter, P packet counter), marker bit on the frame's last packet, 90 kHz timestamp shared across the frame. `jxs-rtp-recv.py` is the matching hand-built depayloader (reassemble on the marker -> `svtjpegxsdec`), which proves the stream is standards-decodable end to end (verified: 1280x720 4:2:2 frames, JPEG XS SOC `0xff10` intact).
+
+`jxs-nmos.py` (`atoll-jxs-nmos`) advertises it in IS-04 with a BCP-006-01-clean manifest -- the Flow is `media_type=video/jxsv` with components, profile/level/sublevel and bit_rate; the SDP has `jxsv/90000`, the full RFC 9134 `fmtp`, the `b=AS` bandwidth and the PTP `ts-refclk`. Geometry and the codestream descriptors (profile Main422.10, level 2k-1, sublevel Sublev3bpp, 4:2:2 8-bit) live in `atoll.conf`, read by both sender and registrar so the manifest can never contradict the wire. Runs 1280x720 at 30 fps (~57 Mb/s), one CPU core on the 20-core box; `JXS_FPS`/`JXS_W`/`JXS_H`/`JXS_BPP` override for a heavier showcase.
 
 ## 7. The renderers
 

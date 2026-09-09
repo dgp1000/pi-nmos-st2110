@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Atoll JPEG XS source: encode a live source to JPEG XS (image/x-jxsc, the ST 2110-22 codec via
 # SVT-JPEG-XS) and multicast it on the island as MPEG-TS. The multiview/jxs-web decode it with
-# svtjpegxsdec. This is JPEG-XS-over-TS (gst-native); true ST 2110-22 is the same codec over an
-# RFC 9134 RTP payloader (future). Source is a moving test pattern; swap for any video source.
+# svtjpegxsdec. This is JPEG-XS-over-TS (gst-native). The TRUE ST 2110-22 path is the same codec over an
+# RFC 9134 RTP payloader -- now implemented in jxs-rtp-send.py (video/jxsv) + jxs-nmos.py (SDP/IS-04).
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$DIR/atoll.conf"        # ISLAND_IFACE, JPEGXS_*, MCAST_TTL

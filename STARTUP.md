@@ -332,3 +332,22 @@ still selectable — put it in `single`/`side`, not the default wall.
   `curl -X PATCH -H 'Content-Type: application/json' -d '{"master_enable":true,"transport_params":[{"destination_ip":"239.10.10.42","destination_port":5099}],"activation":{"mode":"activate_immediate"}}' :8093/x-nmos/connection/v1.1/single/senders/<audio-id>/staged`
   The audiomapper restarts onto the new group within ~2 s and the `transportfile` SDP updates; PATCH back to `239.10.10.32:5013` to revert. The knobs `~/atoll-run/music-{audio,video}-transport` hold the active destination (absent = default group).
 - **BCP-004-01 receiver caps** on Program Out: `curl :8080/x-nmos/query/v1.3/receivers/<progout-id>` → `caps.constraint_sets` lists the media types it accepts.
+
+### Real closed-caption relay (CCExtractor) — rebuild recipe
+`cc-relay.py` (service `atoll-cc-relay`) needs `ccextractor` at `/usr/local/bin`. It is built from
+source (Ubuntu 25 no longer packages GPAC, which CCExtractor requires). To rebuild on a fresh box:
+```
+sudo apt-get install -y cargo libfreetype-dev libutf8proc-dev zlib1g-dev libpng-dev \
+                        tesseract-ocr libtesseract-dev libleptonica-dev libcurl4-openssl-dev
+# GPAC from source -> /usr/local (provides libgpac + gpac.pc)
+git clone --depth 1 https://github.com/gpac/gpac.git /tmp/gpac
+cd /tmp/gpac && ./configure && make -j$(nproc) && sudo make install && sudo ldconfig
+# CCExtractor (system-libs build uses the pkg-config gpac we just installed)
+git clone --depth 1 https://github.com/CCExtractor/ccextractor.git /tmp/ccextractor
+cd /tmp/ccextractor/linux && ./build -system-libs
+sudo cp ccextractor /usr/local/bin/ccextractor
+```
+Use it: panel Ancillary row → **src: live** (writes `~/atoll-run/cc-source=live`) + **CC: on**.
+cc-relay taps the HDHomeRun tuner for the current channel (the island feed is re-encoded and has no
+CC), extracts captions, and feeds `cc-input` -> ST 2110-40 -> Program Out. Not every channel is
+captioned; known-good: 8.1 (ABC), 24.1 (PBS). Default is `synthetic` (no tuner load).

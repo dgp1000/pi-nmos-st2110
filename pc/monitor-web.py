@@ -382,6 +382,16 @@ AVSYNC_KNOB = _RUN + "/video-delay-ms"   # A/V sync: +ms holds video back to mee
 CC_ENABLE_KNOB = _RUN + "/cc-enable"     # ST 2110-40 captions on/off (anc-recv renders them)
 ANC_SCTE_KNOB  = _RUN + "/anc-scte"      # touch -> anc-send emits an SCTE-104 splice (AD break)
 ANC_TC_FILE    = _RUN + "/anc-tc"        # anc-recv writes the received ATC timecode here
+CC_SOURCE_KNOB = _RUN + "/cc-source"     # "live" (real broadcast CC via cc-relay) or "synthetic"
+def _cc_source():
+    try: return "live" if open(CC_SOURCE_KNOB).read().strip()=="live" else "synthetic"
+    except Exception: return "synthetic"
+def _cc_source_set(mode):
+    m = "live" if mode=="live" else "synthetic"
+    try:
+        with open(CC_SOURCE_KNOB,"w") as f: f.write(m)
+    except OSError: pass
+    return {"source": m}
 def _cc_get():
     try: return open(CC_ENABLE_KNOB).read().strip() in ("1","true","on")
     except Exception: return False
@@ -399,7 +409,7 @@ def _cc_state():
     tc = ""
     try: tc = open(ANC_TC_FILE).read().strip()
     except Exception: pass
-    return {"on": _cc_get(), "tc": tc}
+    return {"on": _cc_get(), "tc": tc, "source": _cc_source()}
 
 # ---- Record & Playback -------------------------------------------------------------------------
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -818,6 +828,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   <div id="anc">
    <span class="avlbl">Ancillary &middot; ST 2110-40</span>
    <button id="ccbtn" onclick="ccToggle()">CC: off</button>
+   <button id="ccsrcbtn" onclick="ccSource()">src: synthetic</button>
    <button id="scbtn" onclick="ccScte()">Trigger AD break</button>
    <span id="anctc" class="avval">--:--:--:--</span>
   </div>
@@ -1069,9 +1080,12 @@ setInterval(recPoll, 1000); setInterval(recList, 4000); recPoll(); recList();
 let _ccOn=false;
 async function ccToggle(){ _ccOn=!_ccOn; try{await fetch("/cc/set?on="+(_ccOn?1:0),{cache:"no-store"});}catch(e){} ccRender(); }
 async function ccScte(){ try{await fetch("/cc/scte",{cache:"no-store"});}catch(e){} }
+let _ccSrc="synthetic";
+async function ccSource(){ _ccSrc = (_ccSrc==="live")?"synthetic":"live"; try{await fetch("/cc/source?mode="+_ccSrc,{cache:"no-store"});}catch(e){} ccRenderSrc(); }
+function ccRenderSrc(){ const b=document.getElementById("ccsrcbtn"); if(b){ b.textContent="src: "+_ccSrc; b.classList.toggle("on",_ccSrc==="live"); } }
 function ccRender(){ const b=document.getElementById("ccbtn"); if(b){ b.textContent="CC: "+(_ccOn?"on":"off"); b.classList.toggle("on",_ccOn);} }
 async function ccPoll(){ try{const d=await(await fetch("/cc/state",{cache:"no-store"})).json();
-  _ccOn=!!d.on; ccRender(); const t=document.getElementById("anctc"); if(t&&d.tc) t.textContent=d.tc; }catch(e){} }
+  _ccOn=!!d.on; ccRender(); if(d.source){_ccSrc=d.source; ccRenderSrc();} const t=document.getElementById("anctc"); if(t&&d.tc) t.textContent=d.tc; }catch(e){} }
 let _avT=null;
 function avsyncInput(v){
   document.getElementById('avval').textContent = v + ' ms';
@@ -1430,6 +1444,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(json.dumps(_cc_set(_q.get("on", ["0"])[0] in ("1","true","on"))).encode())
         elif parsed.path == "/cc/scte":
             self._send_json(json.dumps(_cc_scte()).encode())
+        elif parsed.path == "/cc/source":
+            self._send_json(json.dumps(_cc_source_set(parse_qs(parsed.query).get("mode",[""])[0])).encode())
         elif parsed.path == "/cc/state":
             self._send_json(json.dumps(_cc_state()).encode())
         elif parsed.path == "/rec/start":

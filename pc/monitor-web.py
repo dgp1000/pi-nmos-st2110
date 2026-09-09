@@ -407,11 +407,55 @@ RECDIR = os.path.join(os.path.dirname((_RUN or "/home/david/atoll-run").rstrip("
 _IFACE = _c.get("ISLAND_IFACE", "eth1")
 _PC_IP = _c.get("ISLAND_PC_IP", "10.10.10.2")
 _TTL = _c.get("MCAST_TTL", "1")
-REC_SRCS = {  # recordable TS-over-UDP sources -> (label, group, port)
-    "hevc": ("Live TV", _c.get("HEVC_GRP"), _c.get("HEVC_PORT")),
-    "jxs":  ("Home videos", _c.get("HOME_GRP"), _c.get("HOME_PORT")),
-    "music": ("Music", _c.get("MUSIC_GRP"), _c.get("MUSIC_PORT")),
-}
+def _grp(k): return _c.get(f"{k}_GRP"), _c.get(f"{k}_PORT")
+REC_TS = {"hevc": "HEVC", "jxs": "HOME", "music": "MUSIC"}   # lossless TS-over-UDP dump
+REC_RTP = ("raw", "h264", "mjpeg", "vp9", "tsrtp")           # transcoded to HEVC+AAC TS on record
+RECORDABLE = set(REC_TS) | set(REC_RTP)
+_RAWCAPS = ("application/x-rtp,media=(string)video,clock-rate=(int)90000,encoding-name=(string)RAW,"
+            "sampling=(string)YCbCr-4:2:2,depth=(string)8,width=(string)320,height=(string)240,"
+            "colorimetry=(string)BT601-5,payload=(int)96")
+_H264CAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=H264,payload=96"
+_OPUSCAPS = "application/x-rtp,media=audio,clock-rate=48000,encoding-name=OPUS,payload=97"
+_MJPEGCAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=JPEG,payload=96"
+_VP9CAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=VP9,payload=96"
+_TSRTPCAPS = "application/x-rtp,media=video,clock-rate=90000,encoding-name=MP2T,payload=33"
+_L24CAPS = "application/x-rtp,media=audio,clock-rate=48000,encoding-name=L24,channels=2,payload=96"
+# software HEVC (x265, no NVENC session) at 720p30 I420, muxed AAC -> reels-playable TS
+_VENC = ("videoconvert ! videoscale ! videorate ! video/x-raw,format=I420,width=1280,height=720,framerate=30/1 "
+         "! x265enc speed-preset=ultrafast tune=zerolatency bitrate=6000 key-int-max=30 ! h265parse config-interval=-1 ! queue ! mux.")
+_AENC = "avenc_aac ! aacparse ! queue ! mux."
+_SILENCE = f"audiotestsrc wave=silence is-live=true ! audioconvert ! audioresample ! {_AENC}"
+def _udp(g, p, buf=8388608, caps=None):
+    c = f'caps="{caps}" ' if caps else ""
+    return f"udpsrc address={g} port={p} multicast-iface={_IFACE} buffer-size={buf} {c}"
+def _record_cmd(src, path):
+    if src in REC_TS:                                        # lossless TS dump
+        g, p = _grp(REC_TS[src])
+        return f'gst-launch-1.0 -q {_udp(g, p)}! filesink location="{path}"'
+    mux = f'mpegtsmux name=mux alignment=7 ! queue ! filesink location="{path}"'
+    if src == "raw":
+        g, p = _grp("PI_RAW"); ag, ap = _grp("PI_AUDIO")
+        v = f'{_udp(g, p, caps=_RAWCAPS)}! rtpjitterbuffer latency=100 ! rtpvrawdepay ! {_VENC}'
+        a = f'{_udp(ag, ap, 16777216, _L24CAPS)}! rtpjitterbuffer latency=500 ! rtpL24depay ! audioconvert ! audioresample ! {_AENC}'
+    elif src == "h264":
+        g, p = _grp("H264"); ag, ap = _grp("OPUS")
+        v = f'{_udp(g, p, caps=_H264CAPS)}! rtpjitterbuffer latency=100 ! rtph264depay ! h264parse ! nvh264dec ! cudadownload ! {_VENC}'
+        a = f'{_udp(ag, ap, caps=_OPUSCAPS)}! rtpjitterbuffer latency=200 ! rtpopusdepay ! opusdec ! audioconvert ! audioresample ! {_AENC}'
+    elif src == "mjpeg":
+        g, p = _grp("MJPEG")
+        v = f'{_udp(g, p, 16777216, _MJPEGCAPS)}! rtpjitterbuffer latency=100 ! rtpjpegdepay ! nvjpegdec ! {_VENC}'
+        a = _SILENCE
+    elif src == "vp9":
+        g, p = _grp("VP9")
+        v = f'{_udp(g, p, caps=_VP9CAPS)}! rtpjitterbuffer latency=100 ! rtpvp9depay ! vp9parse ! nvvp9dec ! {_VENC}'
+        a = _SILENCE
+    elif src == "tsrtp":
+        g, p = _grp("TSRTP")
+        v = f'{_udp(g, p, caps=_TSRTPCAPS)}! rtpjitterbuffer latency=200 ! rtpmp2tdepay ! tsdemux name=d d. ! h264parse ! queue ! nvh264dec ! cudadownload ! {_VENC}'
+        a = "d. ! audio/mpeg ! queue ! decodebin ! audioconvert ! audioresample ! " + _AENC
+    else:
+        return None
+    return f'gst-launch-1.0 -q {v} {a} {mux}'
 _REELS_G, _REELS_P = _c.get("REELS_GRP"), _c.get("REELS_PORT")   # playback shows on "Test Reels"
 _rec = {"proc": None, "src": None, "file": None, "t0": 0}
 _play = {"proc": None, "file": None, "loop": False}
@@ -433,11 +477,13 @@ def _rec_status():
             "loop": _play["loop"] if _alive(_play) else False}
 def _rec_start(src):
     if _alive(_rec): return {"error": "already recording"}
-    if src not in REC_SRCS or not REC_SRCS[src][1]: return {"error": "bad src"}
-    _label, grp, port = REC_SRCS[src]
+    if not src:
+        src = active_src()                          # default: record the current source
+    if src not in RECORDABLE: return {"error": f"{src} not recordable"}
     os.makedirs(RECDIR, exist_ok=True)
     fn = time.strftime("%Y%m%d-%H%M%S") + f"_{src}.ts"
-    cmd = f'gst-launch-1.0 -q udpsrc address={grp} port={port} multicast-iface={_IFACE} buffer-size=8388608 ! filesink location="{os.path.join(RECDIR, fn)}"'
+    cmd = _record_cmd(src, os.path.join(RECDIR, fn))
+    if not cmd: return {"error": "no pipeline"}
     _rec.update(proc=_spawn(cmd), src=src, file=fn, t0=time.time())
     return _rec_status()
 def _rec_stop():
@@ -785,10 +831,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   <section class="grp"><div class="grphdr">Record &amp; Playback</div>
   <div id="recwrap">
    <div class="recrow">
-    <span class="avlbl">Record</span>
-    <button onclick="recStart('hevc')">Live TV</button>
-    <button onclick="recStart('jxs')">Home</button>
-    <button onclick="recStart('music')">Music</button>
+    <button id="recgo" onclick="recStart()">&#9679; Record current source</button>
     <button id="recstopb" onclick="recStop()">&#9632; Stop</button>
     <span id="recstat" class="avval">idle</span>
    </div>
@@ -997,7 +1040,7 @@ async function swTake(){ try{await fetch('/switcher/take',{cache:'no-store'});}c
 async function toggleSwTrans(){ const t=SW.trans==='cut'?'dissolve':'cut'; try{await fetch('/switcher/trans?type='+t+'&rate='+SW.rate,{cache:'no-store'});}catch(e){} setTimeout(loadSwitcher,200); }
 async function setLayout(m){ hlLayout(m); try{await fetch('/layout?mode='+m,{cache:'no-store'});}catch(e){} }
 function fmtDur(s){var m=Math.floor(s/60),x=s%60;return m+":"+(x<10?"0":"")+x;}
-async function recStart(src){ try{await fetch("/rec/start?src="+src,{cache:"no-store"});}catch(e){} recPoll(); }
+async function recStart(src){ try{await fetch("/rec/start"+(src?("?src="+src):""),{cache:"no-store"});}catch(e){} recPoll(); }
 async function recStop(){ try{await fetch("/rec/stop",{cache:"no-store"});}catch(e){} recPoll(); }
 async function playStart(f,loop){ try{await fetch("/play/start?file="+encodeURIComponent(f)+"&loop="+(loop?1:0),{cache:"no-store"});}catch(e){} recPoll(); }
 async function playStop(){ try{await fetch("/play/stop",{cache:"no-store"});}catch(e){} recPoll(); }

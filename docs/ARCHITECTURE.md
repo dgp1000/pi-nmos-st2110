@@ -576,6 +576,16 @@ onto Program Out via the caption-band knob -- gated by `~/atoll-run/cc-enable`, 
 This makes ST 2110-40 a full round-trip essence on the rig (send, discover, receive, render), not just
 a flow on the wire.
 
+**Real broadcast captions.** By default the caption text is synthetic (a rolling sample set), but
+`cc-relay.py` (`atoll-cc-relay`) can relay the ACTUAL Live-TV captions. The island Live-TV feed is
+re-encoded (`decodebin3 -> nvh265enc`), which strips the broadcast's CEA-608, so cc-relay taps the
+HDHomeRun tuner directly for the current channel, extracts captions with **CCExtractor** (built
+from source; GPAC too, since Ubuntu 25 drops it -- see STARTUP), and writes the current line to
+`~/atoll-run/cc-input`, which `anc-send` carries and `anc-recv` renders. It follows `tv-channel`
+and is gated by `cc-source` (`live`/`synthetic`), toggled from the panel's Ancillary row. CCExtractor's
+live `--stream` mode is broken in this build, so it chunks (short tuner captures, overlapping capture
+with playback) -- real captions with ~a chunk of latency. Not every channel is captioned (8.1/24.1 are).
+
 **Family 3** is the demonstrator layer. Wrapping the TS in RTP is what makes ST 2022-1 FEC and
 ST 2022-7 possible:
 

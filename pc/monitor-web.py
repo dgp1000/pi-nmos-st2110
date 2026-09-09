@@ -20,7 +20,8 @@ relayed from the Pi grandmaster.
 Run in WSL:  python3 monitor-web.py    Open from iPad: http://<pc-wifi-ip>:8096
 """
 import http.server, socketserver, urllib.request, json, time, os, subprocess, signal, glob
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, urlencode
+import urllib.error
 import atoll_config as cfg
 
 _c = cfg.load()
@@ -111,9 +112,11 @@ def programout_route(essence, secs=0):
         body["activation"] = {"mode": "activate_scheduled_relative", "requested_time": f"{int(secs)}:0"}
     else:
         body["activation"] = {"mode": "activate_immediate"}
+    _h = {"Content-Type": "application/json"}
+    _bt = _auth_bearer()                       # IS-10: carry a token when Program Out enforces auth
+    if _bt: _h["Authorization"] = "Bearer " + _bt
     req = urllib.request.Request(f"{PROGRAMOUT}/x-nmos/connection/v1.1/single/receivers/{rid}/staged",
-                                 data=json.dumps(body).encode(), method="PATCH",
-                                 headers={"Content-Type": "application/json"})
+                                 data=json.dumps(body).encode(), method="PATCH", headers=_h)
     with urllib.request.urlopen(req, timeout=4) as r:
         return r.status
 
@@ -422,6 +425,61 @@ def _cc_state():
     except Exception: pass
     return {"on": _cc_get(), "tc": tc, "source": _cc_source(), "delay": _cc_delay_get()}
 
+# ---- IS-10 authorization (AMWA IS-10 / BCP-003-02) --------------------------------------------
+AUTH_ENABLE_KNOB = _RUN + "/auth-enable"        # "1" -> Program Out requires a valid bearer token
+AUTH_PORT = _c.get("AUTH_PORT") or "8106"
+AUTH_URL  = f"http://localhost:{AUTH_PORT}"       # the IS-10 authorization server
+_tok = {"jwt": None, "exp": 0}
+def _auth_get():
+    try: return open(AUTH_ENABLE_KNOB).read().strip() in ("1", "true", "on")
+    except Exception: return False
+def _fetch_token(scope="connection"):
+    """client_credentials grant from the AS; cached until ~60 s before expiry."""
+    now = time.time()
+    if _tok["jwt"] and _tok["exp"] - 60 > now:
+        return _tok["jwt"]
+    data = urlencode({"grant_type": "client_credentials", "client_id": "atoll-panel", "scope": scope}).encode()
+    with urllib.request.urlopen(urllib.request.Request(AUTH_URL + "/token", data=data, method="POST"), timeout=4) as r:
+        j = json.loads(r.read())
+    _tok["jwt"] = j["access_token"]; _tok["exp"] = now + int(j.get("expires_in", 3600))
+    return _tok["jwt"]
+def _auth_bearer():
+    """A token when enforcement is ON (so the panel's own PATCHes pass), else None (stay open)."""
+    if not _auth_get(): return None
+    try: return _fetch_token()
+    except Exception: return None
+def _auth_set(on):
+    try:
+        with open(AUTH_ENABLE_KNOB, "w") as f: f.write("1" if on else "0")
+    except OSError: pass
+    _tok["jwt"] = None; _tok["exp"] = 0        # drop any cached token on a toggle
+    return _auth_state()
+def _auth_state():
+    up = False; kid = ""; issuer = ""
+    try:
+        with urllib.request.urlopen(AUTH_URL + "/", timeout=2) as r:
+            j = json.loads(r.read()); up = True; kid = j.get("kid", ""); issuer = j.get("issuer", "")
+    except Exception: pass
+    return {"enabled": _auth_get(), "as_up": up, "kid": kid, "issuer": issuer, "url": AUTH_URL}
+def _auth_demo():
+    """Prove enforcement: stage a no-op PATCH on Program Out WITHOUT a token, then WITH one."""
+    st = _programout_state(); rid = st["receiver_id"]
+    url = f"{PROGRAMOUT}/x-nmos/connection/v1.1/single/receivers/{rid}/staged"
+    body = json.dumps({"master_enable": bool(st.get("master_enable", False))}).encode()   # no-op stage
+    def _patch(tok):
+        h = {"Content-Type": "application/json"}
+        if tok: h["Authorization"] = "Bearer " + tok
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, data=body, method="PATCH", headers=h), timeout=4) as r:
+                return r.status
+        except urllib.error.HTTPError as e: return e.code
+        except Exception: return 0
+    without = _patch(None)
+    try: tok = _fetch_token()
+    except Exception: tok = None
+    return {"enabled": _auth_get(), "without_token": without, "with_token": _patch(tok),
+            "token_preview": (tok[:28] + "…") if tok else None}
+
 # ---- Record & Playback -------------------------------------------------------------------------
 _HERE = os.path.dirname(os.path.abspath(__file__))
 RECDIR = os.path.join(os.path.dirname((_RUN or "/home/david/atoll-run").rstrip("/")), "atoll-recordings")
@@ -721,6 +779,11 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #avsync .avlbl{color:#6cba90;font-size:min(1.5vw,1.8vh);letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
  #avslider{flex:1;height:2.4vh}
  #avsync .avval{color:#9c9;font-size:min(1.7vw,2vh);min-width:5ch;text-align:right;font-variant-numeric:tabular-nums}
+ #authwrap{display:flex;flex-direction:column;gap:.7vh}
+ #authwrap .recrow{display:flex;align-items:center;gap:.7vw}
+ #authbtn.on{background:#1e6b3d;border-color:#2c9c58;color:#eafff0}
+ #authres b{color:#9fd;font-variant-numeric:tabular-nums}
+ #authkid{font-size:min(1.2vw,1.5vh);color:#789;word-break:break-all;font-family:ui-monospace,monospace}
  #ccdelay{display:flex;align-items:center;gap:.7vw;margin-top:.6vh;width:min(60vw,70vh)}
  #ccdelay .avlbl{color:#6cba90;font-size:min(1.5vw,1.8vh);letter-spacing:.08em;text-transform:uppercase;white-space:nowrap}
  #ccdelsl{flex:1;height:2.4vh}
@@ -868,6 +931,20 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    </div>
    <div id="cliplist"></div>
    <div id="playrow"><span id="playstat" class="mut">&mdash;</span><button id="playstopb" onclick="playStop()">Stop playback</button></div>
+  </div>
+  </section>
+
+  <section class="grp"><div class="grphdr">IS-10 Authorization &middot; BCP-003-02</div>
+  <div id="authwrap">
+   <div class="recrow">
+    <button id="authbtn" onclick="authToggle()">Enforcement: off</button>
+    <span id="authas" class="avval">AS &mdash;</span>
+   </div>
+   <div class="recrow">
+    <button id="authdemo" onclick="authDemo()">Test token enforcement</button>
+    <span id="authres" class="mut">&mdash;</span>
+   </div>
+   <div id="authkid" class="mut">&mdash;</div>
   </div>
   </section>
   <section class="grp modegrp modehide" data-mode="switcher"><div class="grphdr">Production Switcher</div>
@@ -1122,6 +1199,22 @@ async function refreshState(){
         if(sl && document.activeElement!==sl){ sl.value=d.video_delay; document.getElementById('avval').textContent=d.video_delay+' ms'; } } }catch(e){}
 }
 setInterval(ccPoll, 1000); ccPoll();
+let _authOn=false;
+function authApply(d){
+  _authOn=!!d.enabled;
+  const b=document.getElementById("authbtn"); if(b){ b.textContent="Enforcement: "+(_authOn?"ON":"off"); b.classList.toggle("on",_authOn); }
+  const as=document.getElementById("authas"); if(as) as.textContent = d.as_up?"AS up":"AS down";
+  const k=document.getElementById("authkid"); if(k) k.textContent = d.as_up?("issuer "+(d.issuer||"?")+"  \u00b7  kid "+(d.kid||"?")):"authorization server unreachable";
+}
+async function authToggle(){ try{const d=await(await fetch("/auth/set?on="+(_authOn?0:1),{cache:"no-store"})).json(); authApply(d);}catch(e){} }
+async function authDemo(){
+  const r=document.getElementById("authres"); if(r) r.textContent="testing\u2026";
+  try{const d=await(await fetch("/auth/demo",{cache:"no-store"})).json();
+    if(r) r.innerHTML = "no token \u2192 <b>"+d.without_token+"</b> &nbsp; valid token \u2192 <b>"+d.with_token+"</b>"+(d.token_preview?(" &nbsp; <span class='mut'>"+d.token_preview+"</span>"):"");
+  }catch(e){ if(r) r.textContent="error"; }
+}
+async function authPoll(){ try{const d=await(await fetch("/auth/state",{cache:"no-store"})).json(); authApply(d);}catch(e){} }
+setInterval(authPoll, 3000); authPoll();
 function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
 const dot=b=>b?'<span class="on-dot">&#9679;</span>':'<span class="off-dot">&#9675;</span>';
 const sid=id=>id?esc(String(id).slice(0,8)):'<span class="mut">none</span>';
@@ -1472,6 +1565,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(json.dumps(_cc_delay_set(parse_qs(parsed.query).get("ms",["0"])[0])).encode())
         elif parsed.path == "/cc/state":
             self._send_json(json.dumps(_cc_state()).encode())
+        elif parsed.path == "/auth/state":
+            self._send_json(json.dumps(_auth_state()).encode())
+        elif parsed.path == "/auth/set":
+            self._send_json(json.dumps(_auth_set(parse_qs(parsed.query).get("on",["0"])[0] in ("1","true","on"))).encode())
+        elif parsed.path == "/auth/demo":
+            self._send_json(json.dumps(_auth_demo()).encode())
         elif parsed.path == "/rec/start":
             self._send_json(json.dumps(_rec_start(parse_qs(parsed.query).get("src",[""])[0])).encode())
         elif parsed.path == "/rec/stop":

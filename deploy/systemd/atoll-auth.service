@@ -1,0 +1,13 @@
+[Unit]
+Description=Atoll NMOS IS-10 authorization server (OAuth2 / JWT)
+After=network.target
+
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/usr/bin/python3 /home/david/pi-nmos-st2110/pc/auth-server.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

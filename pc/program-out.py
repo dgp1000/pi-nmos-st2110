@@ -24,9 +24,10 @@ derived from WHICH known flow the (address, port) belongs to (CATALOG below).
 """
 import http.server, socketserver, json, time, uuid, threading, urllib.request, urllib.error, os, subprocess
 from urllib.parse import urlparse
+import jwt
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-NEED = ["ATOLL_RUN", "NMOS_REGISTRY", "NMOS_ADVERTISE_HOST", "PROGRAMOUT_PORT",
+NEED = ["ATOLL_RUN", "NMOS_REGISTRY", "NMOS_ADVERTISE_HOST", "PROGRAMOUT_PORT", "AUTH_PORT",
         "HEVC_GRP", "HEVC_PORT", "HOME_GRP", "HOME_PORT", "MUSIC_GRP", "MUSIC_PORT",
         "H264_GRP", "H264_PORT", "MJPEG_GRP", "MJPEG_PORT", "VP9_GRP", "VP9_PORT",
         "J2K_GRP", "J2K_PORT", "TSRTP_GRP", "TSRTP_PORT", "PI_RAW_GRP", "PI_RAW_PORT"]
@@ -35,6 +36,30 @@ CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
 RUN = CFG.get("ATOLL_RUN") or "/home/david/atoll-run"
 PORT = int(CFG.get("PROGRAMOUT_PORT") or 8092)
 KNOB = os.path.join(RUN, "programout")
+AUTH_PORT = int(CFG.get("AUTH_PORT") or 8106)
+AUTH_URL = f"http://localhost:{AUTH_PORT}"          # IS-10 authorization server (JWKS lives here)
+AUTH_ENABLE = os.path.join(RUN, "auth-enable")      # "1" -> require a valid IS-10 bearer token to PATCH
+_jwkc = {"c": None}
+def _auth_on():
+    try: return open(AUTH_ENABLE).read().strip() == "1"
+    except Exception: return False
+def _check_token(authhdr):
+    """Validate an IS-10 bearer JWT: RS256 signature (via the AS JWKS) + exp + x-nmos-connection write."""
+    if not (authhdr or "").startswith("Bearer "):
+        return (False, "missing bearer token")
+    token = authhdr[7:].strip()
+    try:
+        if _jwkc["c"] is None:
+            _jwkc["c"] = jwt.PyJWKClient(AUTH_URL + "/jwks")
+        key = _jwkc["c"].get_signing_key_from_jwt(token).key
+        claims = jwt.decode(token, key, algorithms=["RS256"], options={"verify_aud": False})
+    except Exception as e:
+        return (False, f"invalid token: {e}")
+    conn = claims.get("x-nmos-connection") or {}
+    scopes = (claims.get("scope") or "").split()
+    if not (conn.get("write") or "connection" in scopes):
+        return (False, "token lacks x-nmos-connection write access")
+    return (True, claims.get("client_id", "?"))
 
 # Routable island flows: (multicast, port) -> (essence key output-render knows, label, media_type).
 def _grp(k):
@@ -219,6 +244,15 @@ class H(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send401(self, info):
+        body = json.dumps({"code": 401, "error": "Unauthorized", "debug": info}).encode()
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Bearer error="invalid_token"')
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers(); self.wfile.write(body)
+
     def do_GET(self):
         p = urlparse(self.path).path.rstrip("/")
         with _lock:
@@ -251,6 +285,10 @@ class H(http.server.BaseHTTPRequestHandler):
         p = urlparse(self.path).path.rstrip("/")
         if p != f"{CONN_BASE}/single/receivers/{RX_ID}/staged":
             return self._send(404, {"code": 404, "error": "Not Found", "debug": p})
+        if _auth_on():                                  # IS-10: enforce a valid bearer token
+            ok, info = _check_token(self.headers.get("Authorization", ""))
+            if not ok:
+                return self._send401(info)
         try:
             n = int(self.headers.get("Content-Length") or 0)
             patch = json.loads(self.rfile.read(n) or b"{}")

@@ -171,7 +171,8 @@ WSL boots (WSL itself does not start with Windows). `~/atoll-run` is `ATOLL_RUN`
 |---|---|---|---|---|
 | Panel | `pc/monitor-web.py` | `atoll-panel` | `:8096` | The iPad page -- grouped into labelled sections (Sources, Output, Production Switcher, Program Out, Multiview, Music, Resilience, Live TV, Demo), with the mode-specific sections shown only for the active OUTPUT mode -- and the single source of truth for *active source*, *layout* and *tile slots*. Issues IS-05 takes and routes Program Out over IS-05. Writes the knob files. Proxies the Mac music API and the Pi clock. A **Guided demo** button runs a scripted, captioned tour of the whole rig. |
 | IS-07 emitter | `pc/is07-tally.py` | `atoll-is07` | `:8102` REST, `:8103` ws | One boolean event source per Atoll source key. Registers node/device/13 sources/flows/senders in IS-04. Pushes state on transition. |
-| Program Out | `pc/program-out.py` | `atoll-programout` | `:8092` | Software NMOS receiver: serves the IS-05 v1.1 Connection API and registers its node/device/receiver in IS-04. On activation it maps the connection's multicast/port to an island flow and writes `~/atoll-run/programout` for the renderer. Publishes **BCP-004-01** receiver capabilities (`caps.constraint_sets`) so controllers know what it accepts. |
+| Program Out | `pc/program-out.py` | `atoll-programout` | `:8092` | Software NMOS receiver: serves the IS-05 v1.1 Connection API and registers its node/device/receiver in IS-04. On activation it maps the connection's multicast/port to an island flow and writes `~/atoll-run/programout` for the renderer. Publishes **BCP-004-01** receiver capabilities (`caps.constraint_sets`) so controllers know what it accepts. When `~/atoll-run/auth-enable` is set it also **enforces IS-10**: a `PATCH /staged` needs a valid bearer token (RS256 verified against the AS JWKS, with `x-nmos-connection` write access) or it is refused `401`. |
+| Authorization server | `pc/auth-server.py` | `atoll-auth` | `:8106` | AMWA **IS-10** OAuth 2.0 / JWT authorization server (BCP-003-02). Issues RS256-signed bearer tokens via the `client_credentials` grant, each carrying the NMOS private claims (`x-nmos-<api>` access rights); publishes its public key as a **JWKS**, its **RFC 8414** metadata at `/.well-known/oauth-authorization-server`, an **RFC 7591** dynamic-registration endpoint, and advertises itself over DNS-SD (`_nmos-auth._tcp`). The RSA key persists in `~/atoll-run/auth-key.pem` so tokens survive restarts. |
 | Music NMOS source | `pc/music-nmos.py` | `atoll-music-nmos` | `:8093` | Registers the music channel as an IS-04 node with two senders — video (HEVC) and ST 2110-30 L24 audio — and serves an SDP per sender, so music is discoverable in the inspector and routable via Program Out. Also serves the **sender-side IS-05 v1.1 Connection API** for both senders — a controller can re-point where each sender transmits (multicast destination) live; the pipeline moves and the SDP/registry update. Heartbeats like the other registrars. |
 | Audio channel map (IS-08) | `pc/audiomap-nmos.py` | `atoll-audiomap` | `:8094` | Serves the AMWA IS-08 v1.0 Channel Mapping API for the music audio (node/device with a `cm-ctrl` control). A controller maps the output's channels to the input's (stereo / swap / mono / mute); on activation it writes `~/atoll-run/audiomap` and restarts the audio mapper. Immediate + scheduled activation. |
 | Pi ST 2110 NMOS | `pc/pi-nmos.py` | `atoll-pi-nmos` | `:8095` | Registers the Pi's real ST 2110-20 raw video and -30 L24 audio as an IS-04 node (`atoll-pi`) with two senders, serving a standards-complete SDP each (ST 2110-20/-21 fmtp, `mediaclk`, `ts-refclk` with the grandmaster id). Makes the Pi flows discoverable + routable. |
@@ -371,6 +372,8 @@ timecode; and a **Record & Playback** section records a source's live multicast 
 `.ts` in `~/atoll-recordings` (lossless `udpsrc -> filesink`) and replays any clip -- PCR-paced by
 `playback-send.py` -- to the Test Reels group, so you cut to a recording like any other input.
 
+An **IS-10 Authorization** section toggles token enforcement on Program Out (`auth-enable`), shows the authorization server's live status (issuer + signing-key `kid`), and a **Test token enforcement** button stages one no-op `PATCH /staged` without a token and one with a freshly minted token, printing the two HTTP results side by side (`401` then `200`). While enforcement is on, the panel transparently fetches and caches a token from the AS and attaches it to its own Program Out routes, so takes keep working.
+
 ### 5.2 The knob files in `~/atoll-run`
 
 These are the rig's "GPIO": the panel writes them, long-running pipelines poll them and apply the
@@ -385,6 +388,7 @@ value to a live element property, so nothing rebuilds.
 | `music-video-transport` | `music-nmos.py` on IS-05 sender activation | `music-channel.sh` (each loop) | Music video sender's multicast `host port`; absent = default `MUSIC_GRP`. Re-points the video sender live. |
 | `video-delay-ms` | panel A/V sync slider (`/avsync/set`) | all renderers (1 s) | `ts-offset` on the video sink; +ms holds video back to match late audio (default 30). |
 | `cc-enable` | panel CC toggle (`/cc/set`) | `anc-recv.py` | Gate for rendering ST 2110-40 captions / AD-break on Program Out. |
+| `auth-enable` | panel IS-10 toggle (`/auth/set`) | `program-out.py`, panel | `1` = Program Out enforces IS-10 bearer tokens on `PATCH /staged`; the panel then attaches a token to its own routes. Default `0` (open). |
 | `fec-loss` | panel `/fec/set` | `meter-view`, `wall-view` (1 s) | `identity drop-probability` on the FEC media flow: the loss injector. |
 | `fec-enable` | panel `/fec/set` | `meter-view`, `wall-view` | Gates the column/row FEC flows (drop-probability 0 or 1) so protected vs unprotected is a live A/B at constant loss. |
 | `sps-a`, `sps-b` | panel `/sps/set` | `meter-view`, `wall-view` | "Pull the cable" on a 2022-7 path. |
@@ -530,6 +534,12 @@ sequenceDiagram
 The same mechanism drives `fec-enable` (gates the two parity flows), `sps-a`/`sps-b` (gates a
 2022-7 path) and the two audio trims. Because the change is a property write on a running element
 the picture never blinks, which is what makes the "watch it fall apart and recover" demo work.
+
+### 5.6 IS-10 authorization
+
+`auth-server.py` (`atoll-auth`, `:8106`) is the rig's AMWA **IS-10** authorization server. It generates (and persists) a 2048-bit RSA key, then serves the OAuth 2.0 surface an NMOS control plane expects: **RFC 8414** metadata at `/.well-known/oauth-authorization-server`, a **JWKS** at `/jwks`, a `client_credentials` token endpoint at `/token`, and a simplified **RFC 7591** `/register`. It advertises `_nmos-auth._tcp` over DNS-SD so nodes can discover it. Each token is an RS256 JWT whose claims include the **BCP-003-02** private claims -- one `x-nmos-<api>` object per granted scope (`connection`, `node`, `query`, ...) carrying `read`/`write` access rights -- with a 1-hour expiry and a `kid` header naming the signing key.
+
+The natural resource server to protect is **Program Out** (`program-out.py`), the rig's IS-05 receiver. When `~/atoll-run/auth-enable` is `1`, its `PATCH /staged` first validates the `Authorization: Bearer` token: it fetches the AS's public key by `kid` (PyJWT's `PyJWKClient` against `/jwks`), verifies the RS256 signature and expiry, and checks the token grants `x-nmos-connection` write access. Missing or invalid -> `401` with a `WWW-Authenticate: Bearer` header; valid -> the route proceeds as normal. The knob is the enforcement switch, so the demo is a clean A/B: flip it on, try a take without a token (the panel's *Test token enforcement* button shows the `401`), then a take with one (`200`). Token issuance is intentionally demo-open (any `client_id`) -- what the rig demonstrates is the token *lifecycle* and *resource-server validation*, not hardening the AS itself.
 
 ---
 

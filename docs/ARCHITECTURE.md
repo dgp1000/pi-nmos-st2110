@@ -363,6 +363,14 @@ accepts (`urn:x-nmos:cap:format:media_type`) plus the frame rates it handles, wi
 `meta:label`/`meta:preference`. A controller reads these to decide which senders are compatible
 *before* it routes one — the standards-clean way to answer "can this receiver take that sender?".
 
+**Recent panel additions** (in the always-visible Output / Ancillary area): an **A/V sync** slider
+writes `video-delay-ms` (a live `ts-offset` on every renderer's video sink; default 30 ms, holding
+video back to meet WSLg's late audio); an **Ancillary - ST 2110-40** row toggles closed captions
+(`cc-enable`, rendered by `anc-recv.py`), fires an SCTE-104 AD break, and shows the received ATC
+timecode; and a **Record & Playback** section records a source's live multicast to a timestamped
+`.ts` in `~/atoll-recordings` (lossless `udpsrc -> filesink`) and replays any clip -- PCR-paced by
+`playback-send.py` -- to the Test Reels group, so you cut to a recording like any other input.
+
 ### 5.2 The knob files in `~/atoll-run`
 
 These are the rig's "GPIO": the panel writes them, long-running pipelines poll them and apply the
@@ -375,6 +383,8 @@ value to a live element property, so nothing rebuilds.
 | `programout` | `program-out.py` on IS-05 activation | `output-render.sh` (`program` layout) | The flow routed to Program Out: essence + multicast + port. |
 | `music-audio-transport` | `music-nmos.py` on IS-05 sender activation | `audiomapper.sh` (per restart) | Music L24 sender's multicast `host port`; absent = default `MUSIC_AUDIO_GRP`. Re-points the audio sender live. |
 | `music-video-transport` | `music-nmos.py` on IS-05 sender activation | `music-channel.sh` (each loop) | Music video sender's multicast `host port`; absent = default `MUSIC_GRP`. Re-points the video sender live. |
+| `video-delay-ms` | panel A/V sync slider (`/avsync/set`) | all renderers (1 s) | `ts-offset` on the video sink; +ms holds video back to match late audio (default 30). |
+| `cc-enable` | panel CC toggle (`/cc/set`) | `anc-recv.py` | Gate for rendering ST 2110-40 captions / AD-break on Program Out. |
 | `fec-loss` | panel `/fec/set` | `meter-view`, `wall-view` (1 s) | `identity drop-probability` on the FEC media flow: the loss injector. |
 | `fec-enable` | panel `/fec/set` | `meter-view`, `wall-view` | Gates the column/row FEC flows (drop-probability 0 or 1) so protected vs unprotected is a live A/B at constant loss. |
 | `sps-a`, `sps-b` | panel `/sps/set` | `meter-view`, `wall-view` | "Pull the cable" on a 2022-7 path. |

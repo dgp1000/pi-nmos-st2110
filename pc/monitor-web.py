@@ -461,6 +461,67 @@ def _auth_state():
             j = json.loads(r.read()); up = True; kid = j.get("kid", ""); issuer = j.get("issuer", "")
     except Exception: pass
     return {"enabled": _auth_get(), "as_up": up, "kid": kid, "issuer": issuer, "url": AUTH_URL}
+
+# ---- IS-11 stream compatibility (proxy to atoll-is11) ------------------------------------------
+import hashlib as _hl
+IS11 = f"http://localhost:{_c.get('IS11_PORT') or '8107'}"
+IS11_SC = IS11 + "/x-nmos/streamcompatibility/v1.0"
+IS11_NODE = IS11 + "/x-nmos/node/v1.3"
+_is11 = {"sender": None, "input": None, "flow": None, "receiver": None}
+def _is11_get(url, t=3):
+    with urllib.request.urlopen(url, timeout=t) as r: return r.status, r.read()
+def _is11_discover():
+    if _is11["sender"] and _is11["input"]: return
+    try:
+        _is11["sender"] = json.loads(_is11_get(IS11_SC + "/senders/")[1])[0].rstrip("/")
+        _is11["input"] = json.loads(_is11_get(IS11_SC + "/inputs/")[1])[0].rstrip("/")
+        _is11["receiver"] = json.loads(_is11_get(IS11_SC + "/receivers/")[1])[0].rstrip("/")
+        _is11["flow"] = json.loads(_is11_get(IS11_NODE + "/senders/" + _is11["sender"])[1])["flow_id"]
+    except Exception: pass
+def _is11_state():
+    _is11_discover()
+    d = {"up": False, "sender_status": "?", "grain_rate": "?", "base_edid": False,
+         "effective_hash": "", "receiver_status": "?"}
+    sid, iid, fid, rid = _is11["sender"], _is11["input"], _is11["flow"], _is11["receiver"]
+    if not sid: return d
+    try:
+        d["sender_status"] = json.loads(_is11_get(IS11_SC + f"/senders/{sid}/status/")[1])["state"]; d["up"] = True
+    except Exception: return d
+    try:
+        gr = json.loads(_is11_get(IS11_NODE + f"/flows/{fid}")[1])["grain_rate"]; d["grain_rate"] = f"{gr['numerator']}/{gr['denominator']}"
+    except Exception: pass
+    try:
+        d["base_edid"] = (_is11_get(IS11_SC + f"/inputs/{iid}/edid/base/")[0] == 200)
+    except Exception: pass
+    try:
+        d["effective_hash"] = _hl.sha1(_is11_get(IS11_SC + f"/inputs/{iid}/edid/effective/")[1]).hexdigest()[:8]
+    except Exception: pass
+    try:
+        d["receiver_status"] = json.loads(_is11_get(IS11_SC + f"/receivers/{rid}/status/")[1])["state"]
+    except Exception: pass
+    return d
+def _is11_req(url, method, data=None, ctype=None):
+    h = {"Content-Type": ctype} if ctype else {}
+    req = urllib.request.Request(url, data=data, method=method, headers=h)
+    try:
+        with urllib.request.urlopen(req, timeout=4) as r: return {"ok": r.status in (200, 204), "code": r.status}
+    except urllib.error.HTTPError as e: return {"ok": False, "code": e.code}
+    except Exception as e: return {"ok": False, "err": str(e)}
+def _is11_constrain(num, den):
+    _is11_discover()
+    body = json.dumps({"constraint_sets": [{"urn:x-nmos:cap:format:grain_rate": {"enum": [{"numerator": int(num), "denominator": int(den)}]}}]}).encode()
+    return _is11_req(IS11_SC + f"/senders/{_is11['sender']}/constraints/active/", "PUT", body, "application/json")
+def _is11_unconstrain():
+    _is11_discover()
+    return _is11_req(IS11_SC + f"/senders/{_is11['sender']}/constraints/active/", "DELETE")
+def _is11_edid(load):
+    _is11_discover()
+    url = IS11_SC + f"/inputs/{_is11['input']}/edid/base/"
+    if not load:
+        return _is11_req(url, "DELETE")
+    e = bytearray(128); e[0:8] = bytes([0, 255, 255, 255, 255, 255, 255, 0]); e[8:10] = bytes([0x2D, 0xC9])
+    e[18] = 1; e[19] = 4; e[127] = (256 - (sum(e[:127]) % 256)) % 256
+    return _is11_req(url, "PUT", bytes(e), "application/octet-stream")
 def _auth_demo():
     """Prove enforcement: stage a no-op PATCH on Program Out WITHOUT a token, then WITH one."""
     st = _programout_state(); rid = st["receiver_id"]
@@ -948,6 +1009,25 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <div id="authkid" class="mut">&mdash;</div>
   </div>
   </section>
+
+  <section class="grp"><div class="grphdr">Stream Compatibility &middot; IS-11</div>
+  <div id="is11wrap">
+   <div class="recrow">
+    <span class="avlbl">Sender</span> <span id="is11status" class="avval">&mdash;</span>
+    <span class="avlbl">Flow rate</span> <span id="is11rate" class="avval">&mdash;</span>
+   </div>
+   <div class="recrow">
+    <button id="is11con" onclick="is11Constrain()">Constrain to 50 fps</button>
+    <button id="is11unc" onclick="is11Unconstrain()">Clear constraint</button>
+   </div>
+   <div class="recrow">
+    <span class="avlbl">Base EDID</span> <span id="is11edid" class="avval">&mdash;</span>
+    <button id="is11eload" onclick="is11Edid(1)">Load EDID</button>
+    <button id="is11eclr" onclick="is11Edid(0)">Clear EDID</button>
+   </div>
+   <div id="is11eff" class="mut">&mdash;</div>
+  </div>
+  </section>
   <section class="grp modegrp modehide" data-mode="switcher"><div class="grphdr">Production Switcher</div>
   <div id="switchwrap">
    <span id="sw-pgm" class="sw-pgm">PROGRAM &middot; &mdash;</span>
@@ -1216,6 +1296,17 @@ async function authDemo(){
 }
 async function authPoll(){ try{const d=await(await fetch("/auth/state",{cache:"no-store"})).json(); authApply(d);}catch(e){} }
 setInterval(authPoll, 3000); authPoll();
+function is11Apply(d){
+  const st=document.getElementById("is11status"); if(st){ st.textContent=d.up?d.sender_status:"offline"; st.classList.toggle("on", d.sender_status==="constrained"); }
+  const r=document.getElementById("is11rate"); if(r) r.textContent=d.grain_rate;
+  const e=document.getElementById("is11edid"); if(e){ e.textContent=d.base_edid?"set":"none"; e.classList.toggle("on", !!d.base_edid); }
+  const ef=document.getElementById("is11eff"); if(ef) ef.textContent="effective EDID "+d.effective_hash+"  \u00b7  receiver "+d.receiver_status;
+}
+async function is11Poll(){ try{const d=await(await fetch("/is11/state",{cache:"no-store"})).json(); is11Apply(d);}catch(e){} }
+async function is11Constrain(){ try{await fetch("/is11/constrain?num=50&den=1",{cache:"no-store"});}catch(e){} is11Poll(); }
+async function is11Unconstrain(){ try{await fetch("/is11/unconstrain",{cache:"no-store"});}catch(e){} is11Poll(); }
+async function is11Edid(load){ try{await fetch("/is11/edid?load="+load,{cache:"no-store"});}catch(e){} is11Poll(); }
+setInterval(is11Poll, 3000); is11Poll();
 function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
 const dot=b=>b?'<span class="on-dot">&#9679;</span>':'<span class="off-dot">&#9675;</span>';
 const sid=id=>id?esc(String(id).slice(0,8)):'<span class="mut">none</span>';
@@ -1572,6 +1663,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(json.dumps(_auth_set(parse_qs(parsed.query).get("on",["0"])[0] in ("1","true","on"))).encode())
         elif parsed.path == "/auth/demo":
             self._send_json(json.dumps(_auth_demo()).encode())
+        elif parsed.path == "/is11/state":
+            self._send_json(json.dumps(_is11_state()).encode())
+        elif parsed.path == "/is11/constrain":
+            _q = parse_qs(parsed.query)
+            self._send_json(json.dumps(_is11_constrain(_q.get("num",["50"])[0], _q.get("den",["1"])[0])).encode())
+        elif parsed.path == "/is11/unconstrain":
+            self._send_json(json.dumps(_is11_unconstrain()).encode())
+        elif parsed.path == "/is11/edid":
+            self._send_json(json.dumps(_is11_edid(parse_qs(parsed.query).get("load",["0"])[0] in ("1","true","on"))).encode())
         elif parsed.path == "/rec/start":
             self._send_json(json.dumps(_rec_start(parse_qs(parsed.query).get("src",[""])[0])).encode())
         elif parsed.path == "/rec/stop":

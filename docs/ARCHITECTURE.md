@@ -810,6 +810,8 @@ kept as the iPad/Mac way to *see* the wall.
 
 ## 8. The NMOS plane
 
+> **Conformance scorecard.** Live AMWA `nmos-testing` results across the rig are aggregated in a dashboard artifact, reproduced by `pc/conformance-run.sh`. Current: IS-11 92/0, IS-09 5/0, IS-04 (Node) 16/1, IS-10 31/31 (custom check), IS-05 48/14, IS-07 partial, IS-08 API live.
+
 ```mermaid
 flowchart TB
   subgraph docker["docker compose — deploy/nmos"]

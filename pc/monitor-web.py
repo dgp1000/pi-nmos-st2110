@@ -914,7 +914,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  .scorelink{display:inline-block;margin-top:.7vh;color:#6cf;text-decoration:none;font-size:min(1.6vw,1.9vh);border:1px solid #245;border-radius:6px;padding:.3em .7em;background:#0a1622}
  .scorelink:active{background:#123}
  .grphdr[data-tip]{cursor:help}
- .grphdr[data-tip]::after{content:" \2139";color:#6cf;font-size:.8em;opacity:.75;font-weight:normal}
+ .grphdr[data-tip]::after{content:" ⓘ";font-family:"Segoe UI Symbol","Noto Sans Symbols","Apple Symbols",system-ui,sans-serif;color:#6cf;font-size:.9em;opacity:.85;font-weight:normal;vertical-align:.05em}
  #tip{position:fixed;max-width:min(82vw,360px);background:#0b1a24;color:#d3e8f6;border:1px solid #2b5068;border-radius:8px;padding:.55em .75em;font-size:min(1.55vw,1.9vh);line-height:1.42;box-shadow:0 6px 22px rgba(0,0,0,.55);z-index:60;pointer-events:none;opacity:0;display:none}
  #tip.on{opacity:1;display:block}
  .grphdr{color:#6cba90;font-size:min(1.55vw,1.85vh);letter-spacing:.14em;text-transform:uppercase;font-weight:600;margin-bottom:.35vh;opacity:.85}

@@ -522,6 +522,47 @@ def _is11_edid(load):
     e = bytearray(128); e[0:8] = bytes([0, 255, 255, 255, 255, 255, 255, 0]); e[8:10] = bytes([0x2D, 0xC9])
     e[18] = 1; e[19] = 4; e[127] = (256 - (sum(e[:127]) % 256)) % 256
     return _is11_req(url, "PUT", bytes(e), "application/octet-stream")
+
+# ---- IS-12 device control (proxy to the atoll-is12 ncp WebSocket) ------------------------------
+def _is12_ws_cmd(cmds):
+    import socket as _sk, base64 as _b64, struct as _st, os as _o
+    s = _sk.socket(); s.settimeout(4); s.connect(("localhost", int(_c.get("IS12_WS_PORT") or 8109)))
+    key = _b64.b64encode(_o.urandom(16)).decode()
+    s.sendall(("GET /x-nmos/ncp/v1.0 HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+               f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Protocol: ncp\r\n\r\n").encode())
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        c = s.recv(1024)
+        if not c: break
+        buf += c
+    pl = json.dumps({"messageType": 0, "commands": cmds}).encode(); m = _o.urandom(4)
+    hdr = bytes([0x81]); n = len(pl)
+    hdr += bytes([0x80 | n]) if n < 126 else bytes([0x80 | 126]) + _st.pack("!H", n)
+    s.sendall(hdr + m + bytes(b ^ m[i % 4] for i, b in enumerate(pl)))
+    h = s.recv(2); ln = h[1] & 0x7F
+    if ln == 126: ln = _st.unpack("!H", s.recv(2))[0]
+    elif ln == 127: ln = _st.unpack("!Q", s.recv(8))[0]
+    d = b""
+    while len(d) < ln: d += s.recv(ln - len(d))
+    s.close()
+    return json.loads(d.decode()).get("responses", [])
+def _is12_state():
+    d = {"up": False, "members": [], "classes": 0, "datatypes": 0, "product": None}
+    try:
+        r = _is12_ws_cmd([
+            {"handle": 1, "oid": 1, "methodId": {"level": 2, "index": 1}, "arguments": {"recurse": False}},
+            {"handle": 2, "oid": 3, "methodId": {"level": 1, "index": 1}, "arguments": {"id": {"level": 3, "index": 1}}},
+            {"handle": 3, "oid": 3, "methodId": {"level": 1, "index": 1}, "arguments": {"id": {"level": 3, "index": 2}}},
+            {"handle": 4, "oid": 2, "methodId": {"level": 1, "index": 1}, "arguments": {"id": {"level": 3, "index": 3}}},
+        ])
+        d["up"] = True
+        d["members"] = [m.get("role") for m in (r[0]["result"].get("value") or [])]
+        d["classes"] = len(r[1]["result"].get("value") or [])
+        d["datatypes"] = len(r[2]["result"].get("value") or [])
+        d["product"] = (r[3]["result"].get("value") or {}).get("name")
+    except Exception as e:
+        d["err"] = str(e)[:60]
+    return d
 def _auth_demo():
     """Prove enforcement: stage a no-op PATCH on Program Out WITHOUT a token, then WITH one."""
     st = _programout_state(); rid = st["receiver_id"]
@@ -1031,6 +1072,13 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    <a class="scorelink" href="https://claude.ai/code/artifact/56cef03c-ceed-495e-b1ae-a328afba1dab" target="_blank" rel="noopener">Conformance scorecard &#8599;</a>
   </div>
   </section>
+
+  <section class="grp"><div class="grphdr">Device Control &middot; IS-12</div>
+  <div id="is12wrap">
+   <div class="recrow"><span class="avlbl">Control node</span> <span id="is12up" class="avval">&mdash;</span></div>
+   <div id="is12model" class="mut">&mdash;</div>
+  </div>
+  </section>
   <section class="grp modegrp modehide" data-mode="switcher"><div class="grphdr">Production Switcher</div>
   <div id="switchwrap">
    <span id="sw-pgm" class="sw-pgm">PROGRAM &middot; &mdash;</span>
@@ -1310,6 +1358,12 @@ async function is11Constrain(){ try{await fetch("/is11/constrain?num=50&den=1",{
 async function is11Unconstrain(){ try{await fetch("/is11/unconstrain",{cache:"no-store"});}catch(e){} is11Poll(); }
 async function is11Edid(load){ try{await fetch("/is11/edid?load="+load,{cache:"no-store"});}catch(e){} is11Poll(); }
 setInterval(is11Poll, 3000); is11Poll();
+function is12Apply(d){
+  const up=document.getElementById("is12up"); if(up){ up.textContent=d.up?"online":"offline"; up.classList.toggle("on",!!d.up); }
+  const m=document.getElementById("is12model"); if(m) m.textContent=d.up?("root \u2192 "+(d.members||[]).join(" + ")+"  \u00b7  "+d.classes+" classes / "+d.datatypes+" datatypes  \u00b7  "+(d.product||"")):"control node offline";
+}
+async function is12Poll(){ try{const d=await(await fetch("/is12/state",{cache:"no-store"})).json(); is12Apply(d);}catch(e){} }
+setInterval(is12Poll, 5000); is12Poll();
 function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
 const dot=b=>b?'<span class="on-dot">&#9679;</span>':'<span class="off-dot">&#9675;</span>';
 const sid=id=>id?esc(String(id).slice(0,8)):'<span class="mut">none</span>';
@@ -1488,6 +1542,7 @@ async function runDemo(){
     await step("Restore the path. Both live again.", function(){ return go("/sps/set?path=a&up=1"); }, 5000);
     await step("IS-11 stream compatibility \u2014 the layer that keeps senders and receivers matched. Applying a grain-rate constraint retunes the sender\u2019s flow to stay within what a receiver can take (25\u219250 fps).", function(){ return go("/is11/constrain?num=50&den=1"); }, 8000);
     await step("Clear it \u2014 the flow returns to its native rate. IS-11 also carries EDID, the HDMI-style capability handshake, and passes the AMWA IS-11-01 conformance suite.", function(){ return go("/is11/unconstrain"); }, 7000);
+    await step("IS-12 device control \u2014 the modern NMOS control plane. A WebSocket carries the MS-05 object model; the rig reads its own device model live \u2014 root block, device + class managers, 6 classes and 58 datatypes.", function(){ return go("/is12/state"); }, 8000);
     cap("Demo complete \u2014 everything you saw runs live and to spec."); await nap(6000);
   }catch(e){}
   await demoReset(); await go("/layout?mode=wall"); cap("");
@@ -1678,6 +1733,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(json.dumps(_is11_unconstrain()).encode())
         elif parsed.path == "/is11/edid":
             self._send_json(json.dumps(_is11_edid(parse_qs(parsed.query).get("load",["0"])[0] in ("1","true","on"))).encode())
+        elif parsed.path == "/is12/state":
+            self._send_json(json.dumps(_is12_state()).encode())
         elif parsed.path == "/rec/start":
             self._send_json(json.dumps(_rec_start(parse_qs(parsed.query).get("src",[""])[0])).encode())
         elif parsed.path == "/rec/stop":

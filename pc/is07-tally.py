@@ -16,9 +16,10 @@
 #     {"event_type":"boolean","identity":{"source_id":...},"message_type":"state",
 #      "payload":{"value":true},"timing":{"creation_timestamp":"<TAI sec>:<nsec>"}}
 #
-#  Serves the IS-07 REST API (sources / state / type). The WebSocket transport is the other half of
-#  IS-07 and is deliberately not implemented here: no websockets library is installable on this box
-#  (PEP 668), and the REST state endpoint is part of the same spec and enough to drive tally.
+#  Serves the full IS-07 REST Events API (base paths, sources / state / type, CORS + conformant
+#  error bodies) AND the WebSocket transport -- the other half of IS-07: a hand-rolled RFC 6455
+#  server on IS07_WS_PORT streams state + health messages to subscribers, since no websockets
+#  library is installable on this box (PEP 668).
 #
 #     http://<host>:8102/x-nmos/events/v1.0/sources/            -> list
 #     http://<host>:8102/x-nmos/events/v1.0/sources/<id>/state  -> current tally state
@@ -45,6 +46,17 @@ LABEL = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "reels": "Te
 NS = uuid.UUID("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
 SRC_ID = {k: str(uuid.uuid5(NS, f"atoll:is07:tally:{k}")) for k in SOURCES}
 ID_SRC = {v: k for k, v in SRC_ID.items()}
+# --- typed event sources beyond the booleans: a number, a string, and a string-enum, all
+#     derived from the same take-state, so the node exercises every IS-07 event type ---
+EXTRA_SOURCES = ["oncount", "program", "programkey"]
+EXTRA_LABEL = {"oncount": "On-air source count", "program": "Program source label",
+               "programkey": "Program source key"}
+ENUM_VALUES = ([{"value": "none", "label": "None", "description": "No source on air"}]
+               + [{"value": k, "label": LABEL.get(k, k), "description": f"{LABEL.get(k, k)} on air"} for k in SOURCES])
+for _ek in EXTRA_SOURCES:
+    SRC_ID[_ek] = str(uuid.uuid5(NS, f"atoll:is07:evt:{_ek}"))
+ID_SRC = {v: k for k, v in SRC_ID.items()}
+ALL_SOURCES = SOURCES + EXTRA_SOURCES
 
 # TAI = UTC + 37s (current leap-second offset). IS-07 timestamps are TAI "seconds:nanoseconds",
 # the same epoch PTP distributes, so tally shares a timebase with the essence flows.
@@ -58,13 +70,50 @@ def _ts(when):
     nsec = int((when - int(when)) * 1e9)
     return f"{sec}:{nsec:09d}"
 
+def _program_key():
+    for k in SOURCES:
+        if _state[k]:
+            return k
+    return "none"
+
+def _program_label():
+    k = _program_key()
+    return "" if k == "none" else LABEL.get(k, k)
+
+def _event(key):
+    """(event_type, payload, when) for any source -- a boolean tally or a typed derived source."""
+    when = max(_changed.values()) if _changed else time.time()
+    if key in _state:
+        return "boolean", {"value": bool(_state[key])}, _changed[key]
+    if key == "oncount":
+        return "number", {"value": sum(1 for v in _state.values() if v)}, when
+    if key == "program":
+        return "string", {"value": _program_label()}, when
+    if key == "programkey":
+        return "string/enum", {"value": _program_key()}, when
+    return "boolean", {"value": False}, when
+
+def type_desc(key):
+    """IS-07 /type descriptor for any source (validates against type_*.json oneOf)."""
+    if key in _state:
+        return {"type": "boolean"}
+    if key == "oncount":
+        return {"type": "number", "min": {"value": 0}, "max": {"value": len(SOURCES)},
+                "step": {"value": 1}, "unit": "sources"}
+    if key == "program":
+        return {"type": "string", "min_length": 0, "max_length": 64}
+    if key == "programkey":
+        return {"type": "string", "values": ENUM_VALUES}
+    return {"type": "boolean"}
+
 def state_message(key):
+    et, payload, when = _event(key)
     return {
         "identity": {"source_id": SRC_ID[key]},
-        "event_type": "boolean",
+        "event_type": et,
         "message_type": "state",
-        "timing": {"creation_timestamp": _ts(_changed[key])},
-        "payload": {"value": bool(_state[key])},
+        "timing": {"creation_timestamp": _ts(when)},
+        "payload": payload,
     }
 
 def poller():
@@ -370,8 +419,23 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.end_headers()
         self.wfile.write(body)
+
+    def _err(self, code, msg):
+        # IS-07 error body must match error.json: code (int) + error + debug.
+        self._send({"code": code, "error": msg, "debug": None}, code)
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+        self.end_headers()
 
     def do_GET(self):
         p = urlparse(self.path).path.rstrip("/")
@@ -380,27 +444,30 @@ class H(http.server.BaseHTTPRequestHandler):
             self._send(["x-nmos/"])
         elif p == "/tally":
             self._send({k: _state[k] for k in SOURCES})
+        elif p == "/x-nmos":
+            self._send(["events/"])
+        elif p == "/x-nmos/events":
+            self._send(["v1.0/"])
         elif p == base:
             self._send(["sources/"])
         elif p == f"{base}/sources":
-            self._send([f"{SRC_ID[k]}/" for k in SOURCES])
+            self._send([f"{SRC_ID[k]}/" for k in ALL_SOURCES])
         elif p.startswith(f"{base}/sources/"):
             rest = p[len(f"{base}/sources/"):].split("/")
             sid = rest[0]
             key = ID_SRC.get(sid)
             if key is None:
-                self._send({"error": "unknown source"}, 404)
+                self._err(404, "unknown source")
             elif len(rest) == 1:
                 self._send(["state/", "type/"])
             elif rest[1] == "state":
                 self._send(state_message(key))
             elif rest[1] == "type":
-                self._send({"type": "boolean"})
+                self._send(type_desc(key))
             else:
-                self._send({"error": "not found"}, 404)
+                self._err(404, "not found")
         else:
-            self._send({"error": "not found"}, 404)
-
+            self._err(404, "not found")
 class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True

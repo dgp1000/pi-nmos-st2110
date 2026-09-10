@@ -632,7 +632,7 @@ The rig carries JPEG XS two ways. The convenient way muxes the SVT-JPEG-XS codes
 
 The panel has a **JPEG XS 2110-22** output mode: `output-render.sh` launches `jxs-rtp-recv.py` full-screen to decode the live `video/jxsv` in the rig UI -- the one renderer that is not a `gst-launch` pipeline, precisely because GStreamer cannot depay jxsv.
 
-The receiver locks onto the sender's RTP SSRC (ignoring any other stream on the group), drops any torn frame (SOC + sequence-gap checks) so the decoder never sees corrupt data, and paces the decoded frames to a fixed 30 fps cadence, GL-upscaled to the native 1440p panel. WSLg's vGPU is the ceiling on upscale size -- ~30 fps at 1080p, ~24 at 1440p, ~11 at 4K -- so the rig's 4K default (`ATOLL_TV_W/H`) is actually over-rendering this 2560x1440 monitor.
+The receiver locks onto the sender's RTP SSRC (ignoring any other stream on the group), drops any torn frame (SOC + sequence-gap checks) so the decoder never sees corrupt data, and paces the decoded frames to a fixed 30 fps cadence (a ~150 ms clock-aligned lead absorbs the sender's arrival jitter). Full-screen display is the awkward part on WSLg: `glimagesink` can't be forced fullscreen (Win32 window calls are ignored) and a 4K upscale only renders ~11 fps, while `waylandsink fullscreen` judders. What works is **`gtkglsink` hosted in a GTK window** put fullscreen with GTK's own `fullscreen_on_monitor` (the Wayland compositor fills the 2560x1440 panel), fed a pre-scaled 1440p GL buffer so the sink displays 1:1. Needs `gstreamer1.0-gtk3` + `gir1.2-gtk-3.0`. (WSLg vGPU render ceiling by size: ~30 fps at 1080p, ~24 at 1440p, ~11 at 4K.)
 
 ## 7. The renderers
 

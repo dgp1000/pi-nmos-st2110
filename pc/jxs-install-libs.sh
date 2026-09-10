@@ -4,6 +4,8 @@
 # and ffmpeg shows no jpegxs codec. Copy into /usr/local/lib and refresh the
 # loader cache. Run once:  sudo bash pc/jxs-install-libs.sh
 set -euo pipefail
+# ST 2110-22 fullscreen viewer deps: gtkglsink (GTK GL sink) + GTK python bindings.
+apt-get install -y gstreamer1.0-gtk3 gir1.2-gtk-3.0 || true
 SRC=/root/jxs-install/lib
 if [ ! -e "$SRC/libSvtJpegxs.so" ]; then
   echo "ERROR: $SRC/libSvtJpegxs.so not found (is SVT-JPEG-XS built?)" >&2

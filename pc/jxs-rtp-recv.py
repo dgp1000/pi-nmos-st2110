@@ -6,15 +6,17 @@ Python: join the multicast group, collect each RTP packet's codestream fragment,
 marker bit (last packet of the frame) push the whole `image/x-jxsc` codestream into an appsrc feeding
 `svtjpegxsdec`. Proves the hand-built 2110-22 stream is standards-decodable end to end.
 
-A frame is pushed only if it is whole: it must start with the JPEG XS SOC (0xFF10) AND have suffered
-no RTP sequence gap between its packets -- a partial or torn frame is dropped, so the decoder never
-sees corrupt data (which otherwise shows as ghost/flashing frames). For display the frames are paced
-by a fixed-cadence PTS (clock-aligned, small lead) with `glimagesink sync=true` and a jitter queue,
-so bursty decode output plays smoothly; the picture is GL-upscaled to fill the monitor.
+A frame is pushed only if it is whole: it must start with the JPEG XS SOC (0xFF10), come from the
+locked sender SSRC, and have no RTP sequence gap between its packets -- a partial/torn frame is
+dropped so the decoder never sees corrupt data (which otherwise shows as ghost/flashing frames).
+Frames are paced by a fixed 30 fps cadence (clock-aligned, ~150 ms lead) so bursty arrival plays
+evenly.
 
-JXS_SINK=count (default) decodes headless and reports frame count + resolution; JXS_SINK=display
-opens a full-screen window (a real tile). Env/conf: JXSV_GRP, JXSV_PORT, ISLAND_PC_IP, JXS_W/JXS_H/
-JXS_FPS/JXS_SAMPLING, JXS_WINW/JXS_WINH (display upscale target).
+JXS_SINK=count (default) decodes headless and reports frame count + resolution. JXS_SINK=display
+shows it full-screen: gtkglsink (GL, pre-scaled) hosted in a GTK window put fullscreen via GTK's own
+fullscreen_on_monitor (the Wayland compositor does the scale -- cheap and smooth on WSLg, where a
+glimagesink 4K upscale only manages ~11 fps and a Win32 resize is ignored). Env/conf: JXSV_GRP,
+JXSV_PORT, ISLAND_PC_IP, JXS_W/JXS_H/JXS_FPS/JXS_SAMPLING, JXS_MONITOR (fullscreen monitor index).
 """
 import gi, os, socket, struct, subprocess, threading, signal, time, sys
 gi.require_version("Gst", "1.0")
@@ -33,10 +35,7 @@ H    = int(os.environ.get("JXS_H", CFG.get("JXS_H") or "720"))
 FPS  = os.environ.get("JXS_FPS", CFG.get("JXS_FPS") or "30")
 SAMP = os.environ.get("JXS_SAMPLING", CFG.get("JXS_SAMPLING") or "YCbCr-4:2:2")
 SINK = os.environ.get("JXS_SINK", "count")
-# WSLg vGPU render ceiling by output size: 1080p/720p ~30 fps, 1440p ~24 fps, 4K ~11 fps.
-# Cap the upscale at the physical panel (2560x1440) -- above that just wastes GPU and stutters.
-WINW = str(min(int(os.environ.get("JXS_WINW", "2560")), 2560))
-WINH = str(min(int(os.environ.get("JXS_WINH", "1440")), 1440))
+MON  = int(os.environ.get("JXS_MONITOR", "1"))       # Gdk monitor index for fullscreen (1 = second)
 fn, fd = (FPS.split("/") + ["1"])[:2]
 FPS_N, FPS_D = int(fn), int(fd)
 FRAME_DUR = Gst.SECOND * FPS_D // FPS_N
@@ -48,49 +47,17 @@ _dec = {"n": 0, "wh": ""}
 _start = time.time()
 
 
-def main():
-    Gst.init(None)
-    if SINK == "display":
-        tail = (
-            "queue max-size-time=500000000 max-size-bytes=0 max-size-buffers=0 leaky=downstream "
-            "! svtjpegxsdec ! videoconvert "
-            "! textoverlay text='JPEG XS - ST 2110-22 (RFC 9134 video/jxsv)' valignment=top halignment=center "
-            "  font-desc='Sans Bold 22' shaded-background=true "
-            "! clockoverlay valignment=bottom halignment=right time-format='%H:%M:%S' font-desc='Sans Bold 18' shaded-background=true "
-            "! videoconvert ! glupload ! glcolorscale "
-            f"! video/x-raw(memory:GLMemory),width={WINW},height={WINH} ! glimagesink sync=true")
-    else:
-        tail = "svtjpegxsdec ! videoconvert ! video/x-raw ! appsink name=dec emit-signals=true sync=false max-buffers=4 drop=true"
-    pipe = Gst.parse_launch(f"appsrc name=src is-live=true do-timestamp=false format=time ! {CAPS} ! {tail}")
-    src = pipe.get_by_name("src")
-    src.set_property("caps", Gst.Caps.from_string(CAPS))
-    src.set_property("format", Gst.Format.TIME)
-
-    if SINK != "display":
-        def on_dec(sink):
-            s = sink.emit("pull-sample")
-            if s:
-                _dec["n"] += 1
-                st = s.get_caps().get_structure(0)
-                _dec["wh"] = f"{st.get_value('width')}x{st.get_value('height')} {st.get_value('format')}"
-            return Gst.FlowReturn.OK
-        pipe.get_by_name("dec").connect("new-sample", on_dec)
-
-    pipe.set_state(Gst.State.PLAYING)
-    print(f"jxs-rtp-recv: video/jxsv <- {GRP}:{PORT}  ({SINK} mode, {W}x{H} {SAMP}"
-          f"{', upscale '+WINW+'x'+WINH if SINK=='display' else ''})", flush=True)
-
-    stop = threading.Event()
+def start_rx(pipe, src, stop):
+    """Reassemble RFC 9134 codestream-mode RTP and push whole, in-order frames to `src`, paced."""
     _emit = {"n": 0, "base": None}
 
     def _push(data):
-        """Push one complete codestream with a clock-aligned, fixed-cadence PTS (paces the display)."""
         if data[:2] != b"\xff\x10":              # not a whole codestream (SOC missing) -> drop
             return
         if _emit["base"] is None:
             clk = pipe.get_clock()
             rt = (clk.get_time() - pipe.get_base_time()) if clk else 0
-            _emit["base"] = (rt if rt and rt > 0 else 0) + 150 * Gst.MSECOND   # small lead for the jitter queue
+            _emit["base"] = (rt if rt and rt > 0 else 0) + 150 * Gst.MSECOND   # jitter-buffer lead
         buf = Gst.Buffer.new_allocate(None, len(data), None)
         buf.fill(0, bytes(data))
         buf.pts = _emit["base"] + _emit["n"] * FRAME_DUR
@@ -123,16 +90,16 @@ def main():
             marker = (pkt[1] >> 7) & 1
             seq = (pkt[2] << 8) | pkt[3]
             ts = struct.unpack("!I", pkt[4:8])[0]
-            gap = (expect is not None and seq != expect)      # any lost/reordered packet
+            gap = (expect is not None and seq != expect)
             expect = (seq + 1) & 0xFFFF
             if cur_ts is None:
                 cur_ts = ts; corrupt = False
-            if ts != cur_ts and cur:              # new frame began before the old marker -> old frame torn
+            if ts != cur_ts and cur:             # new frame began before old marker -> old frame torn
                 cur = bytearray(); cur_ts = ts; corrupt = gap
-            if gap and cur:                       # loss inside the current frame -> mark it corrupt
+            if gap and cur:
                 corrupt = True
             cur += pkt[16:]
-            if marker:                            # end of frame
+            if marker:
                 if not corrupt:
                     _push(cur)
                 cur = bytearray(); cur_ts = None; corrupt = False
@@ -140,24 +107,92 @@ def main():
 
     threading.Thread(target=rx, daemon=True).start()
 
+
+OVERLAYS = (
+    "textoverlay text='JPEG XS - ST 2110-22 (RFC 9134 video/jxsv)' valignment=top halignment=center "
+    "font-desc='Sans Bold 22' shaded-background=true "
+    "! clockoverlay valignment=bottom halignment=right time-format='%H:%M:%S' font-desc='Sans Bold 18' shaded-background=true")
+
+
+def run_display():
+    """gtkglsink in a GTK window, fullscreen on the target monitor -- smooth (GL) + fills (compositor scale)."""
+    gi.require_version("Gtk", "3.0"); gi.require_version("Gdk", "3.0")
+    from gi.repository import Gtk, Gdk
+    pipe = Gst.parse_launch(
+        f"appsrc name=src is-live=true do-timestamp=false format=time ! {CAPS} "
+        "! queue max-size-time=500000000 max-size-bytes=0 max-size-buffers=0 leaky=downstream "
+        f"! svtjpegxsdec ! videoconvert ! {OVERLAYS} "
+        "! videoconvert ! glupload ! glcolorscale ! video/x-raw(memory:GLMemory),width=2560,height=1440 ! gtkglsink name=glsink")
+    src = pipe.get_by_name("src")
+    src.set_property("caps", Gst.Caps.from_string(CAPS)); src.set_property("format", Gst.Format.TIME)
+    glsink = pipe.get_by_name("glsink"); glsink.set_property("sync", True)
+    widget = glsink.get_property("widget")
+
+    win = Gtk.Window(); win.set_decorated(False); win.connect("destroy", Gtk.main_quit)
+    win.set_app_paintable(True)
+    win.add(widget); win.show_all()
+    disp = Gdk.Display.get_default(); n = disp.get_n_monitors() if disp else 1
+    target = MON if 0 <= MON < n else (n - 1)
+    try:
+        win.fullscreen_on_monitor(win.get_screen(), target)
+    except Exception:
+        win.fullscreen()
+    print(f"jxs-rtp-recv: GTK fullscreen on monitor {target} of {n}  ({W}x{H} {SAMP} <- {GRP}:{PORT})", flush=True)
+
+    stop = threading.Event()
+    pipe.set_state(Gst.State.PLAYING)
+    start_rx(pipe, src, stop)
+
+    def _quit(*_):
+        stop.set(); Gtk.main_quit(); return False
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, _quit)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, _quit)
+    try:
+        Gtk.main()
+    finally:
+        stop.set(); pipe.set_state(Gst.State.NULL)
+
+
+def run_count():
+    """Headless decode + report -- proves the stream is standards-decodable."""
+    pipe = Gst.parse_launch(
+        f"appsrc name=src is-live=true do-timestamp=false format=time ! {CAPS} "
+        "! svtjpegxsdec ! videoconvert ! video/x-raw ! appsink name=dec emit-signals=true sync=false max-buffers=4 drop=true")
+    src = pipe.get_by_name("src")
+    src.set_property("caps", Gst.Caps.from_string(CAPS)); src.set_property("format", Gst.Format.TIME)
+
+    def on_dec(sink):
+        s = sink.emit("pull-sample")
+        if s:
+            _dec["n"] += 1
+            st = s.get_caps().get_structure(0)
+            _dec["wh"] = f"{st.get_value('width')}x{st.get_value('height')} {st.get_value('format')}"
+        return Gst.FlowReturn.OK
+    pipe.get_by_name("dec").connect("new-sample", on_dec)
+
+    stop = threading.Event()
+    pipe.set_state(Gst.State.PLAYING)
+    print(f"jxs-rtp-recv: count mode, {W}x{H} {SAMP} <- {GRP}:{PORT}", flush=True)
+    start_rx(pipe, src, stop)
+
     loop = GLib.MainLoop()
     def report():
         dt = max(0.001, time.time() - _start)
-        if SINK == "display":
-            print(f"jxs-rtp-recv: pushed {_emit['n']} frames  ({_emit['n']/dt:.1f} fps to the sink)", flush=True)
-        else:
-            print(f"jxs-rtp-recv: decoded {_dec['n']} frames  ({_dec['n']/dt:.1f} fps)  {_dec['wh']}", flush=True)
+        print(f"jxs-rtp-recv: decoded {_dec['n']} frames  ({_dec['n']/dt:.1f} fps)  {_dec['wh']}", flush=True)
         return True
     GLib.timeout_add_seconds(2, report)
-
     def _stop(*_):
         stop.set(); pipe.set_state(Gst.State.NULL); loop.quit()
-    signal.signal(signal.SIGTERM, _stop)
-    signal.signal(signal.SIGINT, _stop)
+    signal.signal(signal.SIGTERM, _stop); signal.signal(signal.SIGINT, _stop)
     try:
         loop.run()
     finally:
         stop.set(); pipe.set_state(Gst.State.NULL)
+
+
+def main():
+    Gst.init(None)
+    run_display() if SINK == "display" else run_count()
 
 
 if __name__ == "__main__":

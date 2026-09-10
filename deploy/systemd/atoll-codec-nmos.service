@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll H.264/H.265 NMOS registrar + SDP (IS-04 / BCP-006-02 video/H264 + video/H265)
+After=network-online.target atoll-h264.service atoll-h265.service
+Wants=network-online.target
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/usr/bin/python3 -u /home/david/pi-nmos-st2110/pc/codec-nmos.py
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

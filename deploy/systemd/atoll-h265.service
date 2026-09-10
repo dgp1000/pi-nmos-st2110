@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll H.265/HEVC over RTP sender (RFC 7798, video/H265 for BCP-006-02)
+After=network-online.target
+Wants=network-online.target
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/bin/bash /home/david/pi-nmos-st2110/pc/h265-send.sh
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target

@@ -933,6 +933,16 @@ Seven things Atoll adds to the stock nmos-cpp stack:
 `source_id(key)`, `device_id()`): reconnects with capped backoff, treats 20 s of silence as a
 dead link, fires callbacks on its own thread.
 
+8. **IS-10 authorization (BCP-003-02).** `auth-server.py` (`:8106`) is the OAuth 2.0 / JWT
+   authorization server and `program-out.py` enforces its tokens (see §5.6). The AMWA
+   `nmos-testing` **IS-10-01** suite is disabled in the current build (`IS1001Test` is unregistered
+   and its `__init__` no longer matches the harness -- the maintainers pulled it "until testing can
+   be refactored to deal with commercial servers"), so an official automated pass is not currently
+   possible with the tool. Instead `pc/is10-conformance.py` checks the server against the specs it
+   implements -- RFC 8414 metadata, the JWKS, an RS256 JWT whose signature verifies against the JWKS
+   and whose claims carry the BCP-003-02 `x-nmos-<api>` access rights, `client_credentials` issuance,
+   RFC 7591 registration, and rejection of unsupported grants: **31/31 checks pass**.
+
 ---
 
 ## 9. The analyser

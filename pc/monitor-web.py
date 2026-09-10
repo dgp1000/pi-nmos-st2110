@@ -691,6 +691,20 @@ def _rec_delete(fn):
     try: os.remove(os.path.join(RECDIR, b))
     except Exception as e: return {"error": str(e)}
     return {"deleted": b}
+def _rec_rename(old, new):
+    b = os.path.basename(old or "")
+    n = os.path.basename((new or "").strip())
+    n = "".join(ch if (ch.isalnum() or ch in " ._()-") else "_" for ch in n).strip().strip(".")
+    if not n: return {"error": "empty name"}
+    if not n.lower().endswith(".ts"): n += ".ts"
+    src = os.path.join(RECDIR, b); dst = os.path.join(RECDIR, n)
+    if not os.path.isfile(src): return {"error": "no such file"}
+    if os.path.exists(dst): return {"error": "name exists"}
+    if _alive(_rec) and _rec["file"] == b: return {"error": "recording"}
+    if _alive(_play) and _play["file"] == b: return {"error": "playing"}
+    try: os.rename(src, dst)
+    except Exception as e: return {"error": str(e)}
+    return {"renamed": n}
 def _avsync_get():
     try: return int(open(AVSYNC_KNOB).read().strip())
     except Exception: return 30
@@ -872,7 +886,9 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  .recrow button,#cliplist button,#playrow button{font-size:min(1.7vw,2vh);padding:.35em .7em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
  #recstopb.on{background:#c22;color:#fff;border-color:#f55;font-weight:bold}
  #recstat{color:#9c9;font-variant-numeric:tabular-nums}
- #cliplist{display:flex;flex-direction:column;gap:.35vh;width:100%}
+ #cliptoggle{font-size:min(1.7vw,2vh);padding:.4em .9em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
+ #cliplist{display:none;flex-direction:column;gap:.35vh;width:100%}
+ .clip .ed{flex:1;font-size:min(1.5vw,1.8vh);background:#06100c;border:1px solid #1a3a2a;color:#cfc;border-radius:5px;padding:.25em .5em}
  .clip{display:flex;align-items:center;gap:.5vw;font-size:min(1.5vw,1.8vh);color:#9c9;background:#0a1410;border:1px solid #12352a;border-radius:6px;padding:.3em .6em}
  .clip .nm{flex:1;text-align:left;font-variant-numeric:tabular-nums}
  .clip.playing{border-color:#0f0;color:#cfc}
@@ -1038,6 +1054,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
     <button id="recstopb" onclick="recStop()">&#9632; Stop</button>
     <span id="recstat" class="avval">idle</span>
    </div>
+   <button id="cliptoggle" onclick="toggleClips()">&#127902; Recordings</button>
    <div id="cliplist"></div>
    <div id="playrow"><span id="playstat" class="mut">&mdash;</span><button id="playstopb" onclick="playStop()">Stop playback</button></div>
   </div>
@@ -1301,14 +1318,27 @@ async function recPoll(){ try{const d=await(await fetch("/rec/status",{cache:"no
    recRenderPlaying();
   }catch(e){} }
 function recRenderPlaying(){ document.querySelectorAll("#cliplist .clip").forEach(function(c){ c.classList.toggle("playing", c.getAttribute("data-f")===_recPlaying); }); }
-async function recList(){ try{const a=await(await fetch("/rec/list",{cache:"no-store"})).json();
+let _recEditing=false, clipsOpen=false;
+function toggleClips(){ clipsOpen=!clipsOpen; document.getElementById("cliplist").style.display=clipsOpen?"flex":"none"; if(clipsOpen) recList(); }
+async function recList(){ if(_recEditing) return; try{const a=await(await fetch("/rec/list",{cache:"no-store"})).json();
+   const tg=document.getElementById("cliptoggle"); if(tg) tg.innerHTML="&#127902; Recordings ("+a.length+")";
    const box=document.getElementById("cliplist");
-   box.innerHTML = a.length? a.map(function(c){var n=esc(c.name);return '<div class="clip" data-f="'+n+'"><span class="nm">'+n+'  '+c.mb+' MB</span><button class="rpl" data-f="'+n+'">Play</button><button class="rlp" data-f="'+n+'">Loop</button><button class="rdl" data-f="'+n+'">Del</button></div>';}).join('') : '<span class="mut">no recordings yet</span>';
+   box.innerHTML = a.length? a.map(function(c){var n=esc(c.name);return '<div class="clip" data-f="'+n+'"><span class="nm">'+n+'  '+c.mb+' MB</span><button class="rpl" data-f="'+n+'">Play</button><button class="rlp" data-f="'+n+'">Loop</button><button class="rnm" data-f="'+n+'">Ren</button><button class="rdl" data-f="'+n+'">Del</button></div>';}).join('') : '<span class="mut">no recordings yet</span>';
    box.querySelectorAll(".rpl").forEach(function(b){b.onclick=function(){playStart(b.getAttribute("data-f"),false);};});
    box.querySelectorAll(".rlp").forEach(function(b){b.onclick=function(){playStart(b.getAttribute("data-f"),true);};});
+   box.querySelectorAll(".rnm").forEach(function(b){b.onclick=function(){recEditStart(b);};});
    box.querySelectorAll(".rdl").forEach(function(b){b.onclick=function(){recDelete(b.getAttribute("data-f"));};});
    recRenderPlaying();
   }catch(e){} }
+function recEditStart(btn){ _recEditing=true; var row=btn.closest(".clip"); var f=btn.getAttribute("data-f");
+   var base=f.toLowerCase().endsWith(".ts")?f.slice(0,-3):f;
+   row.innerHTML='<input class="ed" type="text" value="'+esc(base)+'"><button class="rsv">Save</button><button class="rcx">Cancel</button>';
+   var inp=row.querySelector(".ed"); inp.focus(); inp.select();
+   inp.onkeydown=function(e){ if(e.key==="Enter"){recEditSave(f,inp.value);} else if(e.key==="Escape"){recEditCancel();} };
+   row.querySelector(".rsv").onclick=function(){recEditSave(f,inp.value);};
+   row.querySelector(".rcx").onclick=function(){recEditCancel();}; }
+async function recEditSave(f,name){ _recEditing=false; var nm=(name||"").trim(); if(nm){ try{await fetch("/rec/rename?file="+encodeURIComponent(f)+"&name="+encodeURIComponent(nm),{cache:"no-store"});}catch(e){} } recList(); }
+function recEditCancel(){ _recEditing=false; recList(); }
 setInterval(recPoll, 1000); setInterval(recList, 4000); recPoll(); recList();
 let _ccOn=false;
 async function ccToggle(){ _ccOn=!_ccOn; try{await fetch("/cc/set?on="+(_ccOn?1:0),{cache:"no-store"});}catch(e){} ccRender(); }
@@ -1765,6 +1795,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(json.dumps(_rec_list()).encode())
         elif parsed.path == "/rec/delete":
             self._send_json(json.dumps(_rec_delete(parse_qs(parsed.query).get("file",[""])[0])).encode())
+        elif parsed.path == "/rec/rename":
+            _rq = parse_qs(parsed.query)
+            self._send_json(json.dumps(_rec_rename(_rq.get("file",[""])[0], _rq.get("name",[""])[0])).encode())
         elif parsed.path == "/play/start":
             _q = parse_qs(parsed.query)
             self._send_json(json.dumps(_play_start(_q.get("file",[""])[0], _q.get("loop",["0"])[0] in ("1","true","on"))).encode())

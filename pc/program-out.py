@@ -30,7 +30,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 NEED = ["ATOLL_RUN", "NMOS_REGISTRY", "NMOS_ADVERTISE_HOST", "PROGRAMOUT_PORT", "AUTH_PORT",
         "HEVC_GRP", "HEVC_PORT", "HOME_GRP", "HOME_PORT", "MUSIC_GRP", "MUSIC_PORT",
         "H264_GRP", "H264_PORT", "MJPEG_GRP", "MJPEG_PORT", "VP9_GRP", "VP9_PORT",
-        "J2K_GRP", "J2K_PORT", "TSRTP_GRP", "TSRTP_PORT", "PI_RAW_GRP", "PI_RAW_PORT"]
+        "J2K_GRP", "J2K_PORT", "TSRTP_GRP", "TSRTP_PORT", "PI_RAW_GRP", "PI_RAW_PORT",
+        "JXSV_GRP", "JXSV_PORT"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
 RUN = CFG.get("ATOLL_RUN") or "/home/david/atoll-run"
@@ -73,6 +74,7 @@ _FLOWS = [
     ("mjpeg", "MJPEG", "MJPEG RTP",       "video/jpeg"),
     ("vp9",   "VP9",   "VP9 RTP",         "video/VP9"),
     ("j2k",   "J2K",   "JPEG 2000",       "video/jpeg2000"),
+    ("jxsv",  "JXSV",  "JPEG XS 2110-22", "video/jxsv"),
     ("tsrtp", "TSRTP", "TS over RTP",     "video/MP2T"),
     ("raw",   "PI_RAW","Pi raw 2110-20",  "video/raw"),
 ]

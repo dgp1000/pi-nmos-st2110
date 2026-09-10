@@ -114,6 +114,9 @@ build_pipeline() {   # $1=layout  $2=active
       # meter-view single-view, or an idle card when nothing is connected.
       if [ "$2" = "none" ] || [ -z "$2" ]; then
         echo "gst-launch-1.0 -q videotestsrc pattern=black is-live=true ! video/x-raw,width=1920,height=1080,framerate=30/1 ! textoverlay text='Program Out: no route (connect a flow over IS-05)' valignment=center halignment=center font-desc='$F' ! $BRAND ! $VIDEO_SINK sync=false"
+      elif [ "$2" = "jxsv" ]; then
+        # JPEG XS 2110-22 (video/jxsv): no gst depay -> the Python receiver decodes it full-screen.
+        echo "JXS_SINK=display python3 \"$DIR/jxs-rtp-recv.py\""
       else
         echo "ATOLL_METER_NOPANEL=1 python3 \"$DIR/meter-view.py\" \"$2\" \"$SCREEN\""
       fi

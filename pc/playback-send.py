@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""Atoll recording PLAYBACK sender. Streams a recorded MPEG-TS file to a multicast group in proper
-1316-byte (7 x 188) datagrams, paced to the stream's own PCR clock so it plays at real time (the
-tsparse->udpsink path fails: it aggregates into >64 KB buffers). Optional looping. Used by the
-panel's Record/Playback controls; replays to the Test Reels group so you select "Test Reels" to watch.
+"""Atoll recording PLAYBACK sender. Streams one or more recorded MPEG-TS files to a multicast group in
+proper 1316-byte (7 x 188) datagrams, paced to each stream's own PCR clock so it plays at real time
+(the tsparse->udpsink path fails: it aggregates into >64 KB buffers). Multiple files play back-to-back
+from the same socket with no teardown between them, so a playlist streams as one continuous output
+(the receiver rides the PCR discontinuity at each boundary and resumes at the next keyframe). Optional
+looping restarts the whole list. Used by the panel's Record/Playback + Playlist controls; replays to
+the Test Reels group, so you select "Test Reels" to watch.
 
-Usage: playback-send.py <file.ts> <grp> <port> <iface-ip> <ttl> [loop]
+Usage: playback-send.py <grp> <port> <iface-ip> <ttl> <loop:0|1> <file.ts> [file2.ts ...]
 """
-import socket, struct, sys, time
+import socket, sys, time
 
-FILE = sys.argv[1]
-GRP  = sys.argv[2]
-PORT = int(sys.argv[3])
-IFIP = sys.argv[4]
-TTL  = int(sys.argv[5])
-LOOP = len(sys.argv) > 6 and sys.argv[6] in ("1", "loop", "true")
+GRP  = sys.argv[1]
+PORT = int(sys.argv[2])
+IFIP = sys.argv[3]
+TTL  = int(sys.argv[4])
+LOOP = sys.argv[5] in ("1", "loop", "true")
+FILES = sys.argv[6:]
 
 TS = 188
 DGRAM = TS * 7            # 1316-byte datagrams, as the senders emit
@@ -64,32 +67,45 @@ def sched_time(offset, pts):
     return (t1 + (offset - o1) * rate) - pts[0][1]
 
 
-def main():
-    buf = open(FILE, "rb").read()
+def load(fn):
+    buf = open(fn, "rb").read()
     pts = pcr_map(buf)
     if len(pts) < 2:
         # no usable PCRs -> fall back to a nominal 8 Mbps constant pace
         dur = max(0.5, len(buf) * 8 / 8_000_000)
         pts = [(0, 0.0), (len(buf), dur)]
+    span = sched_time(len(buf), pts) or 0.0
+    return buf, pts, span
+
+
+def main():
+    if not FILES:
+        print("playback: no files", flush=True); return
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, TTL)
     s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(IFIP))
-    span = sched_time(len(buf), pts) or 0.0
-    print(f"playback: {FILE} -> {GRP}:{PORT}  {len(buf)/1e6:.1f} MB, {span:.1f}s{' (loop)' if LOOP else ''}", flush=True)
+    print(f"playback: {len(FILES)} file(s) -> {GRP}:{PORT}{' (loop)' if LOOP else ''}", flush=True)
     while True:
-        t0 = time.time()
-        off = 0
-        while off < len(buf):
-            chunk = buf[off:off + DGRAM]
-            due = sched_time(off, pts) or 0.0
-            dt = t0 + due - time.time()
-            if dt > 0:
-                time.sleep(dt)
+        base = time.time()
+        elapsed = 0.0                              # continuous timeline across the whole list
+        for fn in FILES:
             try:
-                s.sendto(chunk, (GRP, PORT))
+                buf, pts, span = load(fn)
             except OSError:
-                pass
-            off += DGRAM
+                print(f"playback: skip missing {fn}", flush=True); continue
+            off = 0
+            while off < len(buf):
+                chunk = buf[off:off + DGRAM]
+                due = sched_time(off, pts) or 0.0
+                dt = base + elapsed + due - time.time()
+                if dt > 0:
+                    time.sleep(dt)
+                try:
+                    s.sendto(chunk, (GRP, PORT))
+                except OSError:
+                    pass
+                off += DGRAM
+            elapsed += span
         if not LOOP:
             break
     print("playback: done", flush=True)

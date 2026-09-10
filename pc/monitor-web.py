@@ -680,7 +680,7 @@ def _play_start(fn, loop):
     _kill(_play["proc"])
     path = os.path.join(RECDIR, os.path.basename(fn or ""))
     if not os.path.isfile(path): return {"error": "no such file"}
-    cmd = f'python3 "{os.path.join(_HERE, "playback-send.py")}" "{path}" {_REELS_G} {_REELS_P} {_PC_IP} {_TTL} {"loop" if loop else ""}'
+    cmd = f'python3 "{os.path.join(_HERE, "playback-send.py")}" {_REELS_G} {_REELS_P} {_PC_IP} {_TTL} {1 if loop else 0} "{path}"'
     _play.update(proc=_spawn(cmd), file=os.path.basename(fn), loop=bool(loop))
     return _rec_status()
 def _play_stop():
@@ -705,6 +705,54 @@ def _rec_rename(old, new):
     try: os.rename(src, dst)
     except Exception as e: return {"error": str(e)}
     return {"renamed": n}
+PLFILE = os.path.join(RECDIR, "playlists.json")
+def _pl_clean(name):
+    return "".join(ch if (ch.isalnum() or ch in " ._()-") else "_" for ch in (name or "")).strip().strip(".")
+def _pl_load():
+    try: return json.load(open(PLFILE))
+    except Exception: return {}
+def _pl_save_all(d):
+    os.makedirs(RECDIR, exist_ok=True)
+    tmp = PLFILE + ".tmp"; json.dump(d, open(tmp, "w")); os.replace(tmp, PLFILE)
+def _pl_list():
+    d = _pl_load(); have = {c["name"] for c in _rec_list()}
+    out = []
+    for k in sorted(d):
+        items = [x for x in d[k] if isinstance(x, str)]
+        out.append({"name": k, "items": items, "count": len(items),
+                    "missing": [x for x in items if x not in have]})
+    return out
+def _pl_save(name, items_json):
+    n = _pl_clean(name)
+    if not n: return {"error": "empty name"}
+    try: items = json.loads(items_json or "[]")
+    except Exception: return {"error": "bad items"}
+    if not isinstance(items, list): return {"error": "bad items"}
+    have = {c["name"] for c in _rec_list()}
+    clean = [b for b in (os.path.basename(str(x)) for x in items) if b in have]   # real clips, order+dupes kept
+    d = _pl_load(); d[n] = clean; _pl_save_all(d)
+    return {"saved": n, "count": len(clean)}
+def _pl_delete(name):
+    d = _pl_load(); n = _pl_clean(name)
+    if n not in d: return {"error": "no such playlist"}
+    del d[n]; _pl_save_all(d); return {"deleted": n}
+def _pl_rename(name, to):
+    d = _pl_load(); a = _pl_clean(name); b = _pl_clean(to)
+    if a not in d: return {"error": "no such playlist"}
+    if not b: return {"error": "empty name"}
+    if b in d and b != a: return {"error": "name exists"}
+    d[b] = d.pop(a); _pl_save_all(d); return {"renamed": b}
+def _pl_play(name, loop):
+    n = _pl_clean(name); items = _pl_load().get(n)
+    if items is None: return {"error": "no such playlist"}
+    paths = [os.path.join(RECDIR, os.path.basename(x)) for x in items]
+    paths = [p for p in paths if os.path.isfile(p)]
+    if not paths: return {"error": "playlist empty / files missing"}
+    _kill(_play["proc"])
+    q = " ".join(f'"{p}"' for p in paths)
+    cmd = f'python3 "{os.path.join(_HERE, "playback-send.py")}" {_REELS_G} {_REELS_P} {_PC_IP} {_TTL} {1 if loop else 0} {q}'
+    _play.update(proc=_spawn(cmd), file="playlist: " + n, loop=bool(loop))
+    return _rec_status()
 def _avsync_get():
     try: return int(open(AVSYNC_KNOB).read().strip())
     except Exception: return 30
@@ -889,6 +937,18 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #cliptoggle{font-size:min(1.7vw,2vh);padding:.4em .9em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
  #cliplist{display:none;flex-direction:column;gap:.35vh;width:100%}
  .clip .ed{flex:1;font-size:min(1.5vw,1.8vh);background:#06100c;border:1px solid #1a3a2a;color:#cfc;border-radius:5px;padding:.25em .5em}
+ #pltoggle{font-size:min(1.7vw,2vh);padding:.4em .9em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:6px}
+ #plwrap{display:none;flex-direction:column;gap:.4vh;width:100%}
+ #plwrap button{font-size:min(1.4vw,1.7vh);padding:.28em .55em;background:#0a1410;border:1px solid #1a3a2a;color:#9c9;border-radius:5px}
+ #plwrap input,#plwrap select{font-size:min(1.4vw,1.7vh);background:#06100c;border:1px solid #1a3a2a;color:#cfc;border-radius:5px;padding:.25em .5em}
+ .pl{background:#0a1410;border:1px solid #12352a;border-radius:6px;padding:.35em .55em}
+ .plhdr{display:flex;align-items:center;gap:.4vw;font-size:min(1.5vw,1.8vh);color:#9c9}
+ .plhdr .plname{flex:1;text-align:left}
+ .plitems{display:flex;flex-direction:column;gap:.25vh;margin-top:.4vh}
+ .pli{display:flex;align-items:center;gap:.4vw;font-size:min(1.35vw,1.65vh);color:#8b8;padding:.2em .45em;background:#06100c;border:1px solid #12352a;border-radius:5px}
+ .pli .pnm{flex:1;text-align:left;font-variant-numeric:tabular-nums}
+ .pli.miss .pnm{color:#d77}
+ .plnew{display:flex;gap:.4vw;margin-top:.35vh}
  .clip{display:flex;align-items:center;gap:.5vw;font-size:min(1.5vw,1.8vh);color:#9c9;background:#0a1410;border:1px solid #12352a;border-radius:6px;padding:.3em .6em}
  .clip .nm{flex:1;text-align:left;font-variant-numeric:tabular-nums}
  .clip.playing{border-color:#0f0;color:#cfc}
@@ -1056,6 +1116,8 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
    </div>
    <button id="cliptoggle" onclick="toggleClips()">&#127902; Recordings</button>
    <div id="cliplist"></div>
+   <button id="pltoggle" onclick="togglePls()">&#128220; Playlists</button>
+   <div id="plwrap"></div>
    <div id="playrow"><span id="playstat" class="mut">&mdash;</span><button id="playstopb" onclick="playStop()">Stop playback</button></div>
   </div>
   </section>
@@ -1339,6 +1401,65 @@ function recEditStart(btn){ _recEditing=true; var row=btn.closest(".clip"); var 
    row.querySelector(".rcx").onclick=function(){recEditCancel();}; }
 async function recEditSave(f,name){ _recEditing=false; var nm=(name||"").trim(); if(nm){ try{await fetch("/rec/rename?file="+encodeURIComponent(f)+"&name="+encodeURIComponent(nm),{cache:"no-store"});}catch(e){} } recList(); }
 function recEditCancel(){ _recEditing=false; recList(); }
+let plOpen=false, _pls=[], _plEdit=null;
+function togglePls(){ plOpen=!plOpen; document.getElementById("plwrap").style.display=plOpen?"flex":"none"; if(plOpen) plList(); }
+async function plList(){ try{_pls=await(await fetch("/pl/list",{cache:"no-store"})).json();}catch(e){_pls=[];}
+   const tg=document.getElementById("pltoggle"); if(tg) tg.innerHTML="&#128220; Playlists ("+_pls.length+")";
+   plRender(); }
+function _plFind(n){ for(var i=0;i<_pls.length;i++){ if(_pls[i].name===n) return _pls[i]; } return null; }
+function plRender(){
+   const w=document.getElementById("plwrap"); if(!w) return; var html="";
+   for(var i=0;i<_pls.length;i++){ var p=_pls[i]; var nm=esc(p.name); var ed=(_plEdit===p.name);
+      html+='<div class="pl"><div class="plhdr"><span class="plname">'+nm+' ('+p.count+')</span>'
+         +'<button class="plp" data-n="'+nm+'">Play</button><button class="pll" data-n="'+nm+'">Loop</button>'
+         +'<button class="ple" data-n="'+nm+'">'+(ed?"Done":"Edit")+'</button>'
+         +'<button class="plr" data-n="'+nm+'">Ren</button><button class="pld" data-n="'+nm+'">Del</button></div>';
+      if(ed){ html+='<div class="plitems">';
+         if(!p.items.length){ html+='<span class="mut">empty — add a clip below</span>'; }
+         for(var j=0;j<p.items.length;j++){ var it=esc(p.items[j]); var miss=p.missing.indexOf(p.items[j])>=0;
+            html+='<div class="pli'+(miss?" miss":"")+'"><span class="pnm">'+(j+1)+'. '+it+(miss?" (missing)":"")+'</span>'
+               +'<button class="pup" data-n="'+nm+'" data-i="'+j+'">↑</button>'
+               +'<button class="pdn" data-n="'+nm+'" data-i="'+j+'">↓</button>'
+               +'<button class="prm" data-n="'+nm+'" data-i="'+j+'">✕</button></div>'; }
+         html+='<div class="plnew"><select class="padd" data-n="'+nm+'"><option value="">+ add clip…</option></select></div></div>';
+      }
+      html+='</div>';
+   }
+   html+='<div class="plnew"><input class="pnew" type="text" placeholder="new playlist name"><button id="plcreate">Create</button></div>';
+   w.innerHTML=html;
+   w.querySelectorAll(".plp").forEach(function(b){b.onclick=function(){plPlay(b.getAttribute("data-n"),false);};});
+   w.querySelectorAll(".pll").forEach(function(b){b.onclick=function(){plPlay(b.getAttribute("data-n"),true);};});
+   w.querySelectorAll(".ple").forEach(function(b){b.onclick=function(){plEditToggle(b.getAttribute("data-n"));};});
+   w.querySelectorAll(".plr").forEach(function(b){b.onclick=function(){plRename(b);};});
+   w.querySelectorAll(".pld").forEach(function(b){b.onclick=function(){plDelete(b.getAttribute("data-n"));};});
+   w.querySelectorAll(".pup").forEach(function(b){b.onclick=function(){plMove(b.getAttribute("data-n"),+b.getAttribute("data-i"),-1);};});
+   w.querySelectorAll(".pdn").forEach(function(b){b.onclick=function(){plMove(b.getAttribute("data-n"),+b.getAttribute("data-i"),1);};});
+   w.querySelectorAll(".prm").forEach(function(b){b.onclick=function(){plItemRemove(b.getAttribute("data-n"),+b.getAttribute("data-i"));};});
+   var cr=document.getElementById("plcreate"); if(cr) cr.onclick=function(){plCreate(w.querySelector(".pnew").value);};
+   var pn=w.querySelector(".pnew"); if(pn) pn.onkeydown=function(e){ if(e.key==="Enter") plCreate(pn.value); };
+   plFillAdd(w);
+}
+async function plFillAdd(w){ var sels=w.querySelectorAll(".padd"); if(!sels.length) return;
+   var names=[]; try{var a=await(await fetch("/rec/list",{cache:"no-store"})).json(); names=a.map(function(c){return c.name;});}catch(e){}
+   sels.forEach(function(sel){ names.forEach(function(n){ var o=document.createElement("option"); o.value=n; o.textContent=n; sel.appendChild(o); });
+      sel.onchange=function(){ if(sel.value) plItemAdd(sel.getAttribute("data-n"), sel.value); }; });
+}
+function plEditToggle(n){ _plEdit=(_plEdit===n?null:n); plRender(); }
+async function _plSaveItems(n, items){ try{await fetch("/pl/save?name="+encodeURIComponent(n)+"&items="+encodeURIComponent(JSON.stringify(items)),{cache:"no-store"});}catch(e){} await plList(); }
+function plItemAdd(n, f){ var p=_plFind(n); if(!p) return; var items=p.items.slice(); items.push(f); _plSaveItems(n, items); }
+function plItemRemove(n, i){ var p=_plFind(n); if(!p) return; var items=p.items.slice(); items.splice(i,1); _plSaveItems(n, items); }
+function plMove(n, i, d){ var p=_plFind(n); if(!p) return; var items=p.items.slice(); var j=i+d; if(j<0||j>=items.length) return; var t=items[i]; items[i]=items[j]; items[j]=t; _plSaveItems(n, items); }
+async function plCreate(name){ var nm=(name||"").trim(); if(!nm) return; _plEdit=nm; await _plSaveItems(nm, []); }
+async function plDelete(n){ try{await fetch("/pl/delete?name="+encodeURIComponent(n),{cache:"no-store"});}catch(e){} if(_plEdit===n) _plEdit=null; await plList(); }
+function plRename(btn){ var pl=btn.closest(".pl"); var n=btn.getAttribute("data-n"); var span=pl.querySelector(".plname");
+   span.innerHTML='<input class="pren" type="text" value="'+esc(n)+'"> <button class="prsv">Save</button> <button class="prcx">Cancel</button>';
+   var inp=span.querySelector(".pren"); inp.focus(); inp.select();
+   inp.onkeydown=function(e){ if(e.key==="Enter"){plRenameSave(n,inp.value);} else if(e.key==="Escape"){plRender();} };
+   span.querySelector(".prsv").onclick=function(){plRenameSave(n,inp.value);};
+   span.querySelector(".prcx").onclick=function(){plRender();}; }
+async function plRenameSave(n, to){ var t=(to||"").trim(); if(t){ try{await fetch("/pl/rename?name="+encodeURIComponent(n)+"&to="+encodeURIComponent(t),{cache:"no-store"});}catch(e){} if(_plEdit===n) _plEdit=t; } await plList(); }
+async function plPlay(n, loop){ try{await fetch("/pl/play?name="+encodeURIComponent(n)+"&loop="+(loop?1:0),{cache:"no-store"});}catch(e){} recPoll(); }
+plList();
 setInterval(recPoll, 1000); setInterval(recList, 4000); recPoll(); recList();
 let _ccOn=false;
 async function ccToggle(){ _ccOn=!_ccOn; try{await fetch("/cc/set?on="+(_ccOn?1:0),{cache:"no-store"});}catch(e){} ccRender(); }
@@ -1803,6 +1924,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(json.dumps(_play_start(_q.get("file",[""])[0], _q.get("loop",["0"])[0] in ("1","true","on"))).encode())
         elif parsed.path == "/play/stop":
             self._send_json(json.dumps(_play_stop()).encode())
+        elif parsed.path == "/pl/list":
+            self._send_json(json.dumps(_pl_list()).encode())
+        elif parsed.path == "/pl/save":
+            _q = parse_qs(parsed.query)
+            self._send_json(json.dumps(_pl_save(_q.get("name",[""])[0], _q.get("items",["[]"])[0])).encode())
+        elif parsed.path == "/pl/delete":
+            self._send_json(json.dumps(_pl_delete(parse_qs(parsed.query).get("name",[""])[0])).encode())
+        elif parsed.path == "/pl/rename":
+            _q = parse_qs(parsed.query)
+            self._send_json(json.dumps(_pl_rename(_q.get("name",[""])[0], _q.get("to",[""])[0])).encode())
+        elif parsed.path == "/pl/play":
+            _q = parse_qs(parsed.query)
+            self._send_json(json.dumps(_pl_play(_q.get("name",[""])[0], _q.get("loop",["0"])[0] in ("1","true","on"))).encode())
         elif parsed.path == "/fec/state":
             self._send_json(fec_state())
         elif parsed.path == "/fec/set":

@@ -913,6 +913,10 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  .grp{margin-top:1.3vh;padding-top:.7vh;border-top:1px solid #12352a;display:flex;flex-direction:column;align-items:center;width:100%}
  .scorelink{display:inline-block;margin-top:.7vh;color:#6cf;text-decoration:none;font-size:min(1.6vw,1.9vh);border:1px solid #245;border-radius:6px;padding:.3em .7em;background:#0a1622}
  .scorelink:active{background:#123}
+ .grphdr[data-tip]{cursor:help}
+ .grphdr[data-tip]::after{content:" \2139";color:#6cf;font-size:.8em;opacity:.75;font-weight:normal}
+ #tip{position:fixed;max-width:min(82vw,360px);background:#0b1a24;color:#d3e8f6;border:1px solid #2b5068;border-radius:8px;padding:.55em .75em;font-size:min(1.55vw,1.9vh);line-height:1.42;box-shadow:0 6px 22px rgba(0,0,0,.55);z-index:60;pointer-events:none;opacity:0;display:none}
+ #tip.on{opacity:1;display:block}
  .grphdr{color:#6cba90;font-size:min(1.55vw,1.85vh);letter-spacing:.14em;text-transform:uppercase;font-weight:600;margin-bottom:.35vh;opacity:.85}
  .modegrp.modehide{display:none}
  #music{margin-top:.8vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
@@ -980,7 +984,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   <div id="finfo"></div>
   <div id="loud"></div>
 
-  <section class="grp"><div class="grphdr">Sources &middot; take to output</div>
+  <section class="grp"><div class="grphdr" data-tip="Pick a live source and take it to the output - a real AMWA IS-05 connection; the on-air tally follows over IS-07.">Sources &middot; take to output</div>
   <div id="ctrl">
    <button id="bjxs" onclick="take('jxs',this)">Home videos</button>
    <button id="braw" onclick="take('raw',this)">Pi raw 2110-20</button>
@@ -998,7 +1002,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   </div>
   </section>
 
-  <section class="grp"><div class="grphdr">Output &middot; Monitor 2</div>
+  <section class="grp"><div class="grphdr" data-tip="How Monitor 2 renders: single, side-by-side, 2x2 multiview, wall, Program Out, the switcher, or the JPEG XS 2110-22 view.">Output &middot; Monitor 2</div>
   <div id="lay">
    <button id="lsingle" onclick="setLayout('single')">Follow take</button>
    <button id="lside" onclick="setLayout('side')">Side &times; 2</button>
@@ -1027,7 +1031,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   </div>
   </section>
 
-  <section class="grp"><div class="grphdr">Record &amp; Playback</div>
+  <section class="grp"><div class="grphdr" data-tip="Record a source's live multicast to a timestamped file, then replay it PCR-paced as just another source.">Record &amp; Playback</div>
   <div id="recwrap">
    <div class="recrow">
     <button id="recgo" onclick="recStart()">&#9679; Record current source</button>
@@ -1039,7 +1043,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   </div>
   </section>
 
-  <section class="grp"><div class="grphdr">IS-10 Authorization &middot; BCP-003-02</div>
+  <section class="grp"><div class="grphdr" data-tip="OAuth2 / JWT security. With enforcement on, Program Out needs a signed bearer token to accept an IS-05 route.">IS-10 Authorization &middot; BCP-003-02</div>
   <div id="authwrap">
    <div class="recrow">
     <button id="authbtn" onclick="authToggle()">Enforcement: off</button>
@@ -1053,7 +1057,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   </div>
   </section>
 
-  <section class="grp"><div class="grphdr">Stream Compatibility &middot; IS-11</div>
+  <section class="grp"><div class="grphdr" data-tip="IS-11 keeps senders and receivers matched: constrain a sender and its flow retunes; manage EDID, the HDMI-style capability handshake.">Stream Compatibility &middot; IS-11</div>
   <div id="is11wrap">
    <div class="recrow">
     <span class="avlbl">Sender</span> <span id="is11status" class="avval">&mdash;</span>
@@ -1073,13 +1077,13 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   </div>
   </section>
 
-  <section class="grp"><div class="grphdr">Device Control &middot; IS-12</div>
+  <section class="grp"><div class="grphdr" data-tip="IS-12 is the modern NMOS control plane over WebSocket, exposing the device's MS-05 object model - managers, classes and datatypes.">Device Control &middot; IS-12</div>
   <div id="is12wrap">
    <div class="recrow"><span class="avlbl">Control node</span> <span id="is12up" class="avval">&mdash;</span></div>
    <div id="is12model" class="mut">&mdash;</div>
   </div>
   </section>
-  <section class="grp modegrp modehide" data-mode="switcher"><div class="grphdr">Production Switcher</div>
+  <section class="grp modegrp modehide" data-mode="switcher"><div class="grphdr" data-tip="PROGRAM / PREVIEW with cut or dissolve takes; the audio crossfades in step with the picture.">Production Switcher</div>
   <div id="switchwrap">
    <span id="sw-pgm" class="sw-pgm">PROGRAM &middot; &mdash;</span>
    <span class="sw-lbl">PREVIEW</span>
@@ -1089,7 +1093,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   </div>
   </section>
 
-  <section class="grp modegrp modehide" data-mode="program"><div class="grphdr">Program Out &middot; IS-05 route</div>
+  <section class="grp modegrp modehide" data-mode="program"><div class="grphdr" data-tip="Route any flow onto the Program Out software receiver over IS-05 - the picture follows the connection.">Program Out &middot; IS-05 route</div>
   <div id="progwrap">
    <div id="progbtns"></div>
    <button id="schedtog" onclick="toggleSched(this)">&#9201; Schedule +5s: off</button>
@@ -1097,7 +1101,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   </div>
   </section>
 
-  <section class="grp modegrp modehide" data-mode="multi wall side"><div class="grphdr">Multiview / side tiles</div>
+  <section class="grp modegrp modehide" data-mode="multi wall side"><div class="grphdr" data-tip="Assign any source to each quadrant of the 2x2 multiview, or to the two side-by-side panes.">Multiview / side tiles</div>
   <div id="slotwrap">
    <div id="slots">
     <button class="slot" id="slot0" onclick="selSlotFn(0)">&mdash;</button>
@@ -1109,7 +1113,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   </div>
   </section>
 
-  <section class="grp"><div class="grphdr">Music</div>
+  <section class="grp"><div class="grphdr" data-tip="The music channel - HEVC video plus ST 2110-30 L24 audio, with IS-08 channel mapping (swap / mono / mute).">Music</div>
   <div id="music">
    <button onclick="music('prev')" title="previous">&#9198;</button>
    <button id="mpp" onclick="music('playpause')" title="play/pause">&#9208;</button>
@@ -1126,16 +1130,16 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
   </div>
   </section>
 
-  <section class="grp"><div class="grphdr">Resilience &middot; ST 2022</div>
+  <section class="grp"><div class="grphdr" data-tip="Network resilience: ST 2022-1 FEC reconstructs lost packets; ST 2022-7 carries the stream on two paths, hitless.">Resilience &middot; ST 2022</div>
   <div id="fecwrap" style="gap:.6vw"><label>ST&nbsp;2022-7 paths</label><button id="spsa" class="pathbtn" onclick="spsToggle('a')">A</button><button id="spsb" class="pathbtn" onclick="spsToggle('b')">B</button><span class="sub2">pull a path &mdash; the picture must not flinch</span></div>
   <div id="fecwrap"><label>ST&nbsp;2022-1 loss</label><input id="fecloss" type="range" min="0" max="10" step="0.5" value="0" oninput="fecLoss(this.value)"><span id="fecval">0.0%</span><button id="fectog" onclick="fecToggle()">FEC</button></div>
   </section>
 
-  <section class="grp"><div class="grphdr">Live TV</div>
+  <section class="grp"><div class="grphdr" data-tip="Real broadcast channels from the HDHomeRun tuner; a channel change opens the new channel on a second tuner first, then cuts - no black frame.">Live TV</div>
   <div id="tvwrap"><div id="tvfav"></div><button id="tvtoggle" onclick="toggleTv()">&#128250; TV Channels</button><div id="tvchan"></div></div>
   </section>
 
-  <section class="grp"><div class="grphdr">Demo &middot; tools</div>
+  <section class="grp"><div class="grphdr" data-tip="Run the guided, captioned tour of the whole rig, plus other demo helpers.">Demo &middot; tools</div>
   <div id="demo"><button id="demobtn" onclick="runDemo()">&#9654; Guided demo</button></div>
   <div id="fresync"><button id="resyncbtn" onclick="resyncFollower(this)">&#8635; Re-sync follower</button></div>
   </section>
@@ -1548,6 +1552,22 @@ async function runDemo(){
   await demoReset(); await go("/layout?mode=wall"); cap("");
   demoOn=false; demoAbort=false; if(btn){ btn.textContent="\u25B6 Guided demo"; btn.classList.remove("on"); }
 }
+(function(){
+  var tip=document.createElement("div"); tip.id="tip"; document.body.appendChild(tip); var pinned=null;
+  function show(el){ tip.textContent=el.getAttribute("data-tip"); tip.style.display="block"; tip.classList.add("on");
+    var r=el.getBoundingClientRect(), t=tip.getBoundingClientRect();
+    var x=Math.max(6, Math.min(r.left, window.innerWidth-t.width-6)), y=r.bottom+6;
+    if(y+t.height>window.innerHeight-6) y=Math.max(6, r.top-t.height-6);
+    tip.style.left=x+"px"; tip.style.top=y+"px"; }
+  function hide(){ tip.classList.remove("on"); tip.style.display="none"; }
+  document.querySelectorAll("[data-tip]").forEach(function(el){
+    el.addEventListener("mouseenter", function(){ if(!pinned) show(el); });
+    el.addEventListener("mouseleave", function(){ if(!pinned) hide(); });
+    el.addEventListener("click", function(e){ e.stopPropagation(); if(pinned===el){ pinned=null; hide(); } else { pinned=el; show(el); } });
+  });
+  document.addEventListener("click", function(){ if(pinned){ pinned=null; hide(); } });
+})();
+
 </script></body></html>"""
 
 PAGE = PAGE_TEMPLATE.replace("__FPS__", repr(FPS))

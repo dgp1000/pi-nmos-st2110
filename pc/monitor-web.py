@@ -1456,6 +1456,7 @@ async function demoReset(){
   await go("/fec/set?loss=0"); await go("/fec/set?enable=1");
   await go("/sps/set?path=a&up=1"); await go("/sps/set?path=b&up=1");
   await go("/programout/route?essence=none");
+  await go("/is11/unconstrain"); await go("/is11/edid?load=0");
 }
 async function runDemo(){
   const btn=document.getElementById("demobtn");
@@ -1482,6 +1483,8 @@ async function runDemo(){
     await step("ST 2022-7 seamless protection: the same essence sent on two network paths.", function(){ return go("/take?src=sps"); }, 6000);
     await step("Pull one path \u2014 the other carries it, hitless. The picture does not flinch.", function(){ return go("/sps/set?path=a&up=0"); }, 8000);
     await step("Restore the path. Both live again.", function(){ return go("/sps/set?path=a&up=1"); }, 5000);
+    await step("IS-11 stream compatibility \u2014 the layer that keeps senders and receivers matched. Applying a grain-rate constraint retunes the sender\u2019s flow to stay within what a receiver can take (25\u219250 fps).", function(){ return go("/is11/constrain?num=50&den=1"); }, 8000);
+    await step("Clear it \u2014 the flow returns to its native rate. IS-11 also carries EDID, the HDMI-style capability handshake, and passes the AMWA IS-11-01 conformance suite.", function(){ return go("/is11/unconstrain"); }, 7000);
     cap("Demo complete \u2014 everything you saw runs live and to spec."); await nap(6000);
   }catch(e){}
   await demoReset(); await go("/layout?mode=wall"); cap("");

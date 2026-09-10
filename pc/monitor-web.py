@@ -870,6 +870,8 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
  #progpend{font-size:min(1.8vw,2.1vh);color:#fc0;margin-left:.5vw;font-weight:bold}
  .l2{color:#5a5;font-size:min(1.7vw,2vh);letter-spacing:.12em;margin-right:.6vw}
  .grp{margin-top:1.3vh;padding-top:.7vh;border-top:1px solid #12352a;display:flex;flex-direction:column;align-items:center;width:100%}
+ .scorelink{display:inline-block;margin-top:.7vh;color:#6cf;text-decoration:none;font-size:min(1.6vw,1.9vh);border:1px solid #245;border-radius:6px;padding:.3em .7em;background:#0a1622}
+ .scorelink:active{background:#123}
  .grphdr{color:#6cba90;font-size:min(1.55vw,1.85vh);letter-spacing:.14em;text-transform:uppercase;font-weight:600;margin-bottom:.35vh;opacity:.85}
  .modegrp.modehide{display:none}
  #music{margin-top:.8vh;display:flex;flex-wrap:wrap;align-items:center;justify-content:center}
@@ -1026,6 +1028,7 @@ PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8">
     <button id="is11eclr" onclick="is11Edid(0)">Clear EDID</button>
    </div>
    <div id="is11eff" class="mut">&mdash;</div>
+   <a class="scorelink" href="https://claude.ai/code/artifact/56cef03c-ceed-495e-b1ae-a328afba1dab" target="_blank" rel="noopener">Conformance scorecard &#8599;</a>
   </div>
   </section>
   <section class="grp modegrp modehide" data-mode="switcher"><div class="grphdr">Production Switcher</div>

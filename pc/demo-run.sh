@@ -28,6 +28,7 @@ cap "Restore the path. Both live again."; go "/sps/set?path=a&up=1"; sleep 5
 cap "IS-11 stream compatibility - constraining a sender retunes its flow to stay compatible (25->50 fps)."; go "/is11/constrain?num=50&den=1"; sleep 8
 cap "Clear it - the flow returns to native rate. IS-11 also carries EDID and passes the AMWA IS-11-01 suite."; go "/is11/unconstrain"; sleep 7
 cap "IS-12 device control - a WebSocket carries the MS-05 object model; reading the device model live (root block, device + class managers, 58 datatypes)."; go "/is12/state"; sleep 8
+cap "And IS-12 drives the rig: setting rigControl.program over the control WebSocket cuts the program bus."; go "/layout?mode=single"; go "/is12/drive?src=jxs"; sleep 7
 cap "Demo complete - everything you saw runs live and to spec."; sleep 6
 reset; go "/layout?mode=wall"; cap ""
 echo "$(date +%T) demo complete"

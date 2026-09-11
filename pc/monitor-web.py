@@ -563,6 +563,15 @@ def _is12_state():
     except Exception as e:
         d["err"] = str(e)[:60]
     return d
+def _is12_drive(src):
+    """Cut the program via IS-12 -- Set NcAtollRigControl.program over the ncp WebSocket. Proves the
+    control plane drives the rig: the take flows through MS-05, not the panel's own /take."""
+    try:
+        r = _is12_ws_cmd([{"handle": 1, "oid": 4, "methodId": {"level": 1, "index": 2},
+                           "arguments": {"id": {"level": 3, "index": 1}, "value": src}}])
+        return {"src": src, "status": (r[0]["result"].get("status") if r else None)}
+    except Exception as e:
+        return {"error": str(e)[:80]}
 def _auth_demo():
     """Prove enforcement: stage a no-op PATCH on Program Out WITHOUT a token, then WITH one."""
     st = _programout_state(); rid = st["receiver_id"]
@@ -1697,7 +1706,8 @@ async function runDemo(){
     await step("Restore the path. Both live again.", function(){ return go("/sps/set?path=a&up=1"); }, 5000);
     await step("IS-11 stream compatibility \u2014 the layer that keeps senders and receivers matched. Applying a grain-rate constraint retunes the sender\u2019s flow to stay within what a receiver can take (25\u219250 fps).", function(){ return go("/is11/constrain?num=50&den=1"); }, 8000);
     await step("Clear it \u2014 the flow returns to its native rate. IS-11 also carries EDID, the HDMI-style capability handshake, and passes the AMWA IS-11-01 conformance suite.", function(){ return go("/is11/unconstrain"); }, 7000);
-    await step("IS-12 device control \u2014 the modern NMOS control plane. A WebSocket carries the MS-05 object model; the rig reads its own device model live \u2014 root block, device + class managers, 6 classes and 58 datatypes.", function(){ return go("/is12/state"); }, 8000);
+    await step("IS-12 device control \u2014 the modern NMOS control plane. A WebSocket carries the MS-05 object model; the rig reads its own device model live \u2014 root block, device + class managers, 7 classes and 58 datatypes.", function(){ return go("/is12/state"); }, 8000);
+    await step("And IS-12 doesn\u2019t just describe the device \u2014 it drives it. Setting the rigControl.program property over the control WebSocket cuts the program bus, exactly like pressing a source.", async function(){ await go("/layout?mode=single"); return go("/is12/drive?src=jxs"); }, 7000);
     cap("Demo complete \u2014 everything you saw runs live and to spec."); await nap(6000);
   }catch(e){}
   await demoReset(); await go("/layout?mode=wall"); cap("");
@@ -1906,6 +1916,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(json.dumps(_is11_edid(parse_qs(parsed.query).get("load",["0"])[0] in ("1","true","on"))).encode())
         elif parsed.path == "/is12/state":
             self._send_json(json.dumps(_is12_state()).encode())
+        elif parsed.path == "/is12/drive":
+            self._send_json(json.dumps(_is12_drive(parse_qs(parsed.query).get("src", [""])[0])).encode())
         elif parsed.path == "/rec/start":
             self._send_json(json.dumps(_rec_start(parse_qs(parsed.query).get("src",[""])[0])).encode())
         elif parsed.path == "/rec/stop":

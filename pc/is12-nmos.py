@@ -22,7 +22,7 @@ import socket as _sock, base64, hashlib, struct as _struct
 from urllib.parse import urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-NEED = ["NMOS_REGISTRY", "NMOS_ADVERTISE_HOST", "IS12_PORT", "IS12_WS_PORT", "ISLAND_PC_IP"]
+NEED = ["NMOS_REGISTRY", "NMOS_ADVERTISE_HOST", "IS12_PORT", "IS12_WS_PORT", "ISLAND_PC_IP", "PANEL_PORT"]
 raw = subprocess.check_output(["bash", "-c", f'source "{HERE}/atoll.conf"; ' + "".join(f'echo "{k}=${{{k}}}";' for k in NEED)], text=True)
 CFG = dict(l.split("=", 1) for l in raw.strip().splitlines() if "=" in l)
 PORT = int(CFG.get("IS12_PORT") or 8108)
@@ -48,6 +48,47 @@ for fn in os.listdir(os.path.join(MODELS, "classes")):
 for fn in os.listdir(os.path.join(MODELS, "datatypes")):
     d = json.load(open(os.path.join(MODELS, "datatypes", fn)))
     DATATYPES[d["name"]] = d
+
+# ---- live rig control: IS-12 property Sets that actuate the rig via the panel --------------------
+PANEL = f"http://localhost:{CFG.get('PANEL_PORT') or 8096}"
+RIG_SOURCES = ["jxs", "raw", "hevc", "music", "jpegxs", "j2k", "h264", "mjpeg", "vp9", "tsrtp", "fec", "sps", "reels"]
+RIG_LABELS = {"hevc": "Live TV", "jxs": "Home videos", "music": "Music", "reels": "Test Reels",
+              "raw": "Pi raw 2110-20", "j2k": "JPEG 2000", "h264": "H.264 RTP", "mjpeg": "MJPEG RTP",
+              "vp9": "VP9 RTP", "tsrtp": "TS over RTP", "fec": "ST 2022-1 FEC", "sps": "ST 2022-7 SPS",
+              "jpegxs": "JPEG XS"}
+def _panel_get(path):
+    with urllib.request.urlopen(f"{PANEL}{path}", timeout=3) as r:
+        return json.loads(r.read())
+def _rig_program():
+    try: return _panel_get("/state").get("active", "")
+    except Exception: return ""
+def _rig_avsync():
+    try: return int(_panel_get("/avsync/state").get("ms", 0))
+    except Exception: return 0
+def _rig_take(src):
+    try: _panel_get(f"/take?src={src}"); return True
+    except Exception: return False
+def _rig_set_avsync(ms):
+    try: _panel_get(f"/avsync/set?ms={int(ms)}"); return True
+    except Exception: return False
+
+# a vendor NcWorker subclass (authority key -1 = no OUI, per MS-05-02) whose properties drive the rig
+CLASSES[(1, 2, -1, 1)] = {
+    "description": "Atoll rig control worker -- setting a property actuates the live rig",
+    "classId": [1, 2, -1, 1], "name": "NcAtollRigControl", "fixedRole": None,
+    "properties": [
+        {"description": "Current program source key; set it to cut the rig to that source",
+         "id": {"level": 3, "index": 1}, "name": "program", "typeName": "NcString",
+         "isReadOnly": False, "isNullable": False, "isSequence": False, "isDeprecated": False, "constraints": None},
+        {"description": "Human-readable label of the current program source",
+         "id": {"level": 3, "index": 2}, "name": "programLabel", "typeName": "NcString",
+         "isReadOnly": True, "isNullable": False, "isSequence": False, "isDeprecated": False, "constraints": None},
+        {"description": "Program A/V-sync offset in milliseconds",
+         "id": {"level": 3, "index": 3}, "name": "avSyncMs", "typeName": "NcInt32",
+         "isReadOnly": False, "isNullable": False, "isSequence": False, "isDeprecated": False, "constraints": None},
+    ],
+    "methods": [], "events": [],
+}
 
 def class_with_inheritance(class_id):
     """Merge a class descriptor with its ancestors' properties/methods/events (classId prefixes)."""
@@ -77,12 +118,14 @@ DATATYPE_LIST = [DATATYPES[n] for n in sorted(DATATYPES.keys())]
 # NcMethodStatus
 OK, BAD_FORMAT, BAD_OID, READONLY, INVALID, PARAM_ERR, DEVICE_ERR, METH_NI, PROP_NI = 200, 400, 404, 405, 406, 407, 500, 501, 502
 
-ROOT, DEVMGR, CLSMGR = 1, 2, 3
+ROOT, DEVMGR, CLSMGR, RIGCTL = 1, 2, 3, 4
 OBJS = {
     ROOT:   {"oid": ROOT,  "classId": [1, 1],    "role": "root",          "owner": None, "userLabel": "Root",
-             "block": True, "members": [DEVMGR, CLSMGR]},
+             "block": True, "members": [DEVMGR, CLSMGR, RIGCTL]},
     DEVMGR: {"oid": DEVMGR, "classId": [1, 3, 1], "role": "DeviceManager", "owner": ROOT, "userLabel": "Device Manager"},
     CLSMGR: {"oid": CLSMGR, "classId": [1, 3, 2], "role": "ClassManager",  "owner": ROOT, "userLabel": "Class Manager"},
+    RIGCTL: {"oid": RIGCTL, "classId": [1, 2, -1, 1], "role": "rigControl", "owner": ROOT,
+             "userLabel": "Atoll Rig Control", "worker": True},
 }
 DEVICE_PROPS = {   # NcDeviceManager level-3 properties
     (3, 1): [1, 0, 0],                                  # ncVersion (NcVersionCode -> [major,minor,patch]? spec uses string) -> set below
@@ -116,6 +159,12 @@ def get_prop(obj, pid):
         if idx == 2: return DATATYPE_LIST
     if obj["oid"] == DEVMGR and lvl == 3:
         return DEVICE_PROPS.get((lvl, idx), _MISSING)
+    if obj.get("worker") and lvl == 2 and idx == 1:    # NcWorker.enabled
+        return True
+    if obj["oid"] == RIGCTL and lvl == 3:
+        if idx == 1: return _rig_program()
+        if idx == 2: return RIG_LABELS.get(_rig_program(), _rig_program())
+        if idx == 3: return _rig_avsync()
     return _MISSING
 _MISSING = object()
 
@@ -123,6 +172,15 @@ def set_prop(obj, pid, value):
     lvl, idx = pid["level"], pid["index"]
     if lvl == 1 and idx == 6:                           # userLabel is writable
         obj["userLabel"] = value; return OK
+    if obj["oid"] == RIGCTL and lvl == 3:               # these Sets actuate the live rig
+        if idx == 1:
+            if value not in RIG_SOURCES: return PARAM_ERR
+            _rig_take(value); return OK
+        if idx == 3:
+            try: ms = int(value)
+            except Exception: return PARAM_ERR
+            if ms < -100 or ms > 300: return PARAM_ERR
+            _rig_set_avsync(ms); return OK
     if get_prop(obj, pid) is _MISSING:
         return PROP_NI
     return READONLY

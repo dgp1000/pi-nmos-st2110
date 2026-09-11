@@ -120,14 +120,18 @@ def effective_edid():
 
 # ---- SDP / transportfile for the sender --------------------------------------------------------
 def _sdp():
+    tp = IS05["sender"]["active"]["transport_params"][0]     # SDP must reflect the ACTIVE params
+    dst_ip = tp.get("destination_ip") or GRP
+    dst_port = tp.get("destination_port") or MPORT
+    src_ip = tp.get("source_ip") or PC_IP
     v = int(time.time())
     return ("v=0\r\n"
             f"o=- {v} {v} IN IP4 {PC_IP}\r\n"
             "s=Atoll IS-11 demo sender - ST 2110-20\r\n"
             "t=0 0\r\n"
-            f"m=video {MPORT} RTP/AVP 96\r\n"
-            f"c=IN IP4 {GRP}/64\r\n"
-            f"a=source-filter: incl IN IP4 {GRP} {PC_IP}\r\n"
+            f"m=video {dst_port} RTP/AVP 96\r\n"
+            f"c=IN IP4 {dst_ip}/64\r\n"
+            f"a=source-filter: incl IN IP4 {dst_ip} {src_ip}\r\n"
             "a=rtpmap:96 raw/90000\r\n"
             "a=fmtp:96 sampling=YCbCr-4:2:2; width=1280; height=720; exactframerate=25; depth=8; "
             "TCS=SDR; colorimetry=BT709; PM=2110GPM; SSN=ST2110-20:2017; TP=2110TPW\r\n"
@@ -222,6 +226,25 @@ IS05 = {
 # permissive constraints -- one object per leg, one entry per transport param
 SENDER_CONSTRAINTS = [{"source_ip": {}, "destination_ip": {}, "source_port": {}, "destination_port": {}, "rtp_enabled": {}}]
 RECEIVER_CONSTRAINTS = [{"source_ip": {}, "multicast_ip": {}, "interface_ip": {}, "destination_port": {}, "rtp_enabled": {}}]
+# resolved values substituted for any "auto" leg value at activation time (IS-05 requires /active concrete)
+_AUTO_SENDER = {"source_ip": PC_IP, "destination_ip": GRP, "source_port": 5004, "destination_port": MPORT, "rtp_enabled": True}
+_AUTO_RECEIVER = {"source_ip": PC_IP, "multicast_ip": GRP, "interface_ip": PC_IP, "destination_port": MPORT, "rtp_enabled": True}
+_STAGE_KEYS = {"sender": {"master_enable", "receiver_id", "activation", "transport_params"},
+               "receiver": {"master_enable", "sender_id", "transport_file", "activation", "transport_params"}}
+_ACT_MODES = {None, "activate_immediate", "activate_scheduled_relative", "activate_scheduled_absolute"}
+def _stage_valid(kind, patch):
+    """Reject a malformed staged PATCH (IS-05 wants 400, not a silent 200)."""
+    if not isinstance(patch, dict): return False
+    if any(k not in _STAGE_KEYS[kind] for k in patch): return False
+    if "master_enable" in patch and not isinstance(patch["master_enable"], bool): return False
+    if "transport_params" in patch and not isinstance(patch["transport_params"], list): return False
+    if "transport_file" in patch and not isinstance(patch["transport_file"], dict): return False
+    for idk in ("receiver_id", "sender_id"):
+        if idk in patch and patch[idk] is not None and not isinstance(patch[idk], str): return False
+    if "activation" in patch:
+        a = patch["activation"]
+        if not isinstance(a, dict) or a.get("mode") not in _ACT_MODES: return False
+    return True
 _is05_lock = threading.Lock()
 
 def _dur_secs(t):
@@ -231,11 +254,16 @@ def _dur_secs(t):
         return 0.0
 
 def _activate(kind):
-    """staged -> active for a leg, and reflect into the IS-11/IS-04 view."""
+    """staged -> active for a leg (resolving any "auto"), reset the staged activation, reflect into IS-11/IS-04."""
     st = IS05[kind]["staged"]
-    act = copy.deepcopy(st["activation"]); act["activation_time"] = _tai(time.time())
-    IS05[kind]["active"] = copy.deepcopy(st); IS05[kind]["active"]["activation"] = act
-    st["activation"]["activation_time"] = act["activation_time"]
+    act = copy.deepcopy(st["activation"]); act["activation_time"] = _tai(time.time() + 37)   # real TAI (UTC+37) so active >= requested
+    active = copy.deepcopy(st); active["activation"] = act
+    resolver = _AUTO_SENDER if kind == "sender" else _AUTO_RECEIVER
+    for leg in active["transport_params"]:
+        for k, v in list(leg.items()):
+            if v == "auto": leg[k] = resolver.get(k)
+    IS05[kind]["active"] = active
+    IS05[kind]["staged"]["activation"] = _blank_act()      # the pending activation is consumed
     if kind == "sender":
         STATE["sender_master_enable"] = bool(st["master_enable"]); _bump("sender")
     else:
@@ -257,16 +285,19 @@ def _patch_staged(kind, patch):
         act = patch.get("activation") or {}
         mode = act.get("mode")
         s["activation"] = {"mode": mode, "requested_time": act.get("requested_time"), "activation_time": None}
+        code = 200; resp = None
         if mode == "activate_immediate":
-            _activate(kind)
+            _activate(kind)                                  # resets staged.activation, sets active
+            resp = copy.deepcopy(IS05[kind]["staged"])       # response: staged params ...
+            resp["activation"] = copy.deepcopy(IS05[kind]["active"]["activation"])   # ... reporting what just happened
         elif mode == "activate_scheduled_relative":
             threading.Timer(max(0.0, _dur_secs(act.get("requested_time"))), _activate, args=(kind,)).start()
-            s["activation"]["activation_time"] = act.get("requested_time")
+            s["activation"]["activation_time"] = act.get("requested_time"); code = 202
         elif mode == "activate_scheduled_absolute":
-            delay = max(0.0, _dur_secs(act.get("requested_time")) - time.time())
+            delay = max(0.0, _dur_secs(act.get("requested_time")) - (time.time() + 37))   # requested_time is absolute TAI (UTC+37)
             threading.Timer(delay, _activate, args=(kind,)).start()
-            s["activation"]["activation_time"] = act.get("requested_time")
-        return s
+            s["activation"]["activation_time"] = act.get("requested_time"); code = 202
+        return (resp if resp is not None else s), code
 
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -431,7 +462,22 @@ class H(http.server.BaseHTTPRequestHandler):
         if rest[0] == "bulk":
             if len(rest) == 1: return self._send(200, ["senders/", "receivers/"])
             if rest[1] in ("senders", "receivers"):
-                return self._err(405, "Method Not Allowed")   # bulk endpoints are POST-only (unsupported here)
+                if m != "POST": return self._err(405, "Method Not Allowed")   # GET on bulk is 405; changes come by POST
+                kind = "sender" if rest[1] == "senders" else "receiver"
+                rid = SEND_ID if kind == "sender" else RECV_ID
+                try: items = json.loads(self._body() or b"[]")
+                except Exception: return self._err(400, "invalid JSON")
+                if not isinstance(items, list): return self._err(400, "expected an array")
+                out = []
+                for it in items:
+                    iid = (it or {}).get("id"); params = (it or {}).get("params") or {}
+                    if iid != rid:
+                        out.append({"id": iid, "code": 404, "error": "resource not found", "debug": None})
+                    elif not _stage_valid(kind, params):
+                        out.append({"id": iid, "code": 400, "error": "invalid transport parameters", "debug": None})
+                    else:
+                        _staged, code = _patch_staged(kind, params); out.append({"id": iid, "code": code})
+                return self._send(200, out)
             return self._err(404, "Not Found")
         if rest[0] == "single" and len(rest) == 1: return self._send(200, ["senders/", "receivers/"])
         if rest[:2] == ["single", "senders"]:
@@ -447,9 +493,11 @@ class H(http.server.BaseHTTPRequestHandler):
                 if m == "PATCH":
                     try: doc = json.loads(self._body() or b"{}")
                     except Exception: return self._err(400, "invalid JSON")
-                    return self._send(200, _patch_staged("sender", doc))
+                    if not _stage_valid("sender", doc): return self._err(400, "invalid transport parameters")
+                    staged, code = _patch_staged("sender", doc)
+                    return self._send(code, staged)
             if sub == ["transportfile"]:
-                return self._send(200, _sdp(), "application/sdp")
+                return self._send(200, _sdp().encode(), "application/sdp")
             return self._err(404, "Not Found")
         if rest[:2] == ["single", "receivers"]:
             if len(rest) == 2: return self._send(200, [RECV_ID + "/"])
@@ -464,7 +512,9 @@ class H(http.server.BaseHTTPRequestHandler):
                 if m == "PATCH":
                     try: doc = json.loads(self._body() or b"{}")
                     except Exception: return self._err(400, "invalid JSON")
-                    return self._send(200, _patch_staged("receiver", doc))
+                    if not _stage_valid("receiver", doc): return self._err(400, "invalid transport parameters")
+                    staged, code = _patch_staged("receiver", doc)
+                    return self._send(code, staged)
             return self._err(404, "Not Found")
         return self._err(404, "Not Found")
 

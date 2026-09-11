@@ -524,5 +524,14 @@ class Threaded(socketserver.ThreadingMixIn, http.server.HTTPServer):
 if __name__ == "__main__":
     register_all()
     threading.Thread(target=heartbeat, daemon=True).start()
+    try:                                                # advertise over mDNS/DNS-SD (IS-04 peer-to-peer)
+        from mdns_responder import MdnsResponder
+        MdnsResponder(ADV, PORT, instance="atoll-is11", txt={
+            "api_proto": "http", "api_ver": "v1.3", "api_auth": "false",
+            "ver_slf": "0", "ver_src": "0", "ver_flw": "0", "ver_dvc": "0", "ver_snd": "0", "ver_rcv": "0",
+        }).start()
+        print("mdns: advertising _nmos-node._tcp for atoll-is11", flush=True)
+    except Exception as e:
+        print(f"mdns: disabled ({e})", flush=True)
     print(f"IS-11 stream-compat: node {NODE_ID} on http://0.0.0.0:{PORT}  (IS-11 {IS11_BASE})", flush=True)
     Threaded(("0.0.0.0", PORT), H).serve_forever()

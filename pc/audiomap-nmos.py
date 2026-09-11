@@ -178,6 +178,12 @@ class H(http.server.BaseHTTPRequestHandler):
         mode = act.get("mode"); req_t = act.get("requested_time")
         aid = str(uuid.uuid4())
         with _lock:
+            targets = set(action.keys()) if isinstance(action, dict) else set()
+            pending = set()
+            for _a in _activations.values():
+                if isinstance(_a.get("action"), dict): pending |= set(_a["action"].keys())
+            if targets & pending:                       # output already has a pending activation -> Locked
+                return self._send(423, {"code": 423, "error": "Locked", "debug": "output has a pending activation"})
             if mode == "activate_immediate":
                 act["activation_time"] = _tai(time.time())
                 _apply_map(action, act["activation_time"])
@@ -201,14 +207,18 @@ class H(http.server.BaseHTTPRequestHandler):
             with _lock:
                 a = _activations.pop(aid, None)
                 if a and a.get("_timer"): a["_timer"].cancel()
-            return self._send(200 if a else 404, {"deleted": aid} if a else {"code": 404, "error": "Not Found"})
+            if a:
+                self.send_response(204); self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", "0"); self.end_headers(); return
+            return self._send(404, {"code": 404, "error": "Not Found", "debug": None})
         self._send(404, {"code": 404, "error": "Not Found"})
 
     def do_OPTIONS(self):
-        self.send_response(204)
+        self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
 # named presets for the panel readout

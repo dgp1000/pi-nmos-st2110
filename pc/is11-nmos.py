@@ -133,7 +133,7 @@ def _sdp():
             f"c=IN IP4 {dst_ip}/64\r\n"
             f"a=source-filter: incl IN IP4 {dst_ip} {src_ip}\r\n"
             "a=rtpmap:96 raw/90000\r\n"
-            "a=fmtp:96 sampling=YCbCr-4:2:2; width=1280; height=720; exactframerate=25; depth=8; "
+            "a=fmtp:96 sampling=YCbCr-4:2:2; width=1920; height=1080; exactframerate=25; depth=8; interlace; "
             "TCS=SDR; colorimetry=BT709; PM=2110GPM; SSN=ST2110-20:2017; TP=2110TPW\r\n"
             "a=mediaclk:direct=0\r\n" + REFCLK)
 
@@ -155,11 +155,11 @@ def _flow():
     return {"id": FLOW_ID, "version": _rv("flow"), "label": "IS-11 flow", "description": "IS-11 demo flow", "tags": {},
             "source_id": SRC_ID, "device_id": DEV_ID, "parents": [], "format": "urn:x-nmos:format:video",
             "media_type": "video/raw", "grain_rate": STATE["flow_grain_rate"],
-            "frame_width": 1280, "frame_height": 720, "colorspace": "BT709", "interlace_mode": "progressive",
+            "frame_width": 1920, "frame_height": 1080, "colorspace": "BT709", "interlace_mode": "interlaced_tff",
             "transfer_characteristic": "SDR",
-            "components": [{"name": "Y", "width": 1280, "height": 720, "bit_depth": 8},
-                           {"name": "Cb", "width": 640, "height": 720, "bit_depth": 8},
-                           {"name": "Cr", "width": 640, "height": 720, "bit_depth": 8}]}
+            "components": [{"name": "Y", "width": 1920, "height": 1080, "bit_depth": 8},
+                           {"name": "Cb", "width": 960, "height": 1080, "bit_depth": 8},
+                           {"name": "Cr", "width": 960, "height": 1080, "bit_depth": 8}]}
 def _sender():
     return {"id": SEND_ID, "version": _rv("sender"), "label": "IS-11 sender", "description": "IS-11 demo sender", "tags": {},
             "flow_id": FLOW_ID, "device_id": DEV_ID, "transport": "urn:x-nmos:transport:rtp.mcast",

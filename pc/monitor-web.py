@@ -1683,6 +1683,7 @@ async function runDemo(){
   const btn=document.getElementById("demobtn");
   if(demoOn){ demoAbort=true; cap("Stopping demo\u2026"); return; }
   demoOn=true; demoAbort=false; if(btn){ btn.textContent="\u25A0 Stop demo"; btn.classList.add("on"); }
+  let _demoClip=null;
   try{
     await demoReset();
     await step("Atoll: a self-contained NMOS ST 2110 broadcast rig. This is the multiviewer \u2014 four live flows at once, each a real NMOS sender.", function(){ return go("/layout?mode=wall"); }, 9000);
@@ -1697,6 +1698,8 @@ async function runDemo(){
     let chans=[];
     try{ const d=await(await fetch("/tv/lineup",{cache:"no-store"})).json(); chans=((d.favorites&&d.favorites.length?d.favorites:d.channels)||[]).map(function(c){return c.num;}); }catch(e){}
     if(chans.length>=2){ await step("Changing channel\u2026", function(){ return go("/tv/set?ch="+encodeURIComponent(chans[0])); }, 6000); await step("\u2026and again \u2014 seamless.", function(){ return go("/tv/set?ch="+encodeURIComponent(chans[1])); }, 6000); }
+    await step("Record & Playback \u2014 capturing the live program to a timestamped MPEG-TS file\u2026", async function(){ await go("/layout?mode=single"); await go("/take?src=hevc"); try{ var rs=await(await fetch("/rec/start",{cache:"no-store"})).json(); _demoClip=rs.file||null; }catch(e){} }, 5000);
+    await step("\u2026stopped. Clips can be renamed and gathered into playlists that replay seamlessly \u2014 PCR-paced back onto the Test Reels input, so a recording routes like any other source.", async function(){ await go("/rec/stop"); await nap(1500); if(_demoClip){ await go("/play/start?file="+encodeURIComponent(_demoClip)+"&loop=1"); } await go("/layout?mode=single"); await go("/take?src=reels"); }, 8000);
     await step("ST 2022-1 FEC. Fullscreen the protected feed.", async function(){ await go("/layout?mode=single"); await go("/take?src=fec"); }, 5000);
     await step("Inject 5% packet loss \u2014 FEC reconstructs every lost packet, the picture stays clean.", function(){ return go("/fec/set?loss=0.05"); }, 8000);
     await step("Now switch FEC OFF at the same 5% loss \u2014 watch it tear.", function(){ return go("/fec/set?enable=0"); }, 8000);
@@ -1708,8 +1711,10 @@ async function runDemo(){
     await step("Clear it \u2014 the flow returns to its native rate. IS-11 also carries EDID, the HDMI-style capability handshake, and passes the AMWA IS-11-01 conformance suite.", function(){ return go("/is11/unconstrain"); }, 7000);
     await step("IS-12 device control \u2014 the modern NMOS control plane. A WebSocket carries the MS-05 object model; the rig reads its own device model live \u2014 root block, device + class managers, 7 classes and 58 datatypes.", function(){ return go("/is12/state"); }, 8000);
     await step("And IS-12 doesn\u2019t just describe the device \u2014 it drives it. Setting the rigControl.program property over the control WebSocket cuts the program bus, exactly like pressing a source.", async function(){ await go("/layout?mode=single"); return go("/is12/drive?src=jxs"); }, 7000);
-    cap("Demo complete \u2014 everything you saw runs live and to spec."); await nap(6000);
+    await step("And none of this is a private protocol: an independent controller discovers the rig through a third-party NMOS registry and drives it over IS-05 \u2014 no rig-specific glue \u2014 and IS-12 exposes the same control as a standard MS-05 device model.", null, 8000);
+    cap("Demo complete. Discovery, connection, tally, audio mapping, record & playback, resilience, stream compatibility and control \u2014 every layer runs live and passes its AMWA conformance suite: all eight, green."); await nap(8000);
   }catch(e){}
+  await go("/play/stop"); if(_demoClip && /^[0-9]{8}-[0-9]{6}_/.test(_demoClip)){ await go("/rec/delete?file="+encodeURIComponent(_demoClip)); }
   await demoReset(); await go("/layout?mode=wall"); cap("");
   demoOn=false; demoAbort=false; if(btn){ btn.textContent="\u25B6 Guided demo"; btn.classList.remove("on"); }
 }

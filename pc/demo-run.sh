@@ -18,6 +18,9 @@ CH=$(curl -s "$P/tv/lineup" | python3 -c 'import sys,json;d=json.load(sys.stdin)
 set -- $CH
 if [ -n "$1" ]; then cap "Changing channel..."; go "/tv/set?ch=$1"; sleep 6; fi
 if [ -n "$2" ]; then cap "...and again - seamless."; go "/tv/set?ch=$2"; sleep 6; fi
+cap "Record & Playback - capturing the live program to a timestamped MPEG-TS file..."; go "/layout?mode=single"; go "/take?src=hevc"; CLIP=$(curl -s "$P/rec/start" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("file",""))' 2>/dev/null); sleep 5
+go "/rec/stop"; sleep 2
+cap "...stopped. Clips can be renamed and gathered into playlists that replay seamlessly - PCR-paced back onto the Test Reels input, so a recording routes like any other source."; [ -n "$CLIP" ] && go "/play/start?file=$CLIP&loop=1"; go "/take?src=reels"; sleep 8
 cap "ST 2022-1 FEC. Fullscreen the protected feed."; go "/layout?mode=single"; go "/take?src=fec"; sleep 5
 cap "Inject 5% packet loss - FEC reconstructs every lost packet, the picture stays clean."; go "/fec/set?loss=0.05"; sleep 8
 cap "Now switch FEC OFF at the same 5% loss - watch it tear."; go "/fec/set?enable=0"; sleep 8
@@ -27,8 +30,10 @@ cap "Pull one path - the other carries it, hitless."; go "/sps/set?path=a&up=0";
 cap "Restore the path. Both live again."; go "/sps/set?path=a&up=1"; sleep 5
 cap "IS-11 stream compatibility - constraining a sender retunes its flow to stay compatible (25->50 fps)."; go "/is11/constrain?num=50&den=1"; sleep 8
 cap "Clear it - the flow returns to native rate. IS-11 also carries EDID and passes the AMWA IS-11-01 suite."; go "/is11/unconstrain"; sleep 7
-cap "IS-12 device control - a WebSocket carries the MS-05 object model; reading the device model live (root block, device + class managers, 58 datatypes)."; go "/is12/state"; sleep 8
+cap "IS-12 device control - a WebSocket carries the MS-05 object model; reading the device model live (root block, device + class managers, 7 classes / 58 datatypes)."; go "/is12/state"; sleep 8
 cap "And IS-12 drives the rig: setting rigControl.program over the control WebSocket cuts the program bus."; go "/layout?mode=single"; go "/is12/drive?src=jxs"; sleep 7
-cap "Demo complete - everything you saw runs live and to spec."; sleep 6
+cap "And none of this is a private protocol: an independent controller discovers the rig through a third-party NMOS registry and drives it over IS-05, and IS-12 exposes the same control as a standard MS-05 device model."; sleep 8
+cap "Demo complete. Discovery, connection, tally, audio mapping, record & playback, resilience, stream compatibility and control - every layer runs live and passes its AMWA conformance suite: all eight, green."; sleep 8
+go "/play/stop"; case "$CLIP" in [0-9]*_*.ts) go "/rec/delete?file=$CLIP";; esac
 reset; go "/layout?mode=wall"; cap ""
 echo "$(date +%T) demo complete"

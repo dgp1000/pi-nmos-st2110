@@ -125,6 +125,33 @@ still selectable — put it in `single`/`side`, not the default wall.
   `python3 pc/hdhr.py <DeviceID>`. Some ATSC 3.0 channels are DRM and come up black — pick a plain
   HD channel.
 
+### Island connectivity / PTP lost after a Windows or WSL restart
+- **Symptom:** both Pi clocks go offline in the panel (grandmaster `10.10.10.1`, follower
+  `10.10.10.3`); PTP readouts blank; `atoll-ptp` shows no lock. Nothing is wrong with the Pis.
+- **Cause:** WSL is in `networkingMode=mirrored`, and the island NIC is a **USB adapter that
+  re-enumerates** on a Windows/WSL restart (its MAC drifts, e.g. `…0f:28`→`…0f:29`). Two things break:
+  (1) the mirror fails to carry the island IP/route onto WSL's `eth1` (Windows keeps `10.10.10.2` on
+  "Ethernet 2", but `eth1` comes up `DOWN` or address-less); and (2) the "Ethernet 2" network can get
+  reclassified **Public**, so Windows Firewall drops inbound from the Pis.
+- **Quick triage** (from WSL):
+  - Windows itself reachable? `powershell.exe -NoProfile -Command "Test-Connection 10.10.10.1 -Count 2 -Quiet"` — `True` = Windows fine, WSL-only (mirror) problem; `False` = link/profile problem.
+  - WSL side: `ip addr show eth1` (is it `UP` and does it hold `inet 10.10.10.2`?), `ping 10.10.10.1`.
+  - Profile: `powershell.exe -NoProfile -Command "Get-NetConnectionProfile -InterfaceAlias 'Ethernet 2' | Select NetworkCategory"` should be **Private**.
+- **Recovery (in order):**
+  1. In an **elevated** Windows PowerShell, make sure the island NIC is Private (the inbound allow
+     rule `Atoll island inbound` for `10.10.10.0/24` is already installed as a backstop):
+     `Set-NetConnectionProfile -InterfaceAlias "Ethernet 2" -NetworkCategory Private`
+  2. `wsl --shutdown` (normal PowerShell), wait ~10 s, then **reopen WSL** — this rebuilds the mirrored
+     network stack cleanly, and systemd restarts every enabled service (incl. `atoll-ptp`). This is the
+     reliable fix; in-WSL `ip link`/`ip addr` fiddling does **not** clear a wedged mirror.
+  3. Verify from WSL: `ping 10.10.10.1`, `curl -s http://10.10.10.1:8000/time`, `curl -s http://10.10.10.3:8000/status`, and `systemctl status atoll-ptp`.
+- **Durable mitigation:** the re-enumeration is the trigger — in Windows Device Manager, on the island
+  USB adapter, set a fixed **Network Address** (MAC) under Advanced and disable "Allow the computer to
+  turn off this device" under Power Management, so the mirror stays stable across restarts.
+- **`atoll-ptp` note:** it slaves the WSL clock to the grandmaster (`pc/pc-ptp.sh` → `ptp4l -i eth1 -S -s -m`)
+  and is enabled, but on WSL it only reaches SLAVE for display — the guest clock is not actually steered
+  (see **PC clock / time sync** below). The real island timing is the two Pis.
+
 ### PC clock / time sync (output timecode vs the panel)
 - **Symptom:** the burned-in `clockoverlay` on the output runs ahead of the panel's timecode.
 - **Cause:** the panel timecode follows the **Pi grandmaster** (`/time`) = correct real time, but the

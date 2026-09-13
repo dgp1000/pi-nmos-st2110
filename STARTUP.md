@@ -145,9 +145,20 @@ still selectable — put it in `single`/`side`, not the default wall.
      network stack cleanly, and systemd restarts every enabled service (incl. `atoll-ptp`). This is the
      reliable fix; in-WSL `ip link`/`ip addr` fiddling does **not** clear a wedged mirror.
   3. Verify from WSL: `ping 10.10.10.1`, `curl -s http://10.10.10.1:8000/time`, `curl -s http://10.10.10.3:8000/status`, and `systemctl status atoll-ptp`.
-- **Durable mitigation:** the re-enumeration is the trigger — in Windows Device Manager, on the island
-  USB adapter, set a fixed **Network Address** (MAC) under Advanced and disable "Allow the computer to
-  turn off this device" under Power Management, so the mirror stays stable across restarts.
+- **Root trigger:** Windows Update reboots (the outage began with the Sep 2026 KB5124007/5124008/5126052
+  wave). The island NIC is the **onboard Intel I219-V** ("Ethernet 2", stable MAC) — *not* a USB adapter;
+  the MAC "drift" seen in WSL is only the mirror re-presenting `eth1`, not a physical re-enumeration.
+- **Durable fixes (Windows, run once as Administrator):**
+  1. **Stop the island network re-classifying Public** (which is what makes the firewall block inbound):
+     `secpol.msc` → *Network List Manager Policies* → **Unidentified Networks** → Location type **Private**;
+     then `Set-NetConnectionProfile -InterfaceAlias "Ethernet 2" -NetworkCategory Private`. The
+     `Atoll island inbound` allow-rule for `10.10.10.0/24` stays as a backstop.
+  2. **Reduce unattended Update reboots:** Settings → Windows Update → Advanced → **Active hours** (widen)
+     and turn off "restart as soon as possible"; optionally set `HKLM\SOFTWARE\Policies\Microsoft\
+     Windows\WindowsUpdate\AU` `AUOptions=3` + `NoAutoRebootWithLoggedOnUsers=1`.
+  3. WSL is already current (2.7.10); the mirror wedge is cleared by `wsl --shutdown` + reopen, so the
+     recovery above is still the per-incident cure if a reboot slips through. (`wsl --update` also cycles
+     the VM — it will drop any SSH-into-WSL session.)
 - **`atoll-ptp` note:** it slaves the WSL clock to the grandmaster (`pc/pc-ptp.sh` → `ptp4l -i eth1 -S -s -m`)
   and is enabled, but on WSL it only reaches SLAVE for display — the guest clock is not actually steered
   (see **PC clock / time sync** below). The real island timing is the two Pis.

@@ -1,6 +1,7 @@
 # Atoll
 
 > **Running the rig?** See [STARTUP.md](STARTUP.md) for the bring-up / shutdown runbook.
+> **Setting one up from scratch?** See [INSTALL.md](INSTALL.md) for the full installation guide.
 
 **An iPad-controlled ST 2110 / NMOS broadcast-over-IP multiviewer, monitoring rig and standards
 demonstrator.**
@@ -201,6 +202,8 @@ Linux box (the scripts are Linux; the WSL-specific bits are noted below).
 ---
 
 ## Quick start
+
+> This is the short version. For the complete from-scratch guide — hardware, all dependencies, the Pi side, and the systemd services — see **[INSTALL.md](INSTALL.md)**.
 
 ```bash
 git clone <this-repo> pi-nmos-st2110

@@ -1,0 +1,14 @@
+[Unit]
+Description=Atoll registrar watchdog (re-register aged-out NMOS nodes)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+ExecStart=/usr/bin/python3 -u /home/david/pi-nmos-st2110/pc/registrar-watchdog.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

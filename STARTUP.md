@@ -18,6 +18,7 @@ Access: from a Mac `ssh atoll-pc` (192.168.4.85:2222, key auth). Pi from PC or M
    | *(docker)* | NMOS stack — registry `:8080`, virtnode `:8090`, AMWA testing `:5000` |
    | `atoll-panel` | `:8096` switcher + inspector + TV remote |
    | `atoll-analyser` | `:8101` island flow analyser (pps / bitrate / RTP loss / IS-07) |
+   | `atoll-watchdog` | polls the IS-04 registry; re-registers any Atoll node that ages out while its service is still running (backstop for a lapsed heartbeat) |
    | `atoll-is07` | `:8102` IS-07 Event & Tally + `:8103` WebSocket transport |
    | `atoll-programout` | `:8092` Program Out software receiver (IS-05 Connection API) |
    | `atoll-tv` | HDHomeRun → HEVC on 5010 (seamless channel changes) |

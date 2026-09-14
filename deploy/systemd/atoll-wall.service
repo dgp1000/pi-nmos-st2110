@@ -1,0 +1,24 @@
+[Unit]
+Description=Atoll output render wall on Monitor 2 (optional auto-start of output-render.sh)
+Documentation=file:///home/david/pi-nmos-st2110/STARTUP.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=david
+WorkingDirectory=/home/david/pi-nmos-st2110/pc
+# WSLg display + audio + GPU. WSLg's sockets live under /mnt/wslg, reachable from a service context
+# (not the login session's /run/user/<uid>). Verified: GL render + Windows interop both work here.
+Environment=DISPLAY=:0
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=/mnt/wslg/runtime-dir
+Environment=PULSE_SERVER=unix:/mnt/wslg/PulseServer
+Environment=GALLIUM_DRIVER=d3d12
+# wait for WSLg to be up before rendering (it comes up with the WSL VM, but can lag at boot)
+ExecStartPre=/usr/bin/env bash -c 'for i in $(seq 1 30); do [ -S /mnt/wslg/runtime-dir/wayland-0 ] && exit 0; sleep 2; done'
+ExecStart=/usr/bin/env bash /home/david/pi-nmos-st2110/pc/output-render.sh 2
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

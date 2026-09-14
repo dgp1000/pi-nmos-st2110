@@ -60,6 +60,14 @@ Access: from a Mac `ssh atoll-pc` (192.168.4.85:2222, key auth). Pi from PC or M
    terminal, never over SSH): `cd ~/pi-nmos-st2110/pc && bash output-render.sh 2`
    (use `0` for the primary monitor if #2 is off-screen). It follows the panel's take/layout. The on-screen present is **glimagesink** (GL/EGL); on every take `output-render.sh` auto-places it full-screen on monitor 2 (`snap-window-screen.ps1`), so no manual window dragging.
 
+   **Auto-start (optional).** The wall can run as a service instead of a terminal:
+   `sudo systemctl enable --now atoll-wall` (installed **disabled** by default). It sets the WSLg
+   display/audio/GPU env (sockets under `/mnt/wslg`, reachable from a service — GL render *and*
+   Windows interop for the window-snap both work there), waits for WSLg, then runs
+   `output-render.sh 2` and restarts on failure. It drives monitor 2 exactly like the manual run, so
+   **do not run both** — enabling the service, stop any manual `output-render.sh` first (and vice-versa).
+   Watch it with `journalctl -u atoll-wall -f`.
+
 5. **View / control.** Panel `192.168.4.85:8096` (iPad) or `localhost:8096` (PC's own browser);
    analyser `:8101`; browser multiview `:8099`; JPEG XS `:8100`. From the PC's own browser use
    **localhost:<port>** (mirrored networking can't hairpin the external IP); from the iPad/Mac use

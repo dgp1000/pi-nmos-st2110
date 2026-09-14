@@ -245,5 +245,15 @@ while true; do
     aud_key="$akey"; last_adelay="$adelay"
     echo "$(date +%T) audio -> ${akey:-embedded} (delay ${adelay}ms)"
   fi
+  # Re-assert the output window's position on $SCREEN. Windows shuffles second-monitor windows on
+  # sleep/wake (the wall drifts off the bottom of the screen), and the launch-time snap has long
+  # since finished -- so re-snap periodically to bring it back within ~10s of a wake. The snap is
+  # title-scoped to the OpenGL Renderer window and idempotent (a correctly-placed window is not
+  # moved), so it is harmless when nothing has drifted.
+  now="$(date +%s)"
+  if [ "${ATOLL_PLATFORM:-}" = wsl ] && [ "$SCREEN" != "0" ] && [ $((now - ${_last_snap:-0})) -ge 10 ]; then
+    "$PWSH" -NoProfile -ExecutionPolicy Bypass -File "$SNAP" -Screen "$SCREEN" -TimeoutSec 2 >/dev/null 2>&1 &
+    _last_snap="$now"
+  fi
   sleep 1
 done

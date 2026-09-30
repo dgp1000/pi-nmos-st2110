@@ -1,0 +1,5 @@
+name: Atoll LTC
+description: PTP-locked 25 fps LTC timecode, frame pulse and PPS for the Atoll rig
+icon: ⏱
+ports: []
+bricks: []

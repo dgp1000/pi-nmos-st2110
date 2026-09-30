@@ -321,6 +321,7 @@ pi/
   follower-clock-web.py follower offset/lock web readout (:8000)
   atoll-follower*.service  systemd units so the follower auto-starts headless
 deploy/nmos/          the NMOS stack: docker-compose + registry.json + node.json
+unoq/atoll-ltc/       Arduino UNO Q PTP-locked LTC timecode box (LTC/frame/PPS out, Modulino tally + IS-05 takes)
 docs/
   ARCHITECTURE.md     module-by-module system diagram: what each program does and how they connect
   superpowers/        design notes / project state

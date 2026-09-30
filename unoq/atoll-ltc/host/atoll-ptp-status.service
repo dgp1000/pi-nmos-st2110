@@ -1,0 +1,9 @@
+[Unit]
+Description=Atoll PTP status JSON for the atoll-ltc app
+After=atoll-ptp.service
+[Service]
+ExecStart=/usr/bin/python3 /home/arduino/atoll/atoll-ptp-status.py
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target

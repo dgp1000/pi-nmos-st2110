@@ -1,0 +1,13 @@
+[Unit]
+Description=Start the Atoll LTC app after boot (app container has no restart policy)
+After=docker.service arduino-app-cli.service arduino-router-serial.service network-online.target
+Wants=docker.service arduino-app-cli.service
+[Service]
+Type=oneshot
+User=arduino
+WorkingDirectory=/home/arduino/ArduinoApps
+ExecStartPre=/bin/sleep 20
+ExecStart=/bin/sh -c "for i in 1 2 3 4 5; do arduino-app-cli app start ./atoll-ltc && exit 0; sleep 15; done; exit 1"
+TimeoutStartSec=600
+[Install]
+WantedBy=multi-user.target

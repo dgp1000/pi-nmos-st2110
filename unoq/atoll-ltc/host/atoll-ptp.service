@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll PTP follower (ptp4l, software RX timestamps on hub NIC)
+After=network-online.target sys-subsystem-net-devices-enx00e05a1331cd.device
+Wants=network-online.target
+BindsTo=sys-subsystem-net-devices-enx00e05a1331cd.device
+[Service]
+ExecStartPre=/bin/sh -c "for s in /sys/devices/system/cpu/cpu*/cpuidle/state*/disable; do echo 1 > $s; done"
+ExecStart=/usr/local/sbin/ptp4l -f /etc/linuxptp/atoll-follower.cfg -i enx00e05a1331cd -m
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+diff --git a/clock.c b/clock.c
+index b66dda5..c0659a5 100644
+--- a/clock.c
++++ b/clock.c
+@@ -1192,9 +1192,8 @@ struct clock *clock_create(enum clock_type type, struct config *config,
+ 		interface_get_tsinfo(iface);
+ 		if (interface_tsinfo_valid(iface) &&
+ 				!interface_tsmodes_supported(iface, required_modes)) {
+-			pr_err("interface '%s' does not support requested timestamping mode",
++			pr_warning("interface '%s' does not fully support requested timestamping mode (continuing; RX-only software timestamps)",
+ 					interface_name(iface));
+-			return NULL;
+ 		}
+ 	}
+ 

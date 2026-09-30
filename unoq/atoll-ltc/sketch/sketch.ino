@@ -67,6 +67,7 @@ static Arduino_LED_Matrix matrix;
 static ModulinoPixels pixels;
 static ModulinoButtons buttons;
 static bool have_pixels = false;
+static const uint8_t PIXELS_BRIGHTNESS = 0;   // 0 = Pixels strip off (they are very bright); try 3-5 for a dim panel
 static bool have_buttons = false;
 static bool btn_prev[3] = {false, false, false};
 static volatile bool tally[3] = {false, false, false};   // on-air source (A/B/C mapping), shown on Pixels 5..7
@@ -238,14 +239,15 @@ static void draw_matrix() {
 
 static void draw_pixels() {
     if (!have_pixels) return;
+    if (PIXELS_BRIGHTNESS == 0) { pixels.clear(); pixels.show(); return; }
     bool fresh = synced && (millis() - last_sync_ms) < 3000;
     pixels.clear();
-    pixels.set(0, ptp_locked ? GREEN : RED, 20);            // PTP lock
-    pixels.set(1, fresh ? GREEN : YELLOW, 20);              // Bridge sync freshness
-    pixels.set(2, synced ? BLUE : BLACK, disp_ff < 2 ? 40 : 5); // frame-0 blink
+    pixels.set(0, ptp_locked ? GREEN : RED, PIXELS_BRIGHTNESS);            // PTP lock
+    pixels.set(1, fresh ? GREEN : YELLOW, PIXELS_BRIGHTNESS);              // Bridge sync freshness
+    pixels.set(2, synced ? BLUE : BLACK, disp_ff < 2 ? PIXELS_BRIGHTNESS * 2 : PIXELS_BRIGHTNESS / 2); // frame-0 blink
     int e = last_err_ticks < 0 ? -last_err_ticks : last_err_ticks;   // |err| in 100us
-    pixels.set(3, e < 10 ? GREEN : (e < 50 ? YELLOW : RED), 10);    // phase error <1ms / <5ms
-    for (int i = 0; i < 3; i++) if (tally[i]) pixels.set(5 + i, RED, 30);   // tally: raw / hevc / music on air
+    pixels.set(3, e < 10 ? GREEN : (e < 50 ? YELLOW : RED), PIXELS_BRIGHTNESS);    // phase error <1ms / <5ms
+    for (int i = 0; i < 3; i++) if (tally[i]) pixels.set(5 + i, RED, PIXELS_BRIGHTNESS);   // tally: raw / hevc / music on air
     pixels.show();
 }
 

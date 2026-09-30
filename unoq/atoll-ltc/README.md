@@ -1,8 +1,8 @@
 # Atoll LTC — PTP-locked timecode box on an Arduino UNO Q
 
 An Arduino UNO Q (Linux MPU + STM32U585 MCU) on the island LAN that follows the Atoll
-PTP grandmaster and turns it into physical timecode and sync pulses, with a Modulino
-tally/take panel. It is the rig's "LTC generator" — something broadcast people buy —
+PTP grandmaster and turns it into physical timecode and sync pulses, with on-air tally on
+a Modulino Pixels strip (and take buttons if a Modulino Buttons is added). It is the rig's "LTC generator" — something broadcast people buy —
 and none of the commodity ones talk to an NMOS rig.
 
 | Pin / part | Signal |
@@ -10,8 +10,8 @@ and none of the commodity ones talk to an NMOS rig.
 | **D2** | SMPTE/EBU LTC, 25 fps, 80-bit biphase-mark, 3.3 V square wave |
 | **D3** | 1 ms pulse at every frame start |
 | **D4** | 100 ms pulse at the top of every second (PPS) |
-| Modulino Pixels | LED0 PTP lock · LED1 sync fresh · LED2 frame-0 blink · LED3 phase error |
-| Modulino Buttons | A/B/C = IS-05 takes on the panel (`raw` / `hevc` / `music`); button LEDs = on-air tally |
+| Modulino Pixels | LED0 PTP lock · LED1 sync fresh · LED2 frame-0 blink · LED3 phase error · LED5-7 on-air tally (raw / hevc / music) |
+| Modulino Buttons (optional, not fitted) | A/B/C = IS-05 takes on the panel (`raw` / `hevc` / `music`); button LEDs mirror the tally. Hot-plug: the sketch re-probes every 2 s |
 | LED matrix | frame-of-second sweep + seconds bar |
 
 Into an audio/LTC input use roughly a 10k:1k divider and a DC-blocking capacitor.

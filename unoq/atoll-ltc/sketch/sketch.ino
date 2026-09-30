@@ -5,7 +5,8 @@
 // turns that into a free-running, phase-aligned 25 fps SMPTE/EBU LTC bitstream
 // on PIN_LTC, a 1 ms pulse at every frame start on PIN_FRAME and a 100 ms pulse
 // at the top of every second on PIN_PPS. Modulino Buttons A/B/C fire IS-05 takes on
-// the Atoll panel (via Python) and their LEDs act as tally for the on-air source.
+// the Atoll panel (via Python) if the module is fitted; on-air tally is shown on
+// Pixels 5..7 (and on the button LEDs when present).
 //
 // Timing: a Zephyr k_timer fires every kernel tick (100 us). One LTC bit is
 // 500 us = 5 ticks; the biphase-mark "1" mid-bit transition lands at tick 2
@@ -68,6 +69,7 @@ static ModulinoButtons buttons;
 static bool have_pixels = false;
 static bool have_buttons = false;
 static bool btn_prev[3] = {false, false, false};
+static volatile bool tally[3] = {false, false, false};   // on-air source (A/B/C mapping), shown on Pixels 5..7
 
 // Build the 80-bit LTC word for absolute frame number f (25 fps, EBU layout).
 static void encode_frame(int64_t f) {
@@ -167,8 +169,9 @@ static int ping() { return 1; }
 
 // Tally: Python lights the LED under the button whose source is on air.
 static bool set_button_leds(bool a, bool b, bool c) {
-    if (have_buttons) buttons.setLeds(a, b, c);
-    return have_buttons;
+    tally[0] = a; tally[1] = b; tally[2] = c;
+    if (have_buttons) buttons.setLeds(a, b, c);   // Buttons module is optional
+    return true;
 }
 
 static void poll_buttons() {
@@ -242,6 +245,7 @@ static void draw_pixels() {
     pixels.set(2, synced ? BLUE : BLACK, disp_ff < 2 ? 40 : 5); // frame-0 blink
     int e = last_err_ticks < 0 ? -last_err_ticks : last_err_ticks;   // |err| in 100us
     pixels.set(3, e < 10 ? GREEN : (e < 50 ? YELLOW : RED), 10);    // phase error <1ms / <5ms
+    for (int i = 0; i < 3; i++) if (tally[i]) pixels.set(5 + i, RED, 30);   // tally: raw / hevc / music on air
     pixels.show();
 }
 
